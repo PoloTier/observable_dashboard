@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trajectory Observable Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <link rel="stylesheet" href="assets/dashboard.css" />
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="title">Trajectory Observable Dashboard</div>
+      <div class="source-pkl" id="source-pkl">PKL: unknown</div>
+      <div class="control-row">
+        <div class="control-group">
+          <label for="global-traj">Trajectory</label>
+          <select id="global-traj"></select>
+        </div>
+        <div class="control-group">
+          <label><input type="checkbox" id="global-ensemble" /> Show ensemble (median + q25/q75)</label>
+        </div>
+        <div class="control-group">
+          <label><input type="checkbox" id="global-traces" /> Show all traces in All mode</label>
+        </div>
+        <div class="control-group">
+          <a class="mol3d-link" href="molecule3d.html" target="_blank" rel="noopener noreferrer">Open 3D Molecule View</a>
+        </div>
+      </div>
+    </div>
+
+    <div id="dashboard" class="dashboard"></div>
+
+    <div class="footer-tools">
+      <button class="btn primary" id="add-panel">Add Panel</button>
+      <button class="btn" id="reset-panels">Reset to Default</button>
+      <span class="status" id="panel-status"></span>
+    </div>
+  </div>
+
+  <script id="payload-json" type="application/json">{{ payload_json | safe }}</script>
+  <script src="assets/dashboard_state.js"></script>
+  <script src="assets/dashboard_math3d.js"></script>
+  <script src="assets/dashboard_plot.js"></script>
+  <script src="assets/dashboard_ui.js"></script>
+</body>
+</html>

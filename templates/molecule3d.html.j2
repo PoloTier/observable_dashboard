@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Molecule 3D Viewer</title>
+  <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --border: #d7dce3;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #0b5ed7;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .page {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .header,
+    .viewer-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .header {
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .controls label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .controls .check-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .controls select,
+    .controls button,
+    .controls input {
+      font-size: 13px;
+      border: 1px solid #cdd4df;
+      border-radius: 6px;
+      padding: 5px 8px;
+      background: #fff;
+    }
+    .controls button {
+      cursor: pointer;
+    }
+    .controls button.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .bond-selection-info {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .source-pkl {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      max-width: 100%;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .viewer-card {
+      padding: 12px;
+      max-width: 960px;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+    #viewer {
+      width: 100%;
+      height: clamp(280px, 46vh, 460px);
+      min-height: 280px;
+      max-height: 460px;
+      border: 1px solid #d9dee7;
+      border-radius: 10px;
+      position: relative;
+      display: block;
+      overflow: hidden;
+      contain: layout paint;
+      isolation: isolate;
+      background: #fff;
+    }
+    .status-row {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      min-height: 18px;
+      flex: 1 1 auto;
+    }
+    .status-tool-btn {
+      border: 1px solid #cdd4df;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.1;
+      padding: 4px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .status-tool-btn:hover:not(:disabled) {
+      background: #f2f6fb;
+      color: var(--text);
+    }
+    .status-tool-btn.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: #eef5ff;
+    }
+    .status-tool-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .status.error {
+      color: #c0392b;
+    }
+    .bond-color-settings-panel {
+      margin-top: 8px;
+      border: 1px solid #d9dee7;
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 8px;
+    }
+    .bond-color-settings-panel[hidden] {
+      display: none;
+    }
+    .bond-color-settings-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .bond-color-settings-title {
+      font-size: 12px;
+      color: #374151;
+      font-weight: 600;
+    }
+    .bond-color-settings-close {
+      border: 1px solid #cdd4df;
+      border-radius: 6px;
+      background: #fff;
+      color: #4b5563;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding: 3px 7px;
+    }
+    .bond-color-settings-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .bond-color-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #d8dee8;
+      border-left: 4px solid #1f77b4;
+      border-radius: 8px;
+      background: #fff;
+      padding: 4px 6px;
+    }
+    .bond-color-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid rgba(0, 0, 0, 0.16);
+      flex: 0 0 auto;
+    }
+    .bond-color-label {
+      font-size: 12px;
+      color: #374151;
+      flex: 1 1 auto;
+    }
+    .bond-color-input {
+      width: 34px;
+      height: 24px;
+      border: none;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .bond-color-empty {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 4px 2px;
+    }
+    .bond-list {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-height: 32px;
+      align-items: center;
+    }
+    .bond-list-empty {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .bond-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #d1d8e3;
+      border-left: 4px solid #1f77b4;
+      border-radius: 8px;
+      padding: 2px 6px;
+      background: #fff;
+    }
+    .bond-item.active {
+      background: #eef5ff;
+      border-color: #8db5ff;
+    }
+    .bond-activate,
+    .bond-remove {
+      border: 1px solid #cdd4df;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+      padding: 3px 8px;
+      cursor: pointer;
+      line-height: 1.1;
+    }
+    .bond-activate:hover,
+    .bond-remove:hover {
+      background: #f2f6fb;
+    }
+    .bond-remove {
+      font-weight: 700;
+      padding: 3px 6px;
+      color: #b42318;
+      border-color: #f1c2bd;
+      background: #fff7f6;
+    }
+    #bond-plot {
+      margin-top: 10px;
+      width: 100%;
+      height: 220px;
+      border: 1px solid #d9dee7;
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .bond-plot-empty {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      padding: 0 12px;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="title">Molecule 3D Trajectory Viewer</div>
+      <div class="controls">
+        <label for="traj-select">Trajectory</label>
+        <select id="traj-select"></select>
+
+        <button id="play-btn" type="button">Play</button>
+
+        <label for="frame-slider">Frame</label>
+        <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
+
+        <label class="check-label" for="show-atom-index">
+          <input id="show-atom-index" type="checkbox" />
+          Atom Indices
+        </label>
+
+        <label>Measure</label>
+        <button id="measure-type-bond-btn" type="button" class="active">Bond</button>
+        <button id="measure-type-angle-btn" type="button">Angle</button>
+        <button id="measure-type-dihedral-btn" type="button">Dihedral</button>
+
+        <button id="select-bond-btn" type="button">Select Bond</button>
+        <button id="clear-bond-btn" type="button" disabled>Clear Bond</button>
+        <span class="bond-selection-info" id="bond-selection-info">Bonds: none</span>
+
+        <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
+        <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
+
+        <span id="frame-label">Frame 1/1</span>
+      </div>
+      <div class="source-pkl" id="source-pkl">PKL: unknown</div>
+    </div>
+
+    <div class="viewer-card">
+      <div id="viewer"></div>
+      <div id="bond-list" class="bond-list"><div class="bond-list-empty">No bonds selected.</div></div>
+      <div id="bond-plot"><div class="bond-plot-empty">Select Bond to show distance vs time.</div></div>
+      <div class="status-row">
+        <div id="status" class="status"></div>
+        <button id="bond-color-settings-btn" class="status-tool-btn" type="button" disabled aria-expanded="false" title="Set tracked bond colors">⚙ Bond Colors</button>
+      </div>
+      <div id="bond-color-settings-panel" class="bond-color-settings-panel" hidden>
+        <div class="bond-color-settings-head">
+          <span id="bond-color-settings-title" class="bond-color-settings-title">Bond Color Settings</span>
+          <button id="bond-color-settings-close-btn" class="bond-color-settings-close" type="button" aria-label="Close color settings">×</button>
+        </div>
+        <div id="bond-color-settings-list" class="bond-color-settings-list"><div class="bond-color-empty">No tracked bonds.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <script id="payload-json" type="application/json">{{ payload_json | safe }}</script>
+  <script src="assets/dashboard_mol3d_shared.js"></script>
+  <script src="assets/dashboard_math3d.js"></script>
+  <script src="assets/dashboard_mol3d_geometry.js"></script>
+  <script src="assets/dashboard_mol3d_measurement.js"></script>
+  <script src="assets/dashboard_mol3d_viewer.js"></script>
+  <script src="assets/dashboard_mol3d_io.js"></script>
+  <script src="assets/dashboard_mol3d_page.js"></script>
+</body>
+</html>
