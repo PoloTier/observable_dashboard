@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Molecule 3D Viewer</title>
-  <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="assets/vendor/3Dmol-min.js"></script>
+  <script src="assets/vendor/plotly-2.35.2.min.js"></script>
   <style>
     :root {
       --bg: #f7f8fa;
@@ -345,12 +345,12 @@
   </div>
 
   <script id="payload-json" type="application/json">{{ payload_json | safe }}</script>
-  <script src="assets/dashboard_mol3d_shared.js"></script>
-  <script src="assets/dashboard_math3d.js"></script>
-  <script src="assets/dashboard_mol3d_geometry.js"></script>
-  <script src="assets/dashboard_mol3d_measurement.js"></script>
-  <script src="assets/dashboard_mol3d_viewer.js"></script>
-  <script src="assets/dashboard_mol3d_io.js"></script>
-  <script src="assets/dashboard_mol3d_page.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_shared.js"></script>
+  <script src="assets/math/dashboard_math3d.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_geometry.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_measurement.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_viewer.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_io.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_page.js"></script>
 </body>
 </html>

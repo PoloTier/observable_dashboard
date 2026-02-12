@@ -28,21 +28,24 @@ def _write_assets(out_dir: Path) -> None:
         shutil.rmtree(assets_out)
     assets_out.mkdir(parents=True, exist_ok=True)
 
-    for asset_name in (
-        "dashboard.css",
-        "dashboard_state.js",
-        "dashboard_math3d.js",
-        "dashboard_plot.js",
-        "dashboard_ui.js",
-        "dashboard_mol3d_shared.js",
-        "dashboard_mol3d_geometry.js",
-        "dashboard_mol3d_measurement.js",
-        "dashboard_mol3d_viewer.js",
-        "dashboard_mol3d_io.js",
-        "dashboard_mol3d_page.js",
+    for asset_relpath in (
+        "vendor/plotly-2.35.2.min.js",
+        "vendor/3Dmol-min.js",
+        "dashboard/dashboard.css",
+        "dashboard/dashboard_state.js",
+        "math/dashboard_math3d.js",
+        "dashboard/dashboard_plot.js",
+        "dashboard/dashboard_ui.js",
+        "mol3d/dashboard_mol3d_shared.js",
+        "mol3d/dashboard_mol3d_geometry.js",
+        "mol3d/dashboard_mol3d_measurement.js",
+        "mol3d/dashboard_mol3d_viewer.js",
+        "mol3d/dashboard_mol3d_io.js",
+        "mol3d/dashboard_mol3d_page.js",
     ):
-        src = STATIC_DIR / asset_name
-        dst = assets_out / asset_name
+        src = STATIC_DIR / asset_relpath
+        dst = assets_out / asset_relpath
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
 

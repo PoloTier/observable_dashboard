@@ -24,6 +24,26 @@ python -m tools.observable_dashboard.cli \
 - 3D 页面：`analysis_viz/molecule3d.html`
 - 静态资源：`analysis_viz/assets/`
 
+### 静态资源布局自动检查
+
+目录重组后可运行以下脚本进行自动化冒烟校验（资源路径、模板脚本顺序、导出产物一致性）：
+
+```bash
+python tools/observable_dashboard/scripts/check_static_layout.py
+```
+
+### 离线 Vendor 依赖
+
+前端第三方库已随仓库内置，不再依赖外网 CDN：
+
+- `tools/observable_dashboard/static/vendor/plotly-2.35.2.min.js`
+- `tools/observable_dashboard/static/vendor/3Dmol-min.js`（3dmol `2.0.3`）
+
+当前文件校验值（sha256）：
+
+- `plotly-2.35.2.min.js`: `6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603`
+- `3Dmol-min.js`: `bc9fca2efffeaf8f5491c811ac232fc91a8f47600008d0eac98f94d5e471d690`
+
 ---
 
 ## 主页面功能（index.html）

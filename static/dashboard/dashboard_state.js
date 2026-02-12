@@ -1,7 +1,46 @@
 (function () {
   const root = window.ObservableDashboard || (window.ObservableDashboard = {});
 
-  const payload = JSON.parse(document.getElementById('payload-json').textContent);
+  function showBootError(message) {
+    const statusEl = document.getElementById('panel-status');
+    if (statusEl) {
+      statusEl.textContent = message;
+      statusEl.classList.add('error');
+      return;
+    }
+
+    const box = document.createElement('div');
+    box.style.margin = '12px';
+    box.style.padding = '10px 12px';
+    box.style.border = '1px solid #d33';
+    box.style.borderRadius = '6px';
+    box.style.background = '#fff6f6';
+    box.style.color = '#b00020';
+    box.style.font = '14px/1.4 sans-serif';
+    box.textContent = message;
+    document.body.prepend(box);
+  }
+
+  const payloadEl = document.getElementById('payload-json');
+  if (!payloadEl) {
+    showBootError('Dashboard failed to initialize: missing embedded payload-json script.');
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(payloadEl.textContent || '');
+  } catch (error) {
+    const raw = String(payloadEl.textContent || '');
+    const templateHint = raw.includes('{{ payload_json') || raw.includes('{%');
+    const hint = templateHint
+      ? 'Detected an unrendered template. Open generated analysis_viz/index.html instead of templates/index.html.j2.'
+      : 'Embedded payload-json content is not valid JSON.';
+    console.error('ObservableDashboard payload parse failed:', error);
+    showBootError(`Dashboard failed to initialize: ${hint}`);
+    return;
+  }
+
   const meta = payload.meta;
   const trajectories = payload.trajectories;
   const trajIds = meta.traj_ids;
