@@ -4,8 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Molecule 3D Viewer</title>
-  <script src="assets/vendor/3Dmol-min.js"></script>
-  <script src="assets/vendor/plotly-2.35.2.min.js"></script>
+  <script src="assets/vendor/3Dmol-min.js?v={{ static_version }}"></script>
+  <script src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"></script>
+  <script src="assets/vendor/gif.min.js?v={{ static_version }}"></script>
   <style>
     :root {
       --bg: #f7f8fa;
@@ -46,6 +47,40 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 10px;
+    }
+    #controls-primary {
+      margin-bottom: 8px;
+    }
+    #controls-groups {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .control-group {
+      border: 1px solid #d9dee7;
+      border-radius: 10px;
+      background: #f8fafc;
+      overflow: hidden;
+    }
+    .control-group > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      color: #374151;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 7px 10px;
+      background: #f3f6fa;
+      border-bottom: 1px solid transparent;
+    }
+    .control-group > summary::-webkit-details-marker {
+      display: none;
+    }
+    .control-group[open] > summary {
+      border-bottom-color: #d9dee7;
+    }
+    .control-group-body {
+      padding: 8px 10px;
     }
     .controls label {
       font-size: 13px;
@@ -91,6 +126,17 @@
       min-width: 32px;
       text-align: right;
       white-space: nowrap;
+    }
+    #gif-export-start,
+    #gif-export-end {
+      width: 74px;
+      padding: 4px 6px;
+    }
+    #gif-export-progress {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      min-width: 110px;
     }
     .bond-selection-info {
       font-size: 12px;
@@ -312,42 +358,68 @@
   <div class="page">
     <div class="header">
       <div class="title">Molecule 3D Trajectory Viewer</div>
-      <div class="controls">
+      <div class="controls" id="controls-primary">
         <label for="traj-select">Trajectory</label>
         <select id="traj-select"></select>
 
         <button id="play-btn" type="button">Play</button>
 
-        <label for="playback-rate-slider">Speed</label>
-        <input id="playback-rate-slider" type="range" min="1" max="10" step="0.5" value="1" />
-        <span id="playback-rate-label">1.0x</span>
-
-        <label for="playback-stride-slider">Stride</label>
-        <input id="playback-stride-slider" type="range" min="1" max="20" step="1" value="1" />
-        <span id="playback-stride-label">x1</span>
-
         <label for="frame-slider">Frame</label>
         <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
-
-        <label class="check-label" for="show-atom-index">
-          <input id="show-atom-index" type="checkbox" />
-          Atom Indices
-        </label>
-
-        <label>Measure</label>
-        <button id="measure-type-bond-btn" type="button" class="active">Bond</button>
-        <button id="measure-type-angle-btn" type="button">Angle</button>
-        <button id="measure-type-dihedral-btn" type="button">Dihedral</button>
-
-        <button id="select-bond-btn" type="button">Select Bond</button>
-        <button id="clear-bond-btn" type="button" disabled>Clear Bond</button>
-        <span class="bond-selection-info" id="bond-selection-info">Bonds: none</span>
-
-        <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
-        <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
-
         <span id="frame-label">Frame 1/1</span>
+
+        <button id="export-gif-btn" type="button" disabled>Export GIF</button>
       </div>
+
+      <div id="controls-groups">
+        <details id="measure-controls-group" class="control-group">
+          <summary>Measure & Export</summary>
+          <div class="controls control-group-body">
+            <label class="check-label" for="show-atom-index">
+              <input id="show-atom-index" type="checkbox" />
+              Atom Indices
+            </label>
+
+            <label>Measure</label>
+            <button id="measure-type-bond-btn" type="button" class="active">Bond</button>
+            <button id="measure-type-angle-btn" type="button">Angle</button>
+            <button id="measure-type-dihedral-btn" type="button">Dihedral</button>
+
+            <button id="select-bond-btn" type="button">Select Bond</button>
+            <button id="clear-bond-btn" type="button" disabled>Clear Bond</button>
+            <span class="bond-selection-info" id="bond-selection-info">Bonds: none</span>
+
+            <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
+            <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
+          </div>
+        </details>
+
+        <details id="playback-controls-group" class="control-group">
+          <summary>Playback</summary>
+          <div class="controls control-group-body">
+            <label for="playback-rate-slider">Speed</label>
+            <input id="playback-rate-slider" type="range" min="1" max="10" step="0.5" value="1" />
+            <span id="playback-rate-label">1.0x</span>
+
+            <label for="playback-stride-slider">Stride</label>
+            <input id="playback-stride-slider" type="range" min="1" max="20" step="1" value="1" />
+            <span id="playback-stride-label">x1</span>
+          </div>
+        </details>
+
+        <details id="gif-range-controls-group" class="control-group">
+          <summary>GIF Range</summary>
+          <div class="controls control-group-body">
+            <label for="gif-export-start">GIF Start</label>
+            <input id="gif-export-start" type="number" min="0" step="1" value="0" />
+            <label for="gif-export-end">GIF End</label>
+            <input id="gif-export-end" type="number" min="0" step="1" value="0" />
+            <button id="cancel-gif-export-btn" type="button" hidden disabled>Cancel GIF</button>
+            <span id="gif-export-progress"></span>
+          </div>
+        </details>
+      </div>
+
       <div class="source-pkl" id="source-pkl">PKL: unknown</div>
     </div>
 
@@ -370,12 +442,12 @@
   </div>
 
   <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
-  <script src="assets/mol3d/dashboard_mol3d_shared.js"></script>
-  <script src="assets/math/dashboard_math3d.js"></script>
-  <script src="assets/mol3d/dashboard_mol3d_geometry.js"></script>
-  <script src="assets/mol3d/dashboard_mol3d_measurement.js"></script>
-  <script src="assets/mol3d/dashboard_mol3d_viewer.js"></script>
-  <script src="assets/mol3d/dashboard_mol3d_io.js"></script>
-  <script src="assets/mol3d/dashboard_mol3d_page.js"></script>
+  <script src="assets/mol3d/dashboard_mol3d_shared.js?v={{ static_version }}"></script>
+  <script src="assets/math/dashboard_math3d.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_geometry.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_measurement.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_viewer.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_io.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_page.js?v={{ static_version }}"></script>
 </body>
 </html>

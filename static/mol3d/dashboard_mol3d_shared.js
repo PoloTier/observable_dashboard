@@ -62,7 +62,13 @@
     ? bootstrap.api_base
     : '/api';
 
+  // Cached DOM references used across mol3d modules.
   const dom = {
+    controlsPrimary: document.getElementById('controls-primary'),
+    controlsGroups: document.getElementById('controls-groups'),
+    measureControlsGroup: document.getElementById('measure-controls-group'),
+    playbackControlsGroup: document.getElementById('playback-controls-group'),
+    gifRangeControlsGroup: document.getElementById('gif-range-controls-group'),
     trajSelect: document.getElementById('traj-select'),
     playBtn: document.getElementById('play-btn'),
     playbackRateSlider: document.getElementById('playback-rate-slider'),
@@ -82,6 +88,11 @@
     bondPlotEl: document.getElementById('bond-plot'),
     saveFrameBtn: document.getElementById('save-frame-xyz-btn'),
     saveTrajBtn: document.getElementById('save-traj-xyz-btn'),
+    gifExportStartInput: document.getElementById('gif-export-start'),
+    gifExportEndInput: document.getElementById('gif-export-end'),
+    exportGifBtn: document.getElementById('export-gif-btn'),
+    cancelGifExportBtn: document.getElementById('cancel-gif-export-btn'),
+    gifExportProgressEl: document.getElementById('gif-export-progress'),
     sourcePklEl: document.getElementById('source-pkl'),
     statusEl: document.getElementById('status'),
     bondColorSettingsBtn: document.getElementById('bond-color-settings-btn'),
@@ -92,6 +103,7 @@
     viewerEl: document.getElementById('viewer'),
   };
 
+  // Centralized constants keep measurement/playback/gif behavior consistent.
   const constants = {
     BASE_FPS: 10,
     PLAYBACK_RATE_MIN: 1,
@@ -102,6 +114,11 @@
     PLAYBACK_STRIDE_MAX: 20,
     PLAYBACK_STRIDE_STEP: 1,
     PLAYBACK_STRIDE_DEFAULT: 1,
+    GIF_EXPORT_DEFAULT_QUALITY: 10,
+    GIF_EXPORT_DEFAULT_WORKERS: 2,
+    GIF_EXPORT_MIN_FPS: 1,
+    GIF_EXPORT_MAX_FPS: 60,
+    GIF_EXPORT_WORKER_URL: 'assets/vendor/gif.worker.js',
     MEASURE_PERF_HINT_THRESHOLD: 20,
     PLOT_EXPORT_DPI: 300,
     CSS_BASE_DPI: 96,
@@ -186,6 +203,11 @@
     isPlaying: false,
     playbackRate: constants.PLAYBACK_RATE_DEFAULT,
     playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
+    isGifExporting: false,
+    gifExportCancelRequested: false,
+    gifExportTask: null,
+    gifExportRangeStart: 0,
+    gifExportRangeEnd: 0,
     currentTrajId: null,
     xyzFrames: [],
     currentFrame: 0,
@@ -209,10 +231,21 @@
     isMeasurementColorSettingsOpen: false,
   };
 
+  // --- Generic state + UI helpers --------------------------------------------
   function setStatus(message, isError = false) {
     if (!dom.statusEl) return;
     dom.statusEl.textContent = message || '';
     dom.statusEl.classList.toggle('error', !!isError);
+  }
+
+  function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function parseFiniteNumber(raw) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
   }
 
   function clampPlaybackRate(raw) {
@@ -220,12 +253,12 @@
     const minRate = constants.PLAYBACK_RATE_MIN;
     const maxRate = constants.PLAYBACK_RATE_MAX;
     const step = constants.PLAYBACK_RATE_STEP;
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return fallback;
-    const clamped = Math.max(minRate, Math.min(maxRate, parsed));
+    const parsed = parseFiniteNumber(raw);
+    if (parsed === null) return fallback;
+    const clamped = clampNumber(parsed, minRate, maxRate);
     if (!Number.isFinite(step) || step <= 0) return clamped;
     const snapped = minRate + Math.round((clamped - minRate) / step) * step;
-    return Number(Math.max(minRate, Math.min(maxRate, snapped)).toFixed(4));
+    return Number(clampNumber(snapped, minRate, maxRate).toFixed(4));
   }
 
   function formatPlaybackRate(rate) {
@@ -250,12 +283,12 @@
     const minStride = constants.PLAYBACK_STRIDE_MIN;
     const maxStride = constants.PLAYBACK_STRIDE_MAX;
     const step = constants.PLAYBACK_STRIDE_STEP;
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return fallback;
-    const clamped = Math.max(minStride, Math.min(maxStride, parsed));
+    const parsed = parseFiniteNumber(raw);
+    if (parsed === null) return fallback;
+    const clamped = clampNumber(parsed, minStride, maxStride);
     const normalizedStep = Number.isFinite(step) && step > 0 ? step : 1;
     const snapped = minStride + Math.round((clamped - minStride) / normalizedStep) * normalizedStep;
-    return Math.max(minStride, Math.min(maxStride, Math.trunc(snapped)));
+    return clampNumber(Math.trunc(snapped), minStride, maxStride);
   }
 
   function formatPlaybackStride(stride) {
@@ -275,6 +308,113 @@
     }
   }
 
+  // --- GIF range + progress helpers ------------------------------------------
+  function clampGifExportRange(start, end, nFrames) {
+    const frameCount = Math.max(0, Number.parseInt(String(nFrames), 10) || 0);
+    if (frameCount <= 0) {
+      return { start: 0, end: 0 };
+    }
+    const minIdx = 0;
+    const maxIdx = frameCount - 1;
+
+    let s = Number.parseInt(String(start), 10);
+    let e = Number.parseInt(String(end), 10);
+    if (!Number.isFinite(s)) s = minIdx;
+    if (!Number.isFinite(e)) e = maxIdx;
+
+    s = Math.max(minIdx, Math.min(maxIdx, s));
+    e = Math.max(minIdx, Math.min(maxIdx, e));
+    if (s > e) {
+      const temp = s;
+      s = e;
+      e = temp;
+    }
+    return { start: s, end: e };
+  }
+
+  function effectivePlaybackFps() {
+    const sourceFps = constants.BASE_FPS * clampPlaybackRate(state.playbackRate);
+    const stride = clampPlaybackStride(state.playbackStride);
+    const rawFps = sourceFps / stride;
+    const minFps = constants.GIF_EXPORT_MIN_FPS;
+    const maxFps = constants.GIF_EXPORT_MAX_FPS;
+    const safeFps = Number.isFinite(rawFps) ? rawFps : minFps;
+    return Math.max(minFps, Math.min(maxFps, safeFps));
+  }
+
+  function syncGifExportRangeUi() {
+    const frameCount = Array.isArray(state.xyzFrames) ? state.xyzFrames.length : 0;
+    const range = clampGifExportRange(state.gifExportRangeStart, state.gifExportRangeEnd, frameCount);
+    state.gifExportRangeStart = range.start;
+    state.gifExportRangeEnd = range.end;
+    const maxIdx = Math.max(0, frameCount - 1);
+    if (dom.gifExportStartInput) {
+      dom.gifExportStartInput.min = '0';
+      dom.gifExportStartInput.max = String(maxIdx);
+      dom.gifExportStartInput.step = '1';
+      dom.gifExportStartInput.value = String(range.start);
+      dom.gifExportStartInput.disabled = frameCount <= 0 || state.isGifExporting;
+    }
+    if (dom.gifExportEndInput) {
+      dom.gifExportEndInput.min = '0';
+      dom.gifExportEndInput.max = String(maxIdx);
+      dom.gifExportEndInput.step = '1';
+      dom.gifExportEndInput.value = String(range.end);
+      dom.gifExportEndInput.disabled = frameCount <= 0 || state.isGifExporting;
+    }
+  }
+
+  function setGifExportUiState(exporting) {
+    state.isGifExporting = !!exporting;
+    const hasFrames = !!state.currentTrajId && Array.isArray(state.xyzFrames) && state.xyzFrames.length > 0;
+    if (dom.exportGifBtn) {
+      dom.exportGifBtn.disabled = state.isGifExporting || !hasFrames;
+    }
+    if (dom.cancelGifExportBtn) {
+      dom.cancelGifExportBtn.hidden = !state.isGifExporting;
+      dom.cancelGifExportBtn.disabled = !state.isGifExporting;
+    }
+    syncGifExportRangeUi();
+  }
+
+  function setGifExportProgress(current, total) {
+    if (!dom.gifExportProgressEl) return;
+    const nTotal = Number.parseInt(String(total), 10) || 0;
+    if (nTotal <= 0) {
+      dom.gifExportProgressEl.textContent = '';
+      return;
+    }
+    const nCurrent = Math.max(0, Math.min(nTotal, Number.parseInt(String(current), 10) || 0));
+    const percent = Math.round((nCurrent / nTotal) * 100);
+    dom.gifExportProgressEl.textContent = `GIF ${nCurrent}/${nTotal} (${percent}%)`;
+  }
+
+  // --- Collapsible control groups --------------------------------------------
+  function getControlsGroupElement(groupKey) {
+    if (groupKey === 'measure') return dom.measureControlsGroup;
+    if (groupKey === 'playback') return dom.playbackControlsGroup;
+    if (groupKey === 'gifRange') return dom.gifRangeControlsGroup;
+    return null;
+  }
+
+  function setControlsGroupOpen(groupKey, open) {
+    const groupEl = getControlsGroupElement(groupKey);
+    if (!groupEl) return false;
+    if (open) {
+      groupEl.setAttribute('open', '');
+    } else {
+      groupEl.removeAttribute('open');
+    }
+    return true;
+  }
+
+  function getControlsGroupOpen(groupKey) {
+    const groupEl = getControlsGroupElement(groupKey);
+    if (!groupEl) return false;
+    return groupEl.hasAttribute('open');
+  }
+
+  // --- Measurement model helpers ---------------------------------------------
   function normalizeMeasureType(type) {
     return constants.MEASURE_META[type] ? type : 'bond';
   }
@@ -333,6 +473,7 @@
     const disabled = !enabled;
     if (dom.saveFrameBtn) dom.saveFrameBtn.disabled = disabled;
     if (dom.saveTrajBtn) dom.saveTrajBtn.disabled = disabled;
+    setGifExportUiState(state.isGifExporting);
   }
 
   function sanitizeFilenamePart(text) {
@@ -342,6 +483,9 @@
 
   syncPlaybackRateUi();
   syncPlaybackStrideUi();
+  syncGifExportRangeUi();
+  setGifExportUiState(false);
+  setGifExportProgress(0, 0);
 
   root.shared = {
     bootstrap,
@@ -361,6 +505,13 @@
     clampPlaybackStride,
     formatPlaybackStride,
     syncPlaybackStrideUi,
+    clampGifExportRange,
+    effectivePlaybackFps,
+    syncGifExportRangeUi,
+    setGifExportUiState,
+    setGifExportProgress,
+    setControlsGroupOpen,
+    getControlsGroupOpen,
     normalizeMeasureType,
     getMeasureMeta,
     getTracks,

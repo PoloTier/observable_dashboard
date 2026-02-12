@@ -212,6 +212,23 @@
       saveStateToStorage();
     });
 
+    const refreshPklBtn = document.getElementById('refresh-pkl-btn');
+    refreshPklBtn?.addEventListener('click', async () => {
+      if (refreshPklBtn.disabled) return;
+      refreshPklBtn.disabled = true;
+      setGlobalStatus('Refreshing dataset...');
+      try {
+        await dataLoader.refreshDataset();
+        dataLoader.clearLocalSeriesCache();
+        window.location.reload();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        setGlobalStatus(`Refresh failed: ${detail}`, true);
+      } finally {
+        refreshPklBtn.disabled = false;
+      }
+    });
+
     const addBtn = document.getElementById('add-panel');
     addBtn.addEventListener('click', () => {
       if (state.panels.length >= MAX_PANELS) {

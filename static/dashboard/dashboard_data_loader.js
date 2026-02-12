@@ -82,6 +82,40 @@
     return normalizeSeriesPayload(trajId, observable, indices, payload);
   }
 
+  async function refreshDataset() {
+    const response = await fetch(`${apiBase}/refresh-dataset`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error and keep generic detail
+      }
+      throw new Error(`Dataset refresh failed: ${detail}`);
+    }
+
+    const payload = await response.json();
+    return {
+      status: String(payload?.status || ''),
+      traj_count: Number(payload?.traj_count || 0),
+      source_pkl: String(payload?.source_pkl || ''),
+      cleared_series_cache_entries: Number(payload?.cleared_series_cache_entries || 0),
+      cleared_mol3d_cache_entries: Number(payload?.cleared_mol3d_cache_entries || 0),
+      dataset_revision: Number(payload?.dataset_revision || 0),
+    };
+  }
+
+  function clearLocalSeriesCache() {
+    cache.clear();
+    inflight.clear();
+  }
+
   async function ensureSeries(trajId, observable, indices) {
     const key = makeSeriesKey(trajId, observable, indices);
     if (cache.has(key)) return;
@@ -181,5 +215,7 @@
     getSeries,
     ensureAllForPanelRequirements,
     makeSeriesKey,
+    refreshDataset,
+    clearLocalSeriesCache,
   };
 })();

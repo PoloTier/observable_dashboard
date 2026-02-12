@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+import numpy as np
+
 
 def _find_repo_root() -> Path:
     this_file = Path(__file__).resolve()
@@ -40,6 +42,8 @@ MOL_TEMPLATE = PKG_DIR / "templates" / "molecule3d.html.j2"
 EXPECTED_STATIC_RELFILES = {
     "vendor/plotly-2.35.2.min.js",
     "vendor/3Dmol-min.js",
+    "vendor/gif.min.js",
+    "vendor/gif.worker.js",
     "dashboard/dashboard.css",
     "dashboard/dashboard_state.js",
     "dashboard/dashboard_data_loader.js",
@@ -103,28 +107,29 @@ def check_template_paths_and_order() -> None:
     _assert_subsequence(
         index,
         [
-            'src="assets/vendor/plotly-2.35.2.min.js"',
-            'href="assets/dashboard/dashboard.css"',
-            'src="assets/dashboard/dashboard_state.js"',
-            'src="assets/dashboard/dashboard_data_loader.js"',
-            'src="assets/math/dashboard_math3d.js"',
-            'src="assets/dashboard/dashboard_plot.js"',
-            'src="assets/dashboard/dashboard_ui.js"',
+            'src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"',
+            'href="assets/dashboard/dashboard.css?v={{ static_version }}"',
+            'src="assets/dashboard/dashboard_state.js?v={{ static_version }}"',
+            'src="assets/dashboard/dashboard_data_loader.js?v={{ static_version }}"',
+            'src="assets/math/dashboard_math3d.js?v={{ static_version }}"',
+            'src="assets/dashboard/dashboard_plot.js?v={{ static_version }}"',
+            'src="assets/dashboard/dashboard_ui.js?v={{ static_version }}"',
         ],
         name="index.html.j2",
     )
     _assert_subsequence(
         mol,
         [
-            'src="assets/vendor/3Dmol-min.js"',
-            'src="assets/vendor/plotly-2.35.2.min.js"',
-            'src="assets/mol3d/dashboard_mol3d_shared.js"',
-            'src="assets/math/dashboard_math3d.js"',
-            'src="assets/mol3d/dashboard_mol3d_geometry.js"',
-            'src="assets/mol3d/dashboard_mol3d_measurement.js"',
-            'src="assets/mol3d/dashboard_mol3d_viewer.js"',
-            'src="assets/mol3d/dashboard_mol3d_io.js"',
-            'src="assets/mol3d/dashboard_mol3d_page.js"',
+            'src="assets/vendor/3Dmol-min.js?v={{ static_version }}"',
+            'src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"',
+            'src="assets/vendor/gif.min.js?v={{ static_version }}"',
+            'src="assets/mol3d/dashboard_mol3d_shared.js?v={{ static_version }}"',
+            'src="assets/math/dashboard_math3d.js?v={{ static_version }}"',
+            'src="assets/mol3d/dashboard_mol3d_geometry.js?v={{ static_version }}"',
+            'src="assets/mol3d/dashboard_mol3d_measurement.js?v={{ static_version }}"',
+            'src="assets/mol3d/dashboard_mol3d_viewer.js?v={{ static_version }}"',
+            'src="assets/mol3d/dashboard_mol3d_io.js?v={{ static_version }}"',
+            'src="assets/mol3d/dashboard_mol3d_page.js?v={{ static_version }}"',
         ],
         name="molecule3d.html.j2",
     )
@@ -137,6 +142,7 @@ def check_templates_api_only() -> None:
     _assert('id="bootstrap-json"' in mol, "molecule3d template missing bootstrap-json")
     _assert('id="payload-json"' not in index, "index template should not include payload-json")
     _assert('id="payload-json"' not in mol, "molecule3d template should not include payload-json")
+    _assert('id="refresh-pkl-btn"' in index, "index template missing refresh-pkl-btn")
     _assert('id="refresh-all"' not in index, "index template should not include refresh-all button")
 
 
@@ -150,6 +156,23 @@ def check_molecule3d_stride_controls() -> None:
     mol = _read_text(MOL_TEMPLATE)
     _assert('id="playback-stride-slider"' in mol, "molecule3d template missing playback-stride-slider")
     _assert('id="playback-stride-label"' in mol, "molecule3d template missing playback-stride-label")
+
+
+def check_molecule3d_gif_controls() -> None:
+    mol = _read_text(MOL_TEMPLATE)
+    _assert('id="gif-export-start"' in mol, "molecule3d template missing gif-export-start")
+    _assert('id="gif-export-end"' in mol, "molecule3d template missing gif-export-end")
+    _assert('id="export-gif-btn"' in mol, "molecule3d template missing export-gif-btn")
+    _assert('id="cancel-gif-export-btn"' in mol, "molecule3d template missing cancel-gif-export-btn")
+    _assert('id="gif-export-progress"' in mol, "molecule3d template missing gif-export-progress")
+
+
+def check_molecule3d_controls_groups() -> None:
+    mol = _read_text(MOL_TEMPLATE)
+    _assert('id="controls-primary"' in mol, "molecule3d template missing controls-primary")
+    _assert('id="measure-controls-group"' in mol, "molecule3d template missing measure-controls-group")
+    _assert('id="playback-controls-group"' in mol, "molecule3d template missing playback-controls-group")
+    _assert('id="gif-range-controls-group"' in mol, "molecule3d template missing gif-range-controls-group")
 
 
 def check_no_cdn_refs() -> None:
@@ -179,16 +202,40 @@ def check_app_routes() -> None:
     from fastapi.testclient import TestClient
 
     class _FakeTraj:
-        n_atoms = 1
+        def __init__(self) -> None:
+            self.n_atoms = 1
+            self.time = np.asarray([0.0, 1.0], dtype=float)
+            self.coords = np.asarray(
+                [
+                    [[0.0, 0.0, 0.0]],
+                    [[1.0, 0.0, 0.0]],
+                ],
+                dtype=float,
+            )
+            self.etot_time = self.time.copy()
+            self.etot = np.asarray([0.0, 0.1], dtype=float)
+            self.eig_time = self.time.copy()
+            self.eig = np.asarray([[0.0], [0.1]], dtype=float)
+            self.nac_time = self.time.copy()
+            self.nac_norm = np.asarray([0.0, 0.2], dtype=float)
+            self.state_time = self.time.copy()
+            self.state = np.asarray([0, 1], dtype=int)
+            self.c_prob_time = self.time.copy()
+            self.c_prob = np.asarray([[1.0, 0.0], [0.7, 0.3]], dtype=float)
 
     class _FakeStore:
-        traj_ids = ["0", "1"]
+        def __init__(self, version: int = 0) -> None:
+            self.version = int(version)
+            self.traj_ids = ["0", "1"]
+            self._traj = _FakeTraj()
+            self.input_path = Path(f"/tmp/example_v{self.version}.pkl")
+            self.meta = {"source_pkl": str(self.input_path)}
 
         def to_bootstrap(self, api_base: str = "/api") -> dict[str, object]:
             return {
                 "schema_version": 1,
                 "data_mode": "api",
-                "meta": {"traj_ids": self.traj_ids, "source_pkl": "/tmp/example.pkl"},
+                "meta": {"traj_ids": self.traj_ids, "source_pkl": f"/tmp/example_v{self.version}.pkl"},
                 "defaults": {"panels": [], "plot": {}, "nac": {}, "ui": {}},
                 "traj_ids": list(self.traj_ids),
                 "api_base": api_base,
@@ -197,7 +244,7 @@ def check_app_routes() -> None:
         def get_trajectory(self, traj_id: str) -> _FakeTraj | None:
             if str(traj_id) not in self.traj_ids:
                 return None
-            return _FakeTraj()
+            return self._traj
 
         def build_mol3d_payload(self, traj_id: str) -> dict[str, object] | None:
             tid = str(traj_id)
@@ -205,17 +252,26 @@ def check_app_routes() -> None:
                 return None
             return {
                 "traj_id": tid,
-                "time": [0.0],
-                "coords": [[[0.0, 0.0, 0.0]]],
+                "time": self._traj.time.astype(float).tolist(),
+                "coords": self._traj.coords.astype(float).tolist(),
                 "n_atoms": 1,
                 "atom_numbers": [1],
-                "n_frames": 1,
+                "n_frames": int(self._traj.coords.shape[0]),
             }
 
+    reload_state = {"version": 0, "fail": False}
+
+    def _reload_store() -> _FakeStore:
+        if reload_state["fail"]:
+            raise RuntimeError("reload failed")
+        reload_state["version"] += 1
+        return _FakeStore(version=reload_state["version"])
+
     app = create_app(
-        _FakeStore(),
+        _FakeStore(version=0),
         SeriesLRUCache(max_entries=16),
         mol3d_cache=SeriesLRUCache(max_entries=8),
+        reload_store=_reload_store,
     )
     client = TestClient(app)
 
@@ -234,6 +290,15 @@ def check_app_routes() -> None:
     _assert(bootstrap.json().get("data_mode") == "api", "/api/bootstrap data_mode should be api")
     _assert("all_mode_manual_refresh" not in bootstrap.json(), "/api/bootstrap should not include all_mode_manual_refresh")
 
+    series_req = {"traj_id": "0", "observable": "etot", "indices": []}
+    series_1 = client.post("/api/series", json=series_req)
+    _assert(series_1.status_code == 200, "first /api/series should return 200")
+    _assert(series_1.json().get("cached") is False, "first /api/series should have cached=false")
+
+    series_2 = client.post("/api/series", json=series_req)
+    _assert(series_2.status_code == 200, "second /api/series should return 200")
+    _assert(series_2.json().get("cached") is True, "second /api/series should have cached=true")
+
     traj_1 = client.get("/api/molecule3d/trajectory/0")
     _assert(traj_1.status_code == 200, "first /api/molecule3d/trajectory/0 should return 200")
     _assert(traj_1.json().get("cached") is False, "first trajectory response should have cached=false")
@@ -241,6 +306,40 @@ def check_app_routes() -> None:
     traj_2 = client.get("/api/molecule3d/trajectory/0")
     _assert(traj_2.status_code == 200, "second /api/molecule3d/trajectory/0 should return 200")
     _assert(traj_2.json().get("cached") is True, "second trajectory response should have cached=true")
+
+    refresh_ok = client.post("/api/refresh-dataset")
+    _assert(refresh_ok.status_code == 200, "POST /api/refresh-dataset should return 200")
+    _assert(refresh_ok.json().get("status") == "ok", "/api/refresh-dataset status should be ok")
+    _assert(refresh_ok.json().get("dataset_revision") == 2, "dataset revision should be incremented after refresh")
+
+    series_3 = client.post("/api/series", json=series_req)
+    _assert(series_3.status_code == 200, "post-refresh /api/series should return 200")
+    _assert(series_3.json().get("cached") is False, "post-refresh first /api/series should have cached=false")
+
+    traj_3 = client.get("/api/molecule3d/trajectory/0")
+    _assert(traj_3.status_code == 200, "post-refresh /api/molecule3d/trajectory/0 should return 200")
+    _assert(traj_3.json().get("cached") is False, "post-refresh first trajectory response should have cached=false")
+
+    reload_state["fail"] = True
+    refresh_fail = client.post("/api/refresh-dataset")
+    _assert(refresh_fail.status_code == 500, "failed refresh should return 500")
+    reload_state["fail"] = False
+
+    series_after_failed_refresh = client.post("/api/series", json=series_req)
+    _assert(series_after_failed_refresh.status_code == 200, "series should remain available after failed refresh")
+    _assert(
+        series_after_failed_refresh.json().get("cached") is True,
+        "series cache should remain valid after failed refresh",
+    )
+
+    app_without_refresh = create_app(
+        _FakeStore(version=0),
+        SeriesLRUCache(max_entries=4),
+        mol3d_cache=SeriesLRUCache(max_entries=4),
+    )
+    client_without_refresh = TestClient(app_without_refresh)
+    refresh_not_enabled = client_without_refresh.post("/api/refresh-dataset")
+    _assert(refresh_not_enabled.status_code == 501, "refresh endpoint should return 501 when disabled")
 
     missing = client.get("/api/molecule3d/trajectory/not-found")
     _assert(missing.status_code == 404, "missing trajectory should return 404")
@@ -253,6 +352,8 @@ def run_checks() -> int:
         ("templates api only", check_templates_api_only),
         ("molecule3d speed controls", check_molecule3d_speed_controls),
         ("molecule3d stride controls", check_molecule3d_stride_controls),
+        ("molecule3d gif controls", check_molecule3d_gif_controls),
+        ("molecule3d controls groups", check_molecule3d_controls_groups),
         ("no CDN refs", check_no_cdn_refs),
         ("renderer API surface", check_renderer_api_surface),
         ("server app routes", check_app_routes),

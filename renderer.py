@@ -14,10 +14,13 @@ def _json_html_safe(obj: Any) -> str:
     return text.replace("</", "<\\/")
 
 
-def _render_html(template_name: str, *, bootstrap_json: str) -> str:
+def _render_html(template_name: str, *, bootstrap_json: str, static_version: str) -> str:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
         autoescape=select_autoescape(enabled_extensions=("html", "xml"), default=True),
     )
     template = env.get_template(template_name)
-    return template.render(bootstrap_json=bootstrap_json)
+    return template.render(
+        bootstrap_json=bootstrap_json,
+        static_version=static_version,
+    )

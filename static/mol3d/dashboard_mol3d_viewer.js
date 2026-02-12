@@ -6,6 +6,7 @@
 
   const { dom, constants, state } = shared;
 
+  // --- Viewer layout ----------------------------------------------------------
   function enforceViewerBounds() {
     if (!dom.viewerEl) return;
 
@@ -30,6 +31,7 @@
     state.viewer.render();
   }
 
+  // --- Overlay primitives -----------------------------------------------------
   function linePoint(point) {
     return {
       x: Number(point[0]),
@@ -73,6 +75,49 @@
     return `${value.toFixed(meta.decimals)}°`;
   }
 
+  function computeOverlayMeasurementValue(type, points) {
+    if (type === 'bond') {
+      return geometry.distance3(points[0], points[1]);
+    }
+    if (type === 'angle') {
+      return geometry.angleDeg(points[0], points[1], points[2]);
+    }
+    return geometry.dihedralDeg(points[0], points[1], points[2], points[3]);
+  }
+
+  function getOverlayLineSegments(type) {
+    if (type === 'bond') return [[0, 1]];
+    if (type === 'angle') return [[0, 1], [1, 2]];
+    return [[0, 1], [1, 2], [2, 3]];
+  }
+
+  function getOverlayLabelPosition(type, points) {
+    if (type === 'bond') return geometry.midpoint3(points[0], points[1]);
+    if (type === 'angle') return linePoint(points[1]);
+    return geometry.midpoint3(points[1], points[2]);
+  }
+
+  function getOverlayLabelOffset(type) {
+    if (type === 'bond') return { x: 0, y: -8 };
+    return { x: 0, y: -10 };
+  }
+
+  function addMeasurementOverlay(track, type, points) {
+    const value = computeOverlayMeasurementValue(type, points);
+    if (!Number.isFinite(value)) return;
+
+    for (const [startIdx, endIdx] of getOverlayLineSegments(type)) {
+      addOverlayLine(points[startIdx], points[endIdx], track.color);
+    }
+    addOverlayLabel(
+      formatOverlayValue(type, value),
+      getOverlayLabelPosition(type, points),
+      track.color,
+      getOverlayLabelOffset(type)
+    );
+  }
+
+  // Render measurement overlays from highlighted tracks in the current frame.
   function renderMeasurementOverlayForFrame() {
     if (!state.viewer) return;
     const measurement = root.measurement;
@@ -91,35 +136,7 @@
 
       const points = atoms.map((index) => frame[index]);
       if (points.some((point) => !Array.isArray(point) || point.length < 3)) continue;
-
-      if (type === 'bond') {
-        const value = geometry.distance3(points[0], points[1]);
-        if (!Number.isFinite(value)) continue;
-        addOverlayLine(points[0], points[1], track.color);
-        addOverlayLabel(formatOverlayValue(type, value), geometry.midpoint3(points[0], points[1]), track.color, { x: 0, y: -8 });
-        continue;
-      }
-
-      if (type === 'angle') {
-        const value = geometry.angleDeg(points[0], points[1], points[2]);
-        if (!Number.isFinite(value)) continue;
-        addOverlayLine(points[0], points[1], track.color);
-        addOverlayLine(points[1], points[2], track.color);
-        addOverlayLabel(
-          formatOverlayValue(type, value),
-          linePoint(points[1]),
-          track.color,
-          { x: 0, y: -10 }
-        );
-        continue;
-      }
-
-      const value = geometry.dihedralDeg(points[0], points[1], points[2], points[3]);
-      if (!Number.isFinite(value)) continue;
-      addOverlayLine(points[0], points[1], track.color);
-      addOverlayLine(points[1], points[2], track.color);
-      addOverlayLine(points[2], points[3], track.color);
-      addOverlayLabel(formatOverlayValue(type, value), geometry.midpoint3(points[1], points[2]), track.color, { x: 0, y: -10 });
+      addMeasurementOverlay(track, type, points);
     }
   }
 
@@ -156,6 +173,14 @@
     });
   }
 
+  function clearScene() {
+    if (!state.viewer) return;
+    state.viewer.removeAllLabels();
+    state.viewer.removeAllShapes();
+    state.viewer.removeAllModels();
+  }
+
+  // --- Playback lifecycle -----------------------------------------------------
   function stopPlayback() {
     if (state.timer) {
       clearInterval(state.timer);
@@ -184,15 +209,23 @@
     }, getPlaybackIntervalMs());
   }
 
+  function restartPlaybackTimerIfPlaying() {
+    if (!state.isPlaying) return;
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    startPlaybackTimer();
+  }
+
+  // Full frame render: replace model, redraw overlay/labels, sync UI cursor.
   function renderFrame(frameIndex, refitView = false) {
     if (!state.viewer || !state.xyzFrames.length) return;
 
     const idx = Math.max(0, Math.min(frameIndex, state.xyzFrames.length - 1));
     state.currentFrame = idx;
 
-    state.viewer.removeAllLabels();
-    state.viewer.removeAllShapes();
-    state.viewer.removeAllModels();
+    clearScene();
     const model = state.viewer.addModel(state.xyzFrames[idx], 'xyz');
     state.currentModel = model;
     state.viewer.setStyle({}, {
@@ -228,23 +261,13 @@
   function setPlaybackRate(rate) {
     state.playbackRate = shared.clampPlaybackRate(rate);
     shared.syncPlaybackRateUi();
-    if (!state.isPlaying) return;
-    if (state.timer) {
-      clearInterval(state.timer);
-      state.timer = null;
-    }
-    startPlaybackTimer();
+    restartPlaybackTimerIfPlaying();
   }
 
   function setPlaybackStride(stride) {
     state.playbackStride = shared.clampPlaybackStride(stride);
     shared.syncPlaybackStrideUi();
-    if (!state.isPlaying) return;
-    if (state.timer) {
-      clearInterval(state.timer);
-      state.timer = null;
-    }
-    startPlaybackTimer();
+    restartPlaybackTimerIfPlaying();
   }
 
   root.viewer = {
@@ -258,6 +281,7 @@
     getAtomIndexLabelText,
     addAtomIndexLabels,
     bindAtomClickHandler,
+    clearScene,
     stopPlayback,
     getPlaybackIntervalMs,
     renderFrame,

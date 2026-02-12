@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trajectory Observable Dashboard</title>
-  <script src="assets/vendor/plotly-2.35.2.min.js"></script>
-  <link rel="stylesheet" href="assets/dashboard/dashboard.css" />
+  <script src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"></script>
+  <link rel="stylesheet" href="assets/dashboard/dashboard.css?v={{ static_version }}" />
 </head>
 <body>
   <div class="page">
@@ -26,6 +26,9 @@
         <div class="control-group">
           <a class="mol3d-link" href="molecule3d.html" target="_blank" rel="noopener noreferrer">3D Molecule View</a>
         </div>
+        <div class="control-group">
+          <button class="btn" id="refresh-pkl-btn" type="button">Refresh PKL</button>
+        </div>
       </div>
     </div>
 
@@ -39,10 +42,10 @@
   </div>
 
   <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
-  <script src="assets/dashboard/dashboard_state.js"></script>
-  <script src="assets/dashboard/dashboard_data_loader.js"></script>
-  <script src="assets/math/dashboard_math3d.js"></script>
-  <script src="assets/dashboard/dashboard_plot.js"></script>
-  <script src="assets/dashboard/dashboard_ui.js"></script>
+  <script src="assets/dashboard/dashboard_state.js?v={{ static_version }}"></script>
+  <script src="assets/dashboard/dashboard_data_loader.js?v={{ static_version }}"></script>
+  <script src="assets/math/dashboard_math3d.js?v={{ static_version }}"></script>
+  <script src="assets/dashboard/dashboard_plot.js?v={{ static_version }}"></script>
+  <script src="assets/dashboard/dashboard_ui.js?v={{ static_version }}"></script>
 </body>
 </html>

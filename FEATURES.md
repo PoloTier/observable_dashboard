@@ -47,11 +47,15 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 - `tools/observable_dashboard/static/vendor/plotly-2.35.2.min.js`
 - `tools/observable_dashboard/static/vendor/3Dmol-min.js`（3dmol `2.0.3`）
+- `tools/observable_dashboard/static/vendor/gif.min.js`
+- `tools/observable_dashboard/static/vendor/gif.worker.js`
 
 当前文件校验值（sha256）：
 
 - `plotly-2.35.2.min.js`: `6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603`
 - `3Dmol-min.js`: `bc9fca2efffeaf8f5491c811ac232fc91a8f47600008d0eac98f94d5e471d690`
+- `gif.min.js`: `a8b111071bb3b123c302e6182c01d6b3550f93a4b627398b07c46875d84090bb`
+- `gif.worker.js`: `ca9e3048557ec05d619e18b83403cd3669c88939e5fa2d6034ce7625d445970d`
 
 ---
 
@@ -112,6 +116,8 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 ### 1) 基础浏览
 
+- 顶部控件采用“主栏 + 折叠分组”：主栏常显 `Trajectory / Play / Frame / Export GIF`
+- `Measure`、`Playback`（Speed/Stride）、`GIF Range`（Start/End）位于折叠分组，默认收起
 - `Trajectory` 下拉切换轨线
 - `Play / Pause` 播放或暂停
 - `Speed` 滑条调节播放速率（`1x ~ 10x`，步长 `0.5x`，默认 `1x = 10 FPS`）
@@ -137,7 +143,21 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - 当前帧：`traj_<trajId>_frame_<frame>.xyz`
 - 全轨线：`traj_<trajId>_all_frames.xyz`
 
-### 4) 几何量测量（Bond / Angle / Dihedral）
+### 4) GIF 动图导出
+
+- `GIF Start` / `GIF End`：导出区间（0-based，默认全轨线）
+- `Export GIF`：导出 3D 视窗动图（仅 viewer 区域）
+- `Cancel GIF`：导出过程中可取消
+- 导出开始时会自动展开 `GIF Range` 分组，确保进度和取消按钮可见
+- 导出采样跟随当前 `Stride`（导出帧序列按 `start..end` 以 `stride` 递增）
+- 导出 fps 跟随当前播放有效帧率（`BASE_FPS * Speed / Stride`，带范围保护）
+- 导出进度显示在控制区：`GIF current/total (percent%)`
+
+文件名规则：
+
+- `traj_<trajId>_frames_<start>_<end>_stride_<stride>_fps_<fps>.gif`
+
+### 5) 几何量测量（Bond / Angle / Dihedral）
 
 - 顶部提供 `Measure` 类型切换：`Bond` / `Angle` / `Dihedral`
 - `Select <Type>`：进入当前类型选点模式（0-based）
@@ -263,6 +283,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 - 若状态栏提示 `3Dmol.js failed to load`：通常是 `assets/vendor/3Dmol-min.js` 路径不可达
 - 若子图不显示：检查 `assets/vendor/plotly-2.35.2.min.js` 是否可访问
+- 若 GIF 导出失败：检查 `assets/vendor/gif.min.js` 与 `assets/vendor/gif.worker.js` 是否可访问
 - 若 `Select Bond` 无法选中：确认当前轨线有有效坐标帧，并在模型原子球上点击
 
 ### 4) 无可用轨线

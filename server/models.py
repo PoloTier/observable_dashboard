@@ -11,6 +11,15 @@ class HealthzResponse(BaseModel):
     traj_count: int
 
 
+class RefreshDatasetResponse(BaseModel):
+    status: str
+    traj_count: int
+    source_pkl: str
+    cleared_series_cache_entries: int
+    cleared_mol3d_cache_entries: int
+    dataset_revision: int
+
+
 class BootstrapResponse(BaseModel):
     schema_version: int
     data_mode: str

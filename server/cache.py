@@ -35,3 +35,9 @@ class SeriesLRUCache:
     def size(self) -> int:
         with self._lock:
             return len(self._items)
+
+    def clear(self) -> int:
+        with self._lock:
+            count = len(self._items)
+            self._items.clear()
+            return count

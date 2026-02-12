@@ -73,10 +73,14 @@ def main() -> None:
         print(f"[ERROR] Failed to initialize dataset store: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
+    def _reload_store():
+        return load_dataset_store(options)
+
     app = create_app(
         store,
         SeriesLRUCache(max_entries=args.cache_size),
         mol3d_cache=SeriesLRUCache(max_entries=args.mol3d_cache_size),
+        reload_store=_reload_store,
     )
 
     print("--- Observable Dashboard API ---")

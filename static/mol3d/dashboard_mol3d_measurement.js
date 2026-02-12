@@ -6,6 +6,7 @@
 
   const { dom, constants, state, measureTypeButtons } = shared;
 
+  // --- Shared refresh helpers -------------------------------------------------
   function rerenderCurrentFrame() {
     const viewerModule = root.viewer;
     if (!viewerModule || typeof viewerModule.renderFrame !== 'function') return;
@@ -13,6 +14,17 @@
     viewerModule.renderFrame(state.currentFrame);
   }
 
+  function refreshViews({ controls = true, plot = true, viewer = true } = {}) {
+    if (controls) updateMeasurementControlState();
+    if (plot) renderMeasurementPlot();
+    if (viewer) rerenderCurrentFrame();
+  }
+
+  function refreshControlsOnly() {
+    refreshViews({ plot: false, viewer: false });
+  }
+
+  // --- Track collection helpers ----------------------------------------------
   function findTrack(type, key) {
     return shared.getTracks(type).find((track) => track.key === key) || null;
   }
@@ -25,12 +37,45 @@
     if (track.color === sanitized) return true;
 
     track.color = sanitized;
-    updateMeasurementControlState();
-    renderMeasurementPlot();
-    rerenderCurrentFrame();
+    refreshViews();
     const meta = shared.getMeasureMeta(type);
     shared.setStatus(`Updated color for ${meta.lowerName} ${shared.getTrackLabel(track)}.`);
     return true;
+  }
+
+  // --- Color settings panel ---------------------------------------------------
+  function createColorSettingsRow(track, meta) {
+    const row = document.createElement('div');
+    row.className = 'bond-color-row';
+    row.style.borderLeftColor = track.color;
+
+    const swatch = document.createElement('span');
+    swatch.className = 'bond-color-swatch';
+    swatch.style.backgroundColor = track.color;
+
+    const label = document.createElement('span');
+    label.className = 'bond-color-label';
+    label.textContent = `${meta.displayName} ${shared.getTrackLabel(track)}`;
+
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'bond-color-input';
+    input.value = shared.normalizeHexColor(track.color);
+    input.title = `Set color for ${meta.lowerName} ${shared.getTrackLabel(track)}`;
+    input.addEventListener('input', () => {
+      const nextColor = shared.sanitizeColorInput(input.value);
+      if (!nextColor) return;
+      swatch.style.backgroundColor = nextColor;
+      row.style.borderLeftColor = nextColor;
+    });
+    input.addEventListener('change', () => {
+      setTrackColor(track.type, track.key, input.value);
+    });
+
+    row.appendChild(swatch);
+    row.appendChild(label);
+    row.appendChild(input);
+    return row;
   }
 
   function renderColorSettingsPanel() {
@@ -48,40 +93,11 @@
     }
 
     for (const track of tracks) {
-      const row = document.createElement('div');
-      row.className = 'bond-color-row';
-      row.style.borderLeftColor = track.color;
-
-      const swatch = document.createElement('span');
-      swatch.className = 'bond-color-swatch';
-      swatch.style.backgroundColor = track.color;
-
-      const label = document.createElement('span');
-      label.className = 'bond-color-label';
-      label.textContent = `${meta.displayName} ${shared.getTrackLabel(track)}`;
-
-      const input = document.createElement('input');
-      input.type = 'color';
-      input.className = 'bond-color-input';
-      input.value = shared.normalizeHexColor(track.color);
-      input.title = `Set color for ${meta.lowerName} ${shared.getTrackLabel(track)}`;
-      input.addEventListener('input', () => {
-        const nextColor = shared.sanitizeColorInput(input.value);
-        if (!nextColor) return;
-        swatch.style.backgroundColor = nextColor;
-        row.style.borderLeftColor = nextColor;
-      });
-      input.addEventListener('change', () => {
-        setTrackColor(track.type, track.key, input.value);
-      });
-
-      row.appendChild(swatch);
-      row.appendChild(label);
-      row.appendChild(input);
-      dom.bondColorSettingsListEl.appendChild(row);
+      dom.bondColorSettingsListEl.appendChild(createColorSettingsRow(track, meta));
     }
   }
 
+  // --- Highlight state helpers ------------------------------------------------
   function isHighlighted(type, key) {
     return shared.getHighlightedKeys(type).has(key);
   }
@@ -104,6 +120,7 @@
     return true;
   }
 
+  // --- Measurement value/series computation ----------------------------------
   function computeMeasurementValue(type, frame, atoms) {
     if (!Array.isArray(frame) || !Array.isArray(atoms)) return NaN;
     if (atoms.some((index) => index < 0 || index >= frame.length)) return NaN;
@@ -181,14 +198,50 @@
     tracks.splice(removeIdx, 1);
     shared.getHighlightedKeys(type).delete(trackKey);
 
-    updateMeasurementControlState();
-    renderMeasurementPlot();
-    rerenderCurrentFrame();
+    refreshViews();
     if (removedTrack) {
       shared.setStatus(`Removed ${meta.lowerName} ${shared.getTrackLabel(removedTrack)}.`);
     }
   }
 
+  function createMeasurementListItem(track, type, meta) {
+    const item = document.createElement('div');
+    item.className = 'bond-item';
+    item.style.borderLeftColor = track.color;
+    if (isHighlighted(type, track.key)) item.classList.add('active');
+
+    const trackLabel = shared.getTrackLabel(track);
+
+    const activateBtn = document.createElement('button');
+    activateBtn.type = 'button';
+    activateBtn.className = 'bond-activate';
+    activateBtn.textContent = trackLabel;
+    activateBtn.title = `Toggle highlight for ${meta.lowerName} ${trackLabel}`;
+    activateBtn.addEventListener('click', () => {
+      const isHighlightedNow = toggleHighlight(type, track.key);
+      refreshViews();
+      shared.setStatus(
+        isHighlightedNow
+          ? `Highlighted ${meta.lowerName} ${trackLabel}.`
+          : `Unhighlighted ${meta.lowerName} ${trackLabel}.`
+      );
+    });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'bond-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = `Remove ${meta.lowerName} ${trackLabel}`;
+    removeBtn.addEventListener('click', () => {
+      removeTrack(track.key);
+    });
+
+    item.appendChild(activateBtn);
+    item.appendChild(removeBtn);
+    return item;
+  }
+
+  // --- Measurement list and controls -----------------------------------------
   function renderMeasurementList() {
     if (!dom.bondListEl) return;
     dom.bondListEl.innerHTML = '';
@@ -206,40 +259,7 @@
     }
 
     for (const track of tracks) {
-      const item = document.createElement('div');
-      item.className = 'bond-item';
-      item.style.borderLeftColor = track.color;
-      if (isHighlighted(type, track.key)) item.classList.add('active');
-
-      const activateBtn = document.createElement('button');
-      activateBtn.type = 'button';
-      activateBtn.className = 'bond-activate';
-      activateBtn.textContent = shared.getTrackLabel(track);
-      activateBtn.title = `Toggle highlight for ${meta.lowerName} ${shared.getTrackLabel(track)}`;
-      activateBtn.addEventListener('click', () => {
-        const isHighlightedNow = toggleHighlight(type, track.key);
-        updateMeasurementControlState();
-        renderMeasurementPlot();
-        rerenderCurrentFrame();
-        shared.setStatus(
-          isHighlightedNow
-            ? `Highlighted ${meta.lowerName} ${shared.getTrackLabel(track)}.`
-            : `Unhighlighted ${meta.lowerName} ${shared.getTrackLabel(track)}.`
-        );
-      });
-
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'bond-remove';
-      removeBtn.textContent = '×';
-      removeBtn.title = `Remove ${meta.lowerName} ${shared.getTrackLabel(track)}`;
-      removeBtn.addEventListener('click', () => {
-        removeTrack(track.key);
-      });
-
-      item.appendChild(activateBtn);
-      item.appendChild(removeBtn);
-      dom.bondListEl.appendChild(item);
+      dom.bondListEl.appendChild(createMeasurementListItem(track, type, meta));
     }
   }
 
@@ -285,7 +305,7 @@
   function disableMeasurementSelectMode() {
     state.isMeasureSelectMode = false;
     state.pendingAtomIndices = [];
-    updateMeasurementControlState();
+    refreshControlsOnly();
   }
 
   function setActiveMeasureType(type) {
@@ -298,9 +318,7 @@
     state.isMeasureSelectMode = false;
     state.pendingAtomIndices = [];
 
-    updateMeasurementControlState();
-    renderMeasurementPlot();
-    rerenderCurrentFrame();
+    refreshViews();
 
     if (wasSelecting) {
       shared.setStatus(`${previousMeta.displayName} selection canceled.`);
@@ -325,7 +343,7 @@
 
     state.isMeasureSelectMode = true;
     state.pendingAtomIndices = [];
-    updateMeasurementControlState();
+    refreshControlsOnly();
     shared.setStatus(meta.selectHintText);
   }
 
@@ -342,19 +360,21 @@
     dom.bondPlotEl.innerHTML = `<div class="bond-plot-empty">${message}</div>`;
   }
 
+  // Keep highlighted tracks first so the cursor aligns with user focus.
+  function getTrackRenderOrder(type) {
+    const tracks = shared.getTracks(type);
+    const highlightedTracks = getHighlightedTracks(type);
+    const order = highlightedTracks.slice();
+    for (const track of tracks) {
+      if (!isHighlighted(type, track.key)) order.push(track);
+    }
+    return order;
+  }
+
+  // --- Plot helpers -----------------------------------------------------------
   function getCursorTime() {
     const type = state.activeMeasureType;
-    const tracks = shared.getTracks(type);
-    const trackOrder = [];
-    const highlightedTracks = getHighlightedTracks(type);
-    for (const track of highlightedTracks) {
-      trackOrder.push(track);
-    }
-    for (const track of tracks) {
-      if (!isHighlighted(type, track.key)) trackOrder.push(track);
-    }
-
-    for (const track of trackOrder) {
+    for (const track of getTrackRenderOrder(type)) {
       if (!Array.isArray(track.series) || !track.series.length) continue;
       const idx = Math.max(0, Math.min(state.currentFrame, track.series.length - 1));
       const t = Number(track.series[idx]?.t);
@@ -403,6 +423,7 @@
 
     const data = plotTracks.map((track) => {
       const highlighted = isHighlighted(track.type, track.key);
+      const trackLabel = `${meta.lowerName} ${shared.getTrackLabel(track)}`;
       return {
         x: track.series.map((point) => point.t),
         y: track.series.map((point) => point.v),
@@ -410,8 +431,8 @@
         mode: 'lines',
         line: { color: track.color, width: highlighted ? 3 : 1.5 },
         opacity: highlighted ? 1 : 0.28,
-        name: `${meta.lowerName} ${shared.getTrackLabel(track)}`,
-        hovertemplate: `${meta.lowerName} ${shared.getTrackLabel(track)}<br>t=%{x:.4f}<br>${meta.hoverValueLabel}=${valueFormat}${unitSuffix}<extra></extra>`,
+        name: trackLabel,
+        hovertemplate: `${trackLabel}<br>t=%{x:.4f}<br>${meta.hoverValueLabel}=${valueFormat}${unitSuffix}<extra></extra>`,
       };
     });
 
@@ -474,9 +495,7 @@
     state.measurementTracks[type] = kept;
     state.highlightedKeysByType[type] = new Set();
 
-    updateMeasurementControlState();
-    renderMeasurementPlot();
-    rerenderCurrentFrame();
+    refreshViews();
     shared.setStatus(`Cleared ${removedCount} highlighted ${meta.lowerName}${removedCount === 1 ? '' : 's'}.`);
   }
 
@@ -488,9 +507,10 @@
       state.highlightedKeysByType[type] = new Set();
     }
     clearMeasurementPlot();
-    updateMeasurementControlState();
+    refreshControlsOnly();
   }
 
+  // --- Atom picking workflow --------------------------------------------------
   function handleAtomClick(atom) {
     if (!state.isMeasureSelectMode) return;
     if (!Array.isArray(state.currentCoords) || !state.currentCoords.length) return;
@@ -511,7 +531,7 @@
 
     state.pendingAtomIndices.push(atomIdx);
     if (state.pendingAtomIndices.length < meta.requiredAtoms) {
-      updateMeasurementControlState();
+      refreshControlsOnly();
       const ordinals = ['First', 'Second', 'Third', 'Fourth'];
       const orderText = ordinals[state.pendingAtomIndices.length - 1] || `${state.pendingAtomIndices.length}th`;
       const remaining = meta.requiredAtoms - state.pendingAtomIndices.length;
@@ -529,7 +549,7 @@
 
     const canonical = geometry.canonicalMeasurement(type, selectedAtoms);
     if (!canonical) {
-      updateMeasurementControlState();
+      refreshControlsOnly();
       shared.setStatus(`Invalid ${meta.lowerName} selection.`, true);
       return;
     }
@@ -537,16 +557,14 @@
     const existingTrack = findTrack(type, canonical.key);
     if (existingTrack) {
       ensureHighlighted(type, existingTrack.key);
-      updateMeasurementControlState();
-      renderMeasurementPlot();
-      rerenderCurrentFrame();
+      refreshViews();
       shared.setStatus(`${meta.displayName} ${shared.getTrackLabel(existingTrack)} is already tracked and is now highlighted.`);
       return;
     }
 
     const newTrack = buildTrack(type, canonical.atoms, shared.getNextColor(type));
     if (!newTrack) {
-      updateMeasurementControlState();
+      refreshControlsOnly();
       shared.setStatus(`Failed to create selected ${meta.lowerName}.`, true);
       return;
     }
@@ -554,9 +572,7 @@
     const tracks = shared.getTracks(type);
     tracks.push(newTrack);
     ensureHighlighted(type, newTrack.key);
-    updateMeasurementControlState();
-    renderMeasurementPlot();
-    rerenderCurrentFrame();
+    refreshViews();
 
     const count = tracks.length;
     if (count > constants.MEASURE_PERF_HINT_THRESHOLD) {

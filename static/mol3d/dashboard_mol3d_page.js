@@ -11,6 +11,93 @@
 
   const { dom, trajIds, state } = shared;
 
+  function bind(el, event, handler) {
+    if (el) el.addEventListener(event, handler);
+  }
+
+  function populateTrajectoryOptions() {
+    if (!dom.trajSelect) return;
+    dom.trajSelect.innerHTML = '';
+    for (const trajId of trajIds) {
+      const opt = document.createElement('option');
+      opt.value = trajId;
+      opt.textContent = trajId;
+      dom.trajSelect.appendChild(opt);
+    }
+  }
+
+  // Trajectory selection + per-frame scrub.
+  function bindTrajectoryControls() {
+    bind(dom.trajSelect, 'change', () => {
+      io.loadTrajectory(dom.trajSelect.value);
+    });
+
+    bind(dom.frameSlider, 'input', () => {
+      viewer.stopPlayback();
+      const idx = Number.parseInt(dom.frameSlider.value, 10);
+      if (Number.isFinite(idx)) viewer.renderFrame(idx);
+    });
+  }
+
+  // Playback rate/stride, play/pause and view toggles.
+  function bindPlaybackControls() {
+    bind(dom.playbackRateSlider, 'input', () => {
+      const playbackRate = Number.parseFloat(dom.playbackRateSlider.value);
+      viewer.setPlaybackRate(playbackRate);
+    });
+
+    bind(dom.playbackStrideSlider, 'input', () => {
+      const playbackStride = Number.parseInt(dom.playbackStrideSlider.value, 10);
+      viewer.setPlaybackStride(playbackStride);
+    });
+
+    bind(dom.playBtn, 'click', () => {
+      if (!state.currentTrajId || !state.xyzFrames.length) return;
+      if (state.isPlaying) viewer.stopPlayback();
+      else viewer.startPlayback();
+    });
+
+    bind(dom.showAtomIndexCheckbox, 'change', () => {
+      if (!state.currentTrajId || !state.xyzFrames.length) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+  }
+
+  // Measurement-type switching and per-track controls.
+  function bindMeasurementControls() {
+    bind(dom.measureTypeBondBtn, 'click', () => measurement.setActiveMeasureType('bond'));
+    bind(dom.measureTypeAngleBtn, 'click', () => measurement.setActiveMeasureType('angle'));
+    bind(dom.measureTypeDihedralBtn, 'click', () => measurement.setActiveMeasureType('dihedral'));
+
+    bind(dom.selectBondBtn, 'click', () => measurement.toggleMeasureSelectMode());
+    bind(dom.clearBondBtn, 'click', () => measurement.removeHighlightedTracks());
+
+    bind(dom.bondColorSettingsBtn, 'click', () => {
+      if (!shared.getTracks().length) return;
+      shared.setColorSettingsOpen(!state.isMeasurementColorSettingsOpen);
+      measurement.renderColorSettingsPanel();
+    });
+    bind(dom.bondColorSettingsCloseBtn, 'click', () => shared.setColorSettingsOpen(false));
+  }
+
+  // File export actions and GIF range controls.
+  function bindExportControls() {
+    bind(dom.saveFrameBtn, 'click', () => io.saveCurrentFrameXyz());
+    bind(dom.saveTrajBtn, 'click', () => io.saveTrajectoryXyz());
+    bind(dom.gifExportStartInput, 'change', () => io.syncGifExportRangeFromInputs(true));
+    bind(dom.gifExportEndInput, 'change', () => io.syncGifExportRangeFromInputs(true));
+    bind(dom.exportGifBtn, 'click', () => io.exportTrajectoryGif());
+    bind(dom.cancelGifExportBtn, 'click', () => io.cancelGifExport());
+  }
+
+  function bindLifecycleCleanup() {
+    window.addEventListener('beforeunload', () => {
+      io.cancelGifExport(false);
+      viewer.stopPlayback();
+      window.removeEventListener('resize', viewer.resizeViewer);
+    });
+  }
+
   function init() {
     io.setSourcePklInfo();
     shared.setDownloadButtonsEnabled(false);
@@ -28,99 +115,20 @@
     viewer.setPlaybackStride(state.playbackStride);
     window.addEventListener('resize', viewer.resizeViewer);
 
-    if (dom.trajSelect) {
-      dom.trajSelect.innerHTML = '';
-      for (const trajId of trajIds) {
-        const opt = document.createElement('option');
-        opt.value = trajId;
-        opt.textContent = trajId;
-        dom.trajSelect.appendChild(opt);
-      }
-    }
-
-    dom.trajSelect?.addEventListener('change', () => {
-      io.loadTrajectory(dom.trajSelect.value);
-    });
-
-    dom.frameSlider?.addEventListener('input', () => {
-      viewer.stopPlayback();
-      const idx = Number.parseInt(dom.frameSlider.value, 10);
-      if (Number.isFinite(idx)) viewer.renderFrame(idx);
-    });
-
-    dom.playbackRateSlider?.addEventListener('input', () => {
-      const playbackRate = Number.parseFloat(dom.playbackRateSlider.value);
-      viewer.setPlaybackRate(playbackRate);
-    });
-
-    dom.playbackStrideSlider?.addEventListener('input', () => {
-      const playbackStride = Number.parseInt(dom.playbackStrideSlider.value, 10);
-      viewer.setPlaybackStride(playbackStride);
-    });
-
-    dom.showAtomIndexCheckbox?.addEventListener('change', () => {
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      viewer.renderFrame(state.currentFrame);
-    });
-
-    dom.playBtn?.addEventListener('click', () => {
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      if (state.isPlaying) viewer.stopPlayback();
-      else viewer.startPlayback();
-    });
-
-    dom.saveFrameBtn?.addEventListener('click', () => {
-      io.saveCurrentFrameXyz();
-    });
-
-    dom.saveTrajBtn?.addEventListener('click', () => {
-      io.saveTrajectoryXyz();
-    });
-
-    dom.measureTypeBondBtn?.addEventListener('click', () => {
-      measurement.setActiveMeasureType('bond');
-    });
-
-    dom.measureTypeAngleBtn?.addEventListener('click', () => {
-      measurement.setActiveMeasureType('angle');
-    });
-
-    dom.measureTypeDihedralBtn?.addEventListener('click', () => {
-      measurement.setActiveMeasureType('dihedral');
-    });
-
-    dom.selectBondBtn?.addEventListener('click', () => {
-      measurement.toggleMeasureSelectMode();
-    });
-
-    dom.clearBondBtn?.addEventListener('click', () => {
-      measurement.removeHighlightedTracks();
-    });
-
-    dom.bondColorSettingsBtn?.addEventListener('click', () => {
-      if (!shared.getTracks().length) return;
-      shared.setColorSettingsOpen(!state.isMeasurementColorSettingsOpen);
-      measurement.renderColorSettingsPanel();
-    });
-
-    dom.bondColorSettingsCloseBtn?.addEventListener('click', () => {
-      shared.setColorSettingsOpen(false);
-    });
+    populateTrajectoryOptions();
+    bindTrajectoryControls();
+    bindPlaybackControls();
+    bindMeasurementControls();
+    bindExportControls();
+    bindLifecycleCleanup();
 
     if (!trajIds.length) {
       shared.setStatus('No trajectories found in dataset.', true);
       return;
     }
 
-    if (dom.trajSelect) {
-      dom.trajSelect.value = trajIds[0];
-    }
+    if (dom.trajSelect) dom.trajSelect.value = trajIds[0];
     io.loadTrajectory(trajIds[0]);
-
-    window.addEventListener('beforeunload', () => {
-      viewer.stopPlayback();
-      window.removeEventListener('resize', viewer.resizeViewer);
-    });
   }
 
   init();
