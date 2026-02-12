@@ -75,6 +75,23 @@
       color: #fff;
       border-color: var(--accent);
     }
+    #playback-rate-slider,
+    #playback-stride-slider {
+      width: clamp(110px, 18vw, 160px);
+      min-width: 96px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      accent-color: var(--accent);
+    }
+    #playback-rate-label,
+    #playback-stride-label {
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 32px;
+      text-align: right;
+      white-space: nowrap;
+    }
     .bond-selection-info {
       font-size: 12px;
       color: var(--muted);
@@ -301,6 +318,14 @@
 
         <button id="play-btn" type="button">Play</button>
 
+        <label for="playback-rate-slider">Speed</label>
+        <input id="playback-rate-slider" type="range" min="1" max="10" step="0.5" value="1" />
+        <span id="playback-rate-label">1.0x</span>
+
+        <label for="playback-stride-slider">Stride</label>
+        <input id="playback-stride-slider" type="range" min="1" max="20" step="1" value="1" />
+        <span id="playback-stride-label">x1</span>
+
         <label for="frame-slider">Frame</label>
         <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
 
@@ -344,7 +369,7 @@
     </div>
   </div>
 
-  <script id="payload-json" type="application/json">{{ payload_json | safe }}</script>
+  <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
   <script src="assets/mol3d/dashboard_mol3d_shared.js"></script>
   <script src="assets/math/dashboard_math3d.js"></script>
   <script src="assets/mol3d/dashboard_mol3d_geometry.js"></script>

@@ -21,32 +21,54 @@
     document.body.prepend(box);
   }
 
-  const payloadEl = document.getElementById('payload-json');
-  if (!payloadEl) {
-    showBootError('3D page failed to initialize: missing embedded payload-json script.');
+  function parseScriptJson(id, label, allowTemplateHint = false) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const raw = String(el.textContent || '');
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      let hint = `${label} is not valid JSON.`;
+      if (
+        allowTemplateHint &&
+        (raw.includes('{{ bootstrap_json') || raw.includes('{%'))
+      ) {
+        hint = 'Detected an unrendered template. Open served /molecule3d.html instead of templates/molecule3d.html.j2.';
+      }
+      console.error(`ObservableMol3D parse failed for ${id}:`, error);
+      showBootError(`3D page failed to initialize: ${hint}`);
+      return null;
+    }
+  }
+
+  const bootstrap = parseScriptJson('bootstrap-json', 'bootstrap-json', true);
+  if (!bootstrap) {
+    showBootError('3D page failed to initialize: missing bootstrap-json script.');
     return;
   }
 
-  let payload;
-  try {
-    payload = JSON.parse(payloadEl.textContent || '');
-  } catch (error) {
-    const raw = String(payloadEl.textContent || '');
-    const templateHint = raw.includes('{{ payload_json') || raw.includes('{%');
-    const hint = templateHint
-      ? 'Detected an unrendered template. Open generated analysis_viz/molecule3d.html instead of templates/molecule3d.html.j2.'
-      : 'Embedded payload-json content is not valid JSON.';
-    console.error('ObservableMol3D payload parse failed:', error);
-    showBootError(`3D page failed to initialize: ${hint}`);
+  const dataMode = String(bootstrap.data_mode || 'api');
+  if (dataMode !== 'api') {
+    showBootError(`3D page expects API mode, but received data_mode='${dataMode}'.`);
     return;
   }
 
-  const trajectories = payload.trajectories || {};
-  const trajIds = Array.isArray(payload.meta?.traj_ids) ? payload.meta.traj_ids : [];
+  const meta = bootstrap.meta || {};
+  const defaults = bootstrap.defaults || {};
+  const bootstrapTrajIds = Array.isArray(bootstrap.traj_ids) ? bootstrap.traj_ids : [];
+  const metaTrajIds = Array.isArray(meta?.traj_ids) ? meta.traj_ids : [];
+  const trajIds = (bootstrapTrajIds.length ? bootstrapTrajIds : metaTrajIds).map((v) => String(v));
+  const apiBase = typeof bootstrap.api_base === 'string' && bootstrap.api_base.trim()
+    ? bootstrap.api_base
+    : '/api';
 
   const dom = {
     trajSelect: document.getElementById('traj-select'),
     playBtn: document.getElementById('play-btn'),
+    playbackRateSlider: document.getElementById('playback-rate-slider'),
+    playbackRateLabel: document.getElementById('playback-rate-label'),
+    playbackStrideSlider: document.getElementById('playback-stride-slider'),
+    playbackStrideLabel: document.getElementById('playback-stride-label'),
     frameSlider: document.getElementById('frame-slider'),
     frameLabel: document.getElementById('frame-label'),
     showAtomIndexCheckbox: document.getElementById('show-atom-index'),
@@ -71,7 +93,15 @@
   };
 
   const constants = {
-    FPS: 10,
+    BASE_FPS: 10,
+    PLAYBACK_RATE_MIN: 1,
+    PLAYBACK_RATE_MAX: 10,
+    PLAYBACK_RATE_STEP: 0.5,
+    PLAYBACK_RATE_DEFAULT: 1,
+    PLAYBACK_STRIDE_MIN: 1,
+    PLAYBACK_STRIDE_MAX: 20,
+    PLAYBACK_STRIDE_STEP: 1,
+    PLAYBACK_STRIDE_DEFAULT: 1,
     MEASURE_PERF_HINT_THRESHOLD: 20,
     PLOT_EXPORT_DPI: 300,
     CSS_BASE_DPI: 96,
@@ -154,6 +184,8 @@
     viewer: null,
     timer: null,
     isPlaying: false,
+    playbackRate: constants.PLAYBACK_RATE_DEFAULT,
+    playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
     currentTrajId: null,
     xyzFrames: [],
     currentFrame: 0,
@@ -181,6 +213,66 @@
     if (!dom.statusEl) return;
     dom.statusEl.textContent = message || '';
     dom.statusEl.classList.toggle('error', !!isError);
+  }
+
+  function clampPlaybackRate(raw) {
+    const fallback = constants.PLAYBACK_RATE_DEFAULT;
+    const minRate = constants.PLAYBACK_RATE_MIN;
+    const maxRate = constants.PLAYBACK_RATE_MAX;
+    const step = constants.PLAYBACK_RATE_STEP;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = Math.max(minRate, Math.min(maxRate, parsed));
+    if (!Number.isFinite(step) || step <= 0) return clamped;
+    const snapped = minRate + Math.round((clamped - minRate) / step) * step;
+    return Number(Math.max(minRate, Math.min(maxRate, snapped)).toFixed(4));
+  }
+
+  function formatPlaybackRate(rate) {
+    return `${clampPlaybackRate(rate).toFixed(1)}x`;
+  }
+
+  function syncPlaybackRateUi() {
+    state.playbackRate = clampPlaybackRate(state.playbackRate);
+    if (dom.playbackRateSlider) {
+      dom.playbackRateSlider.min = String(constants.PLAYBACK_RATE_MIN);
+      dom.playbackRateSlider.max = String(constants.PLAYBACK_RATE_MAX);
+      dom.playbackRateSlider.step = String(constants.PLAYBACK_RATE_STEP);
+      dom.playbackRateSlider.value = String(state.playbackRate);
+    }
+    if (dom.playbackRateLabel) {
+      dom.playbackRateLabel.textContent = formatPlaybackRate(state.playbackRate);
+    }
+  }
+
+  function clampPlaybackStride(raw) {
+    const fallback = constants.PLAYBACK_STRIDE_DEFAULT;
+    const minStride = constants.PLAYBACK_STRIDE_MIN;
+    const maxStride = constants.PLAYBACK_STRIDE_MAX;
+    const step = constants.PLAYBACK_STRIDE_STEP;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = Math.max(minStride, Math.min(maxStride, parsed));
+    const normalizedStep = Number.isFinite(step) && step > 0 ? step : 1;
+    const snapped = minStride + Math.round((clamped - minStride) / normalizedStep) * normalizedStep;
+    return Math.max(minStride, Math.min(maxStride, Math.trunc(snapped)));
+  }
+
+  function formatPlaybackStride(stride) {
+    return `x${clampPlaybackStride(stride)}`;
+  }
+
+  function syncPlaybackStrideUi() {
+    state.playbackStride = clampPlaybackStride(state.playbackStride);
+    if (dom.playbackStrideSlider) {
+      dom.playbackStrideSlider.min = String(constants.PLAYBACK_STRIDE_MIN);
+      dom.playbackStrideSlider.max = String(constants.PLAYBACK_STRIDE_MAX);
+      dom.playbackStrideSlider.step = String(constants.PLAYBACK_STRIDE_STEP);
+      dom.playbackStrideSlider.value = String(state.playbackStride);
+    }
+    if (dom.playbackStrideLabel) {
+      dom.playbackStrideLabel.textContent = formatPlaybackStride(state.playbackStride);
+    }
   }
 
   function normalizeMeasureType(type) {
@@ -248,15 +340,27 @@
     return cleaned || 'unknown';
   }
 
+  syncPlaybackRateUi();
+  syncPlaybackStrideUi();
+
   root.shared = {
-    payload,
-    trajectories,
+    bootstrap,
+    meta,
+    defaults,
     trajIds,
+    dataMode,
+    apiBase,
     dom,
     constants,
     measureTypeButtons,
     state,
     setStatus,
+    clampPlaybackRate,
+    formatPlaybackRate,
+    syncPlaybackRateUi,
+    clampPlaybackStride,
+    formatPlaybackStride,
+    syncPlaybackStrideUi,
     normalizeMeasureType,
     getMeasureMeta,
     getTracks,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Smoke checks for observable_dashboard static layout and asset wiring.
+Smoke checks for observable_dashboard server-mode layout and wiring.
 
 Usage:
   python tools/observable_dashboard/scripts/check_static_layout.py
@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Iterable
 
 
@@ -28,11 +27,12 @@ REPO_ROOT = _find_repo_root()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.observable_dashboard.renderer import _write_assets, write_single_page  # noqa: E402
+from tools.observable_dashboard.renderer import STATIC_DIR  # noqa: E402
+from tools.observable_dashboard.server.app import create_app  # noqa: E402
+from tools.observable_dashboard.server.cache import SeriesLRUCache  # noqa: E402
 
 
 PKG_DIR = REPO_ROOT / "tools" / "observable_dashboard"
-STATIC_DIR = PKG_DIR / "static"
 INDEX_TEMPLATE = PKG_DIR / "templates" / "index.html.j2"
 MOL_TEMPLATE = PKG_DIR / "templates" / "molecule3d.html.j2"
 
@@ -42,6 +42,7 @@ EXPECTED_STATIC_RELFILES = {
     "vendor/3Dmol-min.js",
     "dashboard/dashboard.css",
     "dashboard/dashboard_state.js",
+    "dashboard/dashboard_data_loader.js",
     "dashboard/dashboard_plot.js",
     "dashboard/dashboard_ui.js",
     "math/dashboard_math3d.js",
@@ -52,15 +53,6 @@ EXPECTED_STATIC_RELFILES = {
     "mol3d/dashboard_mol3d_io.js",
     "mol3d/dashboard_mol3d_page.js",
 }
-
-LEGACY_ASSET_PATTERNS = (
-    r"assets/dashboard_state\.js",
-    r"assets/dashboard_plot\.js",
-    r"assets/dashboard_ui\.js",
-    r"assets/dashboard_mol3d_[^\"'\s]+\.js",
-    r"assets/dashboard_math3d\.js",
-    r"assets/dashboard\.css",
-)
 
 FORBIDDEN_CDN_PATTERNS = (
     r"https://cdn\.plot\.ly/",
@@ -103,9 +95,6 @@ def check_static_tree() -> None:
     missing = sorted(EXPECTED_STATIC_RELFILES - found)
     _assert(not missing, f"Missing static files: {missing}")
 
-    flat_files = sorted(p.name for p in STATIC_DIR.glob("*") if p.is_file())
-    _assert(not flat_files, f"Unexpected flat files in static/: {flat_files}")
-
 
 def check_template_paths_and_order() -> None:
     index = _read_text(INDEX_TEMPLATE)
@@ -117,6 +106,7 @@ def check_template_paths_and_order() -> None:
             'src="assets/vendor/plotly-2.35.2.min.js"',
             'href="assets/dashboard/dashboard.css"',
             'src="assets/dashboard/dashboard_state.js"',
+            'src="assets/dashboard/dashboard_data_loader.js"',
             'src="assets/math/dashboard_math3d.js"',
             'src="assets/dashboard/dashboard_plot.js"',
             'src="assets/dashboard/dashboard_ui.js"',
@@ -140,24 +130,26 @@ def check_template_paths_and_order() -> None:
     )
 
 
-def check_no_legacy_asset_refs() -> None:
-    patterns = [re.compile(p) for p in LEGACY_ASSET_PATTERNS]
-    offenders: list[str] = []
+def check_templates_api_only() -> None:
+    index = _read_text(INDEX_TEMPLATE)
+    mol = _read_text(MOL_TEMPLATE)
+    _assert('id="bootstrap-json"' in index, "index template missing bootstrap-json")
+    _assert('id="bootstrap-json"' in mol, "molecule3d template missing bootstrap-json")
+    _assert('id="payload-json"' not in index, "index template should not include payload-json")
+    _assert('id="payload-json"' not in mol, "molecule3d template should not include payload-json")
+    _assert('id="refresh-all"' not in index, "index template should not include refresh-all button")
 
-    for path in PKG_DIR.rglob("*"):
-        if not path.is_file():
-            continue
-        if ".git" in path.parts or "__pycache__" in path.parts:
-            continue
-        if path.suffix not in {".py", ".j2", ".md", ".js", ".css"}:
-            continue
 
-        text = _read_text(path)
-        for pattern in patterns:
-            if pattern.search(text):
-                offenders.append(f"{path.relative_to(REPO_ROOT)} -> {pattern.pattern}")
+def check_molecule3d_speed_controls() -> None:
+    mol = _read_text(MOL_TEMPLATE)
+    _assert('id="playback-rate-slider"' in mol, "molecule3d template missing playback-rate-slider")
+    _assert('id="playback-rate-label"' in mol, "molecule3d template missing playback-rate-label")
 
-    _assert(not offenders, "Found legacy flat asset references:\n" + "\n".join(offenders))
+
+def check_molecule3d_stride_controls() -> None:
+    mol = _read_text(MOL_TEMPLATE)
+    _assert('id="playback-stride-slider"' in mol, "molecule3d template missing playback-stride-slider")
+    _assert('id="playback-stride-label"' in mol, "molecule3d template missing playback-stride-label")
 
 
 def check_no_cdn_refs() -> None:
@@ -173,49 +165,97 @@ def check_no_cdn_refs() -> None:
     _assert(not offenders, "Found forbidden CDN references:\n" + "\n".join(offenders))
 
 
-def check_write_assets_output() -> None:
-    with TemporaryDirectory() as temp_dir:
-        out_dir = Path(temp_dir)
-        _write_assets(out_dir)
-        found = _find_all_files(out_dir / "assets")
-        missing = sorted(EXPECTED_STATIC_RELFILES - found)
-        _assert(not missing, f"_write_assets missing files: {missing}")
+def check_renderer_api_surface() -> None:
+    import tools.observable_dashboard.renderer as renderer
+
+    _assert(hasattr(renderer, "STATIC_DIR"), "renderer missing STATIC_DIR")
+    _assert(hasattr(renderer, "_json_html_safe"), "renderer missing _json_html_safe")
+    _assert(hasattr(renderer, "_render_html"), "renderer missing _render_html")
+    _assert(not hasattr(renderer, "write_single_page"), "write_single_page should be removed")
+    _assert(not hasattr(renderer, "write_chunked_page"), "write_chunked_page should be removed")
 
 
-def check_write_single_page_output() -> None:
-    payload = {
-        "meta": {"traj_ids": [], "source_pkl": ""},
-        "trajectories": {},
-        "defaults": {
-            "ui": {"max_panels": 2, "default_panel_count": 1},
-            "plot": {
-                "show_ensemble_by_default": False,
-                "show_all_traces_in_all_mode": False,
-            },
-            "panels": [],
-        },
-    }
+def check_app_routes() -> None:
+    from fastapi.testclient import TestClient
 
-    with TemporaryDirectory() as temp_dir:
-        out_dir = Path(temp_dir)
-        write_single_page(out_dir, payload)
+    class _FakeTraj:
+        n_atoms = 1
 
-        _assert((out_dir / "index.html").exists(), "write_single_page missing index.html")
-        _assert((out_dir / "molecule3d.html").exists(), "write_single_page missing molecule3d.html")
+    class _FakeStore:
+        traj_ids = ["0", "1"]
 
-        found = _find_all_files(out_dir / "assets")
-        missing = sorted(EXPECTED_STATIC_RELFILES - found)
-        _assert(not missing, f"write_single_page missing assets: {missing}")
+        def to_bootstrap(self, api_base: str = "/api") -> dict[str, object]:
+            return {
+                "schema_version": 1,
+                "data_mode": "api",
+                "meta": {"traj_ids": self.traj_ids, "source_pkl": "/tmp/example.pkl"},
+                "defaults": {"panels": [], "plot": {}, "nac": {}, "ui": {}},
+                "traj_ids": list(self.traj_ids),
+                "api_base": api_base,
+            }
+
+        def get_trajectory(self, traj_id: str) -> _FakeTraj | None:
+            if str(traj_id) not in self.traj_ids:
+                return None
+            return _FakeTraj()
+
+        def build_mol3d_payload(self, traj_id: str) -> dict[str, object] | None:
+            tid = str(traj_id)
+            if tid not in self.traj_ids:
+                return None
+            return {
+                "traj_id": tid,
+                "time": [0.0],
+                "coords": [[[0.0, 0.0, 0.0]]],
+                "n_atoms": 1,
+                "atom_numbers": [1],
+                "n_frames": 1,
+            }
+
+    app = create_app(
+        _FakeStore(),
+        SeriesLRUCache(max_entries=16),
+        mol3d_cache=SeriesLRUCache(max_entries=8),
+    )
+    client = TestClient(app)
+
+    index = client.get("/")
+    _assert(index.status_code == 200, "GET / should return 200")
+    _assert('id="bootstrap-json"' in index.text, "GET / missing bootstrap-json")
+    _assert('id="payload-json"' not in index.text, "GET / should not include payload-json")
+
+    mol = client.get("/molecule3d.html")
+    _assert(mol.status_code == 200, "GET /molecule3d.html should return 200")
+    _assert('id="bootstrap-json"' in mol.text, "GET /molecule3d.html missing bootstrap-json")
+    _assert('id="payload-json"' not in mol.text, "GET /molecule3d.html should not include payload-json")
+
+    bootstrap = client.get("/api/bootstrap")
+    _assert(bootstrap.status_code == 200, "GET /api/bootstrap should return 200")
+    _assert(bootstrap.json().get("data_mode") == "api", "/api/bootstrap data_mode should be api")
+    _assert("all_mode_manual_refresh" not in bootstrap.json(), "/api/bootstrap should not include all_mode_manual_refresh")
+
+    traj_1 = client.get("/api/molecule3d/trajectory/0")
+    _assert(traj_1.status_code == 200, "first /api/molecule3d/trajectory/0 should return 200")
+    _assert(traj_1.json().get("cached") is False, "first trajectory response should have cached=false")
+
+    traj_2 = client.get("/api/molecule3d/trajectory/0")
+    _assert(traj_2.status_code == 200, "second /api/molecule3d/trajectory/0 should return 200")
+    _assert(traj_2.json().get("cached") is True, "second trajectory response should have cached=true")
+
+    missing = client.get("/api/molecule3d/trajectory/not-found")
+    _assert(missing.status_code == 404, "missing trajectory should return 404")
 
 
 def run_checks() -> int:
     checks = [
         ("static tree", check_static_tree),
         ("template paths + order", check_template_paths_and_order),
-        ("no legacy asset refs", check_no_legacy_asset_refs),
+        ("templates api only", check_templates_api_only),
+        ("molecule3d speed controls", check_molecule3d_speed_controls),
+        ("molecule3d stride controls", check_molecule3d_stride_controls),
         ("no CDN refs", check_no_cdn_refs),
-        ("_write_assets output", check_write_assets_output),
-        ("write_single_page output", check_write_single_page_output),
+        ("renderer API surface", check_renderer_api_surface),
+        ("server app routes", check_app_routes),
     ]
 
     failed = False

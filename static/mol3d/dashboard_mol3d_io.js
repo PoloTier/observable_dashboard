@@ -3,11 +3,14 @@
   const shared = root.shared;
   if (!shared) return;
 
-  const { payload, trajectories, dom, constants, state } = shared;
+  const { meta, dom, constants, state, apiBase } = shared;
+  const trajectoryCache = new Map();
+  const trajectoryInflight = new Map();
+  let loadRequestSeq = 0;
 
   function setSourcePklInfo() {
     if (!dom.sourcePklEl) return;
-    const sourcePkl = String(payload.meta?.source_pkl || '');
+    const sourcePkl = String(meta?.source_pkl || '');
     if (sourcePkl) {
       const filename = sourcePkl.split(/[\\/]/).pop() || sourcePkl;
       dom.sourcePklEl.textContent = `PKL: ${filename}`;
@@ -111,34 +114,128 @@
     return out;
   }
 
-  function loadTrajectory(trajId) {
+  function normalizeTrajId(trajId) {
+    return String(trajId);
+  }
+
+  function normalizeTrajectoryPayload(trajId, payload) {
+    const coords = Array.isArray(payload?.coords) ? payload.coords : [];
+    const inferredAtoms = coords.length && Array.isArray(coords[0]) ? coords[0].length : 0;
+    return {
+      traj_id: normalizeTrajId(trajId),
+      time: Array.isArray(payload?.time) ? payload.time : [],
+      coords,
+      n_atoms: Number.isFinite(Number(payload?.n_atoms)) ? Number(payload.n_atoms) : inferredAtoms,
+      atom_numbers: Array.isArray(payload?.atom_numbers) ? payload.atom_numbers : [],
+    };
+  }
+
+  function buildTrajectoryApiUrl(trajId) {
+    const base = typeof apiBase === 'string' && apiBase.trim() ? apiBase.trim() : '/api';
+    const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+    return `${normalizedBase}/molecule3d/trajectory/${encodeURIComponent(normalizeTrajId(trajId))}`;
+  }
+
+  async function fetchTrajectoryFromApi(trajId) {
+    const url = buildTrajectoryApiUrl(trajId);
+    const response = await fetch(url, { cache: 'default' });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const payload = await response.json();
+        if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+          detail = `${detail}: ${payload.detail}`;
+        }
+      } catch (_) {
+        // best effort detail parsing
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json();
+    return normalizeTrajectoryPayload(trajId, payload);
+  }
+
+  async function getTrajectoryRecord(trajId) {
+    const key = normalizeTrajId(trajId);
+
+    if (trajectoryCache.has(key)) {
+      return trajectoryCache.get(key);
+    }
+    if (trajectoryInflight.has(key)) {
+      return trajectoryInflight.get(key);
+    }
+
+    const pending = fetchTrajectoryFromApi(key)
+      .then((payload) => {
+        if (payload) {
+          trajectoryCache.set(key, payload);
+        }
+        return payload;
+      })
+      .finally(() => {
+        trajectoryInflight.delete(key);
+      });
+    trajectoryInflight.set(key, pending);
+    return pending;
+  }
+
+  function clearLoadedTrajectoryView() {
+    state.xyzFrames = [];
+    state.currentTrajId = null;
+    state.currentCoords = [];
+    state.currentTimes = [];
+    state.currentModel = null;
+    shared.setDownloadButtonsEnabled(false);
+
+    if (dom.frameLabel) dom.frameLabel.textContent = 'Frame 0/0';
+    if (dom.frameSlider) {
+      dom.frameSlider.min = '0';
+      dom.frameSlider.max = '0';
+      dom.frameSlider.value = '0';
+    }
+    if (state.viewer) {
+      state.viewer.removeAllLabels();
+      state.viewer.removeAllShapes();
+      state.viewer.removeAllModels();
+      state.viewer.render();
+    }
+  }
+
+  async function loadTrajectory(trajId) {
     const viewer = root.viewer;
     const measurement = root.measurement;
     if (!viewer || !measurement) return;
 
+    const selectedTrajId = normalizeTrajId(trajId);
+    const requestSeq = ++loadRequestSeq;
     viewer.stopPlayback();
+    shared.setDownloadButtonsEnabled(false);
+    shared.setStatus(`Loading trajectory ${selectedTrajId} from API...`);
 
-    const rec = trajectories[trajId];
-    if (!rec) {
-      state.xyzFrames = [];
-      state.currentTrajId = null;
-      state.currentCoords = [];
-      state.currentTimes = [];
-      state.currentModel = null;
-      shared.setDownloadButtonsEnabled(false);
+    let rec = null;
+    try {
+      rec = await getTrajectoryRecord(selectedTrajId);
+    } catch (error) {
+      if (requestSeq !== loadRequestSeq) return;
+      const detail = error instanceof Error ? error.message : String(error);
       measurement.clearMeasurementState();
-      shared.setStatus(`Trajectory ${trajId} not found.`, true);
-      if (dom.frameLabel) dom.frameLabel.textContent = 'Frame 0/0';
-      if (dom.frameSlider) {
-        dom.frameSlider.min = '0';
-        dom.frameSlider.max = '0';
-        dom.frameSlider.value = '0';
-      }
-      if (state.viewer) {
-        state.viewer.removeAllLabels();
-        state.viewer.removeAllModels();
-        state.viewer.render();
-      }
+      clearLoadedTrajectoryView();
+      shared.setStatus(`Failed to load trajectory ${selectedTrajId} from API: ${detail}`, true);
+      return;
+    }
+
+    if (requestSeq !== loadRequestSeq) return;
+
+    if (!rec) {
+      measurement.clearMeasurementState();
+      clearLoadedTrajectoryView();
+      shared.setStatus(`Trajectory ${selectedTrajId} not found.`, true);
       return;
     }
 
@@ -146,24 +243,13 @@
     state.currentTimes = Array.isArray(rec.time) ? rec.time : [];
 
     state.xyzFrames = buildXyzFrames(rec);
-    state.currentTrajId = trajId;
+    state.currentTrajId = selectedTrajId;
     state.currentModel = null;
     measurement.clearMeasurementState();
 
     if (!state.xyzFrames.length) {
-      shared.setDownloadButtonsEnabled(false);
-      shared.setStatus(`Trajectory ${trajId} has no valid coordinate frames.`, true);
-      if (dom.frameLabel) dom.frameLabel.textContent = 'Frame 0/0';
-      if (dom.frameSlider) {
-        dom.frameSlider.min = '0';
-        dom.frameSlider.max = '0';
-        dom.frameSlider.value = '0';
-      }
-      if (state.viewer) {
-        state.viewer.removeAllLabels();
-        state.viewer.removeAllModels();
-        state.viewer.render();
-      }
+      clearLoadedTrajectoryView();
+      shared.setStatus(`Trajectory ${selectedTrajId} has no valid coordinate frames.`, true);
       return;
     }
 
@@ -174,7 +260,7 @@
     }
     shared.setDownloadButtonsEnabled(true);
 
-    shared.setStatus(`Loaded trajectory ${trajId} (${state.xyzFrames.length} frames).`);
+    shared.setStatus(`Loaded trajectory ${selectedTrajId} (${state.xyzFrames.length} frames).`);
     viewer.renderFrame(0, true);
   }
 

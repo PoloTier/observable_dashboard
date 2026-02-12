@@ -1,9 +1,10 @@
 # Observable Dashboard 功能总览
 
-`tools/observable_dashboard` 用于把轨线数据（`dump_all.pkl`）生成一个可交互的网页仪表盘，支持主页面可观测量分析和 3D 分子轨线查看。
+`tools/observable_dashboard` 当前以 **Python 后端计算模式** 运行：启动 API 服务加载 `dump_all.pkl`，前端只负责参数控制和图形展示（Index + Molecule3D 均已后端化）。
 
-- 主页面入口：`analysis_viz/index.html`
-- 3D 页面入口：`analysis_viz/molecule3d.html`
+- 主页面入口：`http://127.0.0.1:8000/`（默认）
+- 3D 页面入口：`http://127.0.0.1:8000/molecule3d.html`
+- API 基址：`/api`
 
 ---
 
@@ -12,21 +13,29 @@
 在仓库根目录运行（推荐）：
 
 ```bash
-python -m tools.observable_dashboard.cli \
+python -m tools.observable_dashboard.serve \
   -i run0/dump_all.pkl \
-  -o analysis_viz \
-  -c tools/viz_config.yaml
+  -c tools/viz_config.yaml \
+  --host 127.0.0.1 \
+  --port 8000
 ```
 
-生成结果：
+浏览器打开：
 
-- 主页面：`analysis_viz/index.html`
-- 3D 页面：`analysis_viz/molecule3d.html`
-- 静态资源：`analysis_viz/assets/`
+- `http://127.0.0.1:8000/`
 
-### 静态资源布局自动检查
+> 说明：`python -m tools.observable_dashboard.cli` 的静态导出模式已移除，仅保留 `serve` 模式。
 
-目录重组后可运行以下脚本进行自动化冒烟校验（资源路径、模板脚本顺序、导出产物一致性）：
+后端接口：
+
+- `GET /api/healthz`
+- `GET /api/bootstrap`
+- `POST /api/series`
+- `GET /api/molecule3d/trajectory/{traj_id}`
+
+### 布局与路由自动检查
+
+可运行以下脚本进行自动化冒烟校验（资源路径、模板脚本顺序、API-only 模板注入、关键路由可用性）：
 
 ```bash
 python tools/observable_dashboard/scripts/check_static_layout.py
@@ -53,7 +62,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - `Trajectory`：可选单条轨线或 `All`
 - `Show ensemble (median + q25/q75)`：显示集合统计
 - `Show all traces in All mode`：在 `All` 模式显示每条轨线
-- `Open 3D Molecule View`：打开 3D 页面
+- `3D Molecule View`：打开 `molecule3d.html`（新标签页）
 - `PKL: ...`：显示当前读取的 pkl 文件名（悬浮可见完整路径）
 
 ### 2) 面板（Panel）机制
@@ -88,15 +97,25 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - 在 `All` 模式下，轨线 hover 第一行显示当前轨线编号（即子文件夹/`traj_id`）
 - 统计线（median / q25 / q75 / mean）不显示轨线编号
 - `|c|^2` 在 `All` 模式下与 `eig` 一致：按分量分别显示轨线与集合统计
+- `All` 模式不需要手动刷新：若当前 panel 缺数据，会自动触发后端计算并显示进度
+- 快速连续改参数时，请求按顺序排队执行，完成后展示最终结果
 
 ---
 
 ## 3D 页面功能（molecule3d.html）
 
+页面数据加载机制：
+
+- 统一通过后端 API 拉取坐标：`GET /api/molecule3d/trajectory/{traj_id}`
+- 按 traj 整条加载，切换 traj 时仅请求目标 traj
+- 首次请求后命中后端 LRU 缓存会返回更快（响应字段 `cached=true`）
+
 ### 1) 基础浏览
 
 - `Trajectory` 下拉切换轨线
 - `Play / Pause` 播放或暂停
+- `Speed` 滑条调节播放速率（`1x ~ 10x`，步长 `0.5x`，默认 `1x = 10 FPS`）
+- `Stride` 滑条调节跳帧间隔（`x1 ~ x20`，步长 `1`，默认 `x1`）
 - `Frame` 滑条切帧
 - `Atom Indices` 显示/隐藏原子编号（0-based）
 
@@ -104,6 +123,9 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 - 新轨线加载时自动 fit（`zoomTo`）
 - 逐帧播放/拖动时不再自动缩放（避免不同帧间视角跳变）
+- 播放中拖动 `Speed` 会立即生效，不重置当前帧
+- 播放中拖动 `Stride` 会立即生效，不重置当前帧
+- `Speed` 控制整体前进速度，`Stride` 控制每次渲染跨过的帧数；增大 `Stride` 可降低渲染频率
 
 ### 3) XYZ 导出
 
@@ -147,13 +169,15 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 ---
 
-## CLI 参数与配置要点
+## 服务参数与配置要点
 
-### 1) 常用 CLI 参数
+### 1) 常用 serve 参数
 
 - `-i, --input`：输入 pkl（默认 `run0/dump_all.pkl`）
-- `-o, --out-dir`：输出目录（默认 `analysis_viz`）
 - `-c, --config`：配置文件（默认 `tools/viz_config.yaml`）
+- `--host / --port`：服务地址与端口
+- `--cache-size`：Index `/api/series` LRU 容量（默认 `512`）
+- `--mol3d-cache-size`：3D 轨线坐标 LRU 容量（默认 `64`）
 
 可选数据键覆盖：
 
@@ -179,9 +203,9 @@ python tools/observable_dashboard/scripts/check_static_layout.py
   - `default_panel_count`
   - `max_panels`
 
-### 3) 输出 meta 关键项
+### 3) bootstrap/meta 关键项
 
-输出 payload 的 `meta` 中包含（示例）：
+`GET /api/bootstrap` 的 `meta` 中包含（示例）：
 
 - `traj_ids`
 - `n_atoms`
@@ -197,9 +221,9 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 若 `dump_all.pkl` 很大，页面可能明显卡顿。主要原因：
 
-- 生成后的 HTML 内嵌了较大的 `payload-json`
-- 前端一次性 `JSON.parse` + 绘图
-- `All` 模式下开启所有轨线会显著增加负载
+- `All` 模式下批量查询轨线会增加请求和绘图开销
+- 同时打开过多面板会增加前端渲染负担
+- 首次几何量查询（尤其 All 模式）会触发后端计算与缓存填充
 
 建议：
 
@@ -208,19 +232,14 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 ### 2) 几何量计算时机
 
-- `bond / angle / dihedral`：前端按当前选择实时计算
-- `etot / eig / nac / state / |c|^2`：主要来自预处理后的时间序列
+- `index` 页面：所有 observable（包括 `bond/angle/dihedral`）都通过后端按需计算并缓存
+- `molecule3d` 页面：测量曲线与 3D 标注继续在前端基于已加载 `coords` 计算
 
-因此切换几何量或频繁改索引时，开销会更明显。
+因此 `index` 中首次切换新参数时会有后端计算延迟；重复查询通常更快。
 
 ### 3) 3D 依赖
 
-3D 页面依赖 CDN：
-
-- `3Dmol.js`
-- `Plotly`
-
-网络不可达时会影响 3D 或子图功能。
+3D 页面依赖本地静态 vendor 文件（仓库内置），不依赖外网 CDN。
 
 ---
 
@@ -230,8 +249,8 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 优先检查：
 
-1. CLI 是否成功执行并生成 `analysis_viz/index.html`
-2. `analysis_viz/assets/` 是否存在且包含 JS/CSS
+1. `python -m tools.observable_dashboard.serve ...` 是否正常启动且无报错
+2. 浏览器访问地址是否正确（默认 `http://127.0.0.1:8000/`）
 3. 浏览器控制台是否有脚本报错
 
 ### 2) 页面很卡
@@ -242,13 +261,13 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 ### 3) 3D 页面异常
 
-- 若状态栏提示 `3Dmol.js failed to load`：通常为网络问题
-- 若子图不显示：检查 Plotly 是否可访问
+- 若状态栏提示 `3Dmol.js failed to load`：通常是 `assets/vendor/3Dmol-min.js` 路径不可达
+- 若子图不显示：检查 `assets/vendor/plotly-2.35.2.min.js` 是否可访问
 - 若 `Select Bond` 无法选中：确认当前轨线有有效坐标帧，并在模型原子球上点击
 
 ### 4) 无可用轨线
 
-CLI 报错 `No valid trajectories found after filtering` 时：
+服务启动时报错 `No valid trajectories found after filtering` 时：
 
 - 检查输入 pkl 是否包含目标键
 - 尝试 `--keep-zero-frames` 再生成

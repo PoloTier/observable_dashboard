@@ -24,6 +24,8 @@
     viewer.enforceViewerBounds();
     state.viewer = $3Dmol.createViewer(dom.viewerEl, { backgroundColor: 'white' });
     viewer.resizeViewer();
+    viewer.setPlaybackRate(state.playbackRate);
+    viewer.setPlaybackStride(state.playbackStride);
     window.addEventListener('resize', viewer.resizeViewer);
 
     if (dom.trajSelect) {
@@ -44,6 +46,16 @@
       viewer.stopPlayback();
       const idx = Number.parseInt(dom.frameSlider.value, 10);
       if (Number.isFinite(idx)) viewer.renderFrame(idx);
+    });
+
+    dom.playbackRateSlider?.addEventListener('input', () => {
+      const playbackRate = Number.parseFloat(dom.playbackRateSlider.value);
+      viewer.setPlaybackRate(playbackRate);
+    });
+
+    dom.playbackStrideSlider?.addEventListener('input', () => {
+      const playbackStride = Number.parseInt(dom.playbackStrideSlider.value, 10);
+      viewer.setPlaybackStride(playbackStride);
     });
 
     dom.showAtomIndexCheckbox?.addEventListener('change', () => {
@@ -96,7 +108,7 @@
     });
 
     if (!trajIds.length) {
-      shared.setStatus('No trajectories found in payload.', true);
+      shared.setStatus('No trajectories found in dataset.', true);
       return;
     }
 

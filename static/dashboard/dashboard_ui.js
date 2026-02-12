@@ -2,10 +2,12 @@
   const root = window.ObservableDashboard || (window.ObservableDashboard = {});
   const shared = root.shared;
   const plot = root.plot;
-  if (!shared || !plot) return;
+  const dataLoader = root.dataLoader;
+  if (!shared || !plot || !dataLoader) return;
 
   const {
-    payload,
+    meta,
+    defaults,
     trajIds,
     state,
     MIN_PANELS,
@@ -157,7 +159,7 @@
   function initGlobalControls() {
     const sourcePklEl = document.getElementById('source-pkl');
     if (sourcePklEl) {
-      const sourcePkl = String(payload.meta?.source_pkl || '');
+      const sourcePkl = String(meta?.source_pkl || '');
       if (sourcePkl) {
         const filename = sourcePkl.split(/[\\/]/).pop() || sourcePkl;
         sourcePklEl.textContent = `PKL: ${filename}`;
@@ -226,8 +228,8 @@
     resetBtn.addEventListener('click', () => {
       state.panels = makeDefaultPanels();
       state.selectedTraj = 'all';
-      state.showEnsemble = !!payload.defaults?.plot?.show_ensemble_by_default;
-      state.showAllTraces = !!payload.defaults?.plot?.show_all_traces_in_all_mode;
+      state.showEnsemble = !!defaults?.plot?.show_ensemble_by_default;
+      state.showAllTraces = !!defaults?.plot?.show_all_traces_in_all_mode;
 
       trajSelect.value = state.selectedTraj;
       ensembleCb.checked = state.showEnsemble;

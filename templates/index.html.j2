@@ -24,7 +24,7 @@
           <label><input type="checkbox" id="global-traces" /> Show all traces in All mode</label>
         </div>
         <div class="control-group">
-          <a class="mol3d-link" href="molecule3d.html" target="_blank" rel="noopener noreferrer">Open 3D Molecule View</a>
+          <a class="mol3d-link" href="molecule3d.html" target="_blank" rel="noopener noreferrer">3D Molecule View</a>
         </div>
       </div>
     </div>
@@ -38,8 +38,9 @@
     </div>
   </div>
 
-  <script id="payload-json" type="application/json">{{ payload_json | safe }}</script>
+  <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
   <script src="assets/dashboard/dashboard_state.js"></script>
+  <script src="assets/dashboard/dashboard_data_loader.js"></script>
   <script src="assets/math/dashboard_math3d.js"></script>
   <script src="assets/dashboard/dashboard_plot.js"></script>
   <script src="assets/dashboard/dashboard_ui.js"></script>

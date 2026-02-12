@@ -165,6 +165,25 @@
     if (dom.playBtn) dom.playBtn.textContent = 'Play';
   }
 
+  function getPlaybackIntervalMs() {
+    const sourceFps = constants.BASE_FPS * state.playbackRate;
+    const stride = shared.clampPlaybackStride(state.playbackStride);
+    const renderFps = sourceFps / stride;
+    if (!Number.isFinite(renderFps) || renderFps <= 0) {
+      return Math.max(1, Math.round(1000 / constants.BASE_FPS));
+    }
+    return Math.max(1, Math.round(1000 / renderFps));
+  }
+
+  function startPlaybackTimer() {
+    if (!state.xyzFrames.length) return;
+    const stride = shared.clampPlaybackStride(state.playbackStride);
+    state.timer = setInterval(() => {
+      const next = (state.currentFrame + stride) % state.xyzFrames.length;
+      renderFrame(next);
+    }, getPlaybackIntervalMs());
+  }
+
   function renderFrame(frameIndex, refitView = false) {
     if (!state.viewer || !state.xyzFrames.length) return;
 
@@ -203,10 +222,29 @@
     stopPlayback();
     state.isPlaying = true;
     if (dom.playBtn) dom.playBtn.textContent = 'Pause';
-    state.timer = setInterval(() => {
-      const next = (state.currentFrame + 1) % state.xyzFrames.length;
-      renderFrame(next);
-    }, Math.round(1000 / constants.FPS));
+    startPlaybackTimer();
+  }
+
+  function setPlaybackRate(rate) {
+    state.playbackRate = shared.clampPlaybackRate(rate);
+    shared.syncPlaybackRateUi();
+    if (!state.isPlaying) return;
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    startPlaybackTimer();
+  }
+
+  function setPlaybackStride(stride) {
+    state.playbackStride = shared.clampPlaybackStride(stride);
+    shared.syncPlaybackStrideUi();
+    if (!state.isPlaying) return;
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    startPlaybackTimer();
   }
 
   root.viewer = {
@@ -221,7 +259,10 @@
     addAtomIndexLabels,
     bindAtomClickHandler,
     stopPlayback,
+    getPlaybackIntervalMs,
     renderFrame,
     startPlayback,
+    setPlaybackRate,
+    setPlaybackStride,
   };
 })();

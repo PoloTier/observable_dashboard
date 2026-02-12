@@ -21,35 +21,51 @@
     document.body.prepend(box);
   }
 
-  const payloadEl = document.getElementById('payload-json');
-  if (!payloadEl) {
-    showBootError('Dashboard failed to initialize: missing embedded payload-json script.');
+  function parseScriptJson(id, label, allowTemplateHint = false) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const raw = String(el.textContent || '');
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      let hint = `${label} is not valid JSON.`;
+      if (allowTemplateHint && (raw.includes('{{ bootstrap_json') || raw.includes('{%'))) {
+        hint = 'Detected an unrendered template. Open served dashboard page instead of templates/index.html.j2.';
+      }
+      console.error(`ObservableDashboard parse failed for ${id}:`, error);
+      showBootError(`Dashboard failed to initialize: ${hint}`);
+      return null;
+    }
+  }
+
+  const bootstrap = parseScriptJson('bootstrap-json', 'bootstrap-json', true);
+  if (!bootstrap) {
+    showBootError('Dashboard failed to initialize: missing bootstrap-json script.');
     return;
   }
 
-  let payload;
-  try {
-    payload = JSON.parse(payloadEl.textContent || '');
-  } catch (error) {
-    const raw = String(payloadEl.textContent || '');
-    const templateHint = raw.includes('{{ payload_json') || raw.includes('{%');
-    const hint = templateHint
-      ? 'Detected an unrendered template. Open generated analysis_viz/index.html instead of templates/index.html.j2.'
-      : 'Embedded payload-json content is not valid JSON.';
-    console.error('ObservableDashboard payload parse failed:', error);
-    showBootError(`Dashboard failed to initialize: ${hint}`);
+  const dataMode = String(bootstrap.data_mode || 'api');
+  if (dataMode !== 'api') {
+    showBootError(`Dashboard frontend expects API mode, but received data_mode='${dataMode}'.`);
     return;
   }
 
-  const meta = payload.meta;
-  const trajectories = payload.trajectories;
-  const trajIds = meta.traj_ids;
+  const meta = bootstrap.meta || {};
+  const defaults = bootstrap.defaults || {};
+  const trajIds = Array.isArray(bootstrap.traj_ids)
+    ? bootstrap.traj_ids.map((v) => String(v))
+    : (Array.isArray(meta?.traj_ids) ? meta.traj_ids.map((v) => String(v)) : []);
+  const apiBase = typeof bootstrap.api_base === 'string' && bootstrap.api_base.trim()
+    ? bootstrap.api_base
+    : '/api';
 
   const STORAGE_KEY = 'traj_dashboard_state_v1';
   const MIN_PANELS = 1;
-  const MAX_PANELS = Math.max(1, Number(payload.defaults?.ui?.max_panels || 8));
-  const DEFAULT_PANEL_COUNT = Math.min(MAX_PANELS, Math.max(MIN_PANELS, Number(payload.defaults?.ui?.default_panel_count || 4)));
-
+  const MAX_PANELS = Math.max(1, Number(defaults?.ui?.max_panels || 8));
+  const DEFAULT_PANEL_COUNT = Math.min(
+    MAX_PANELS,
+    Math.max(MIN_PANELS, Number(defaults?.ui?.default_panel_count || 4))
+  );
   const observableOptions = ['bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'state', '|c|^2'];
 
   function requiredIndexCount(observable) {
@@ -64,7 +80,7 @@
   }
 
   function defaultPanelForIndex(index) {
-    const defaultPanels = Array.isArray(payload.defaults?.panels) ? payload.defaults.panels : [];
+    const defaultPanels = Array.isArray(defaults?.panels) ? defaults.panels : [];
     if (index < defaultPanels.length && defaultPanels[index]) {
       return deepClone(defaultPanels[index]);
     }
@@ -79,7 +95,10 @@
     };
 
     const needed = requiredIndexCount(out.observable);
-    const raw = Array.isArray(panel?.indices) ? panel.indices : (Array.isArray(fallback.indices) ? fallback.indices : []);
+    const raw = Array.isArray(panel?.indices)
+      ? panel.indices
+      : (Array.isArray(fallback.indices) ? fallback.indices : []);
+
     const parsed = [];
     for (const v of raw) {
       const n = Number.parseInt(v, 10);
@@ -90,6 +109,7 @@
       while (parsed.length < needed) parsed.push(0);
       out.indices = parsed.slice(0, needed);
     }
+
     return out;
   }
 
@@ -103,20 +123,18 @@
 
   function setGlobalStatus(message, isError = false) {
     const el = document.getElementById('panel-status');
+    if (!el) return;
     el.textContent = message || '';
-    if (isError) {
-      el.classList.add('error');
-    } else {
-      el.classList.remove('error');
-    }
+    el.classList.toggle('error', !!isError);
   }
 
   function buildInitialState() {
     return {
       selectedTraj: 'all',
-      showEnsemble: !!payload.defaults?.plot?.show_ensemble_by_default,
-      showAllTraces: !!payload.defaults?.plot?.show_all_traces_in_all_mode,
-      panels: makeDefaultPanels()
+      showEnsemble: !!defaults?.plot?.show_ensemble_by_default,
+      showAllTraces: !!defaults?.plot?.show_all_traces_in_all_mode,
+      panels: makeDefaultPanels(),
+      dataMode: 'api',
     };
   }
 
@@ -132,13 +150,11 @@
 
     try {
       const parsed = JSON.parse(raw);
-
       if (typeof parsed.selectedTraj === 'string') {
         if (parsed.selectedTraj === 'all' || trajIds.includes(parsed.selectedTraj)) {
           baseState.selectedTraj = parsed.selectedTraj;
         }
       }
-
       if (typeof parsed.showEnsemble === 'boolean') baseState.showEnsemble = parsed.showEnsemble;
       if (typeof parsed.showAllTraces === 'boolean') baseState.showAllTraces = parsed.showAllTraces;
 
@@ -154,7 +170,7 @@
       try {
         localStorage.removeItem(STORAGE_KEY);
       } catch {
-        // ignore localStorage cleanup error
+        // ignore
       }
     }
 
@@ -167,7 +183,7 @@
         selectedTraj: state.selectedTraj,
         showEnsemble: state.showEnsemble,
         showAllTraces: state.showAllTraces,
-        panels: state.panels
+        panels: state.panels,
       }));
     } catch {
       // ignore storage failures
@@ -175,12 +191,15 @@
   }
 
   const state = loadStateFromStorage(buildInitialState());
+  state.dataMode = 'api';
 
   root.shared = {
-    payload,
+    bootstrap,
     meta,
-    trajectories,
+    defaults,
     trajIds,
+    dataMode: 'api',
+    apiBase,
     STORAGE_KEY,
     MIN_PANELS,
     MAX_PANELS,
