@@ -9,6 +9,8 @@
   const { meta, dom, constants, state } = shared;
   let loadRequestSeq = 0;
   const GIF_EXPORT_CANCELED_ERROR = '__gif_export_canceled__';
+  const VIDEO_EXPORT_CANCELED_ERROR = '__video_export_canceled__';
+  const VIDEO_EXPORT_UNAVAILABLE_MESSAGE = 'Video export is unavailable in this browser. Please use GIF export.';
 
   function setSourcePklInfo() {
     if (!dom.sourcePklEl) return;
@@ -132,9 +134,69 @@
     return `traj_${trajPart}_frames_${start}_${end}_stride_${stride}_fps_${fpsText}.gif`;
   }
 
+  function makeVideoFilename({ trajId, start, end, stride, fps }) {
+    const trajPart = shared.sanitizeFilenamePart(trajId);
+    const fpsText = Number.isFinite(fps) ? fps.toFixed(2).replace('.', 'p') : 'na';
+    return `traj_${trajPart}_frames_${start}_${end}_stride_${stride}_fps_${fpsText}.webm`;
+  }
+
+  function getViewerCanvas() {
+    const canvas = dom.viewerEl ? dom.viewerEl.querySelector('canvas') : null;
+    if (canvas instanceof HTMLCanvasElement) {
+      return canvas;
+    }
+    return null;
+  }
+
+  function pickSupportedWebmMimeType() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    const candidates = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+    ];
+    if (typeof MediaRecorder.isTypeSupported !== 'function') {
+      return candidates[candidates.length - 1];
+    }
+    for (const mimeType of candidates) {
+      try {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          return mimeType;
+        }
+      } catch (_) {
+        // keep trying candidates
+      }
+    }
+    return null;
+  }
+
+  function waitMs(ms) {
+    const delay = Math.max(0, Number(ms) || 0);
+    return new Promise((resolve) => {
+      setTimeout(resolve, delay);
+    });
+  }
+
+  function stopMediaStreamTracks(stream) {
+    if (!stream || typeof stream.getTracks !== 'function') return;
+    const tracks = stream.getTracks();
+    for (const track of tracks) {
+      try {
+        track.stop();
+      } catch (_) {
+        // best effort stop
+      }
+    }
+  }
+
+  function isExportCanceledMessage(message) {
+    return message === GIF_EXPORT_CANCELED_ERROR || message === VIDEO_EXPORT_CANCELED_ERROR;
+  }
+
   function cancelGifExport(showStatus = true) {
     if (!state.isGifExporting) return false;
     state.gifExportCancelRequested = true;
+
     if (state.gifExportTask && typeof state.gifExportTask.abort === 'function') {
       try {
         state.gifExportTask.abort();
@@ -142,8 +204,17 @@
         // best effort cancel
       }
     }
+
+    if (state.videoExportTask && typeof state.videoExportTask.abort === 'function') {
+      try {
+        state.videoExportTask.abort();
+      } catch (_) {
+        // best effort cancel
+      }
+    }
+
     if (showStatus) {
-      shared.setStatus('Canceling GIF export...');
+      shared.setStatus('Canceling export...');
     }
     return true;
   }
@@ -160,7 +231,7 @@
       return;
     }
     if (state.isGifExporting) {
-      shared.setStatus('GIF export is already running.');
+      shared.setStatus('Export is already running.');
       return;
     }
 
@@ -186,10 +257,12 @@
     });
 
     state.gifExportTask = gif;
+    state.videoExportTask = null;
+    state.activeExportKind = 'gif';
     state.gifExportCancelRequested = false;
     shared.setControlsGroupOpen('gifRange', true);
     shared.setGifExportUiState(true);
-    shared.setGifExportProgress(0, frameIndices.length);
+    shared.setGifExportProgress(0, frameIndices.length, 'GIF');
     shared.setStatus(
       `Exporting GIF ${start}-${end} (0-based), stride=${stride}, fps=${fps.toFixed(2)}, frames=${frameIndices.length}...`
     );
@@ -207,7 +280,7 @@
         const image = await loadImageFromDataUri(dataUri);
         gif.addFrame(image, { delay, copy: true });
         added += 1;
-        shared.setGifExportProgress(added, frameIndices.length);
+        shared.setGifExportProgress(added, frameIndices.length, 'GIF');
       }
 
       if (state.gifExportCancelRequested) {
@@ -217,7 +290,7 @@
       const blob = await new Promise((resolve, reject) => {
         gif.on('progress', (progress) => {
           const done = Math.max(0, Math.min(frameIndices.length, Math.round(progress * frameIndices.length)));
-          shared.setGifExportProgress(done, frameIndices.length);
+          shared.setGifExportProgress(done, frameIndices.length, 'GIF');
         });
         gif.on('finished', (result) => resolve(result));
         gif.on('abort', () => reject(new Error(GIF_EXPORT_CANCELED_ERROR)));
@@ -236,18 +309,200 @@
         fps,
       });
       downloadBlobFile(blob, filename);
-      shared.setGifExportProgress(frameIndices.length, frameIndices.length);
+      shared.setGifExportProgress(frameIndices.length, frameIndices.length, 'GIF');
       shared.setStatus(`Saved GIF to ${filename}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message === GIF_EXPORT_CANCELED_ERROR || state.gifExportCancelRequested) {
+      if (isExportCanceledMessage(message) || state.gifExportCancelRequested) {
         shared.setStatus('GIF export canceled.');
       } else {
         shared.setStatus(`Failed to export GIF: ${message}`, true);
       }
     } finally {
       state.gifExportTask = null;
+      state.videoExportTask = null;
       state.gifExportCancelRequested = false;
+      state.activeExportKind = '';
+      shared.setGifExportUiState(false);
+    }
+  }
+
+  async function exportTrajectoryVideo() {
+    const viewer = root.viewer;
+    if (!viewer || typeof viewer.renderFrame !== 'function') return;
+    if (!state.currentTrajId || !state.xyzFrames.length) {
+      shared.setStatus('No trajectory available to export video.', true);
+      return;
+    }
+    if (state.isGifExporting) {
+      shared.setStatus('Export is already running.');
+      return;
+    }
+
+    if (typeof MediaRecorder === 'undefined') {
+      shared.setStatus(VIDEO_EXPORT_UNAVAILABLE_MESSAGE, true);
+      return;
+    }
+
+    const mimeType = pickSupportedWebmMimeType();
+    if (!mimeType) {
+      shared.setStatus(VIDEO_EXPORT_UNAVAILABLE_MESSAGE, true);
+      return;
+    }
+
+    const canvas = getViewerCanvas();
+    if (!canvas || typeof canvas.captureStream !== 'function') {
+      shared.setStatus(VIDEO_EXPORT_UNAVAILABLE_MESSAGE, true);
+      return;
+    }
+
+    viewer.stopPlayback();
+    const { start, end } = syncGifExportRangeFromInputs(true);
+    const stride = shared.clampPlaybackStride(state.playbackStride);
+    const fps = shared.effectivePlaybackFps();
+    const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 10;
+    const frameIntervalMs = 1000 / safeFps;
+    const frameIndices = [];
+    for (let idx = start; idx <= end; idx += stride) {
+      frameIndices.push(idx);
+    }
+    if (!frameIndices.length) {
+      shared.setStatus('No frames selected for video export.', true);
+      return;
+    }
+
+    let stream = null;
+    let recorder = null;
+    let stopPromise = null;
+    let recorderStarted = false;
+
+    try {
+      stream = canvas.captureStream(safeFps);
+      const chunks = [];
+
+      recorder = new MediaRecorder(stream, { mimeType });
+      stopPromise = new Promise((resolve, reject) => {
+        recorder.ondataavailable = (event) => {
+          if (event && event.data && event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+        recorder.onerror = (event) => {
+          const detail = event?.error?.message || event?.name || 'unknown recorder error';
+          reject(new Error(`Video recorder error: ${detail}`));
+        };
+        recorder.onstop = () => {
+          if (state.gifExportCancelRequested) {
+            reject(new Error(VIDEO_EXPORT_CANCELED_ERROR));
+            return;
+          }
+          resolve(new Blob(chunks, { type: mimeType || 'video/webm' }));
+        };
+      });
+
+      state.gifExportTask = null;
+      state.videoExportTask = {
+        recorder,
+        stream,
+        abort() {
+          try {
+            if (recorder && recorder.state !== 'inactive') {
+              recorder.stop();
+            }
+          } catch (_) {
+            // best effort stop
+          }
+          stopMediaStreamTracks(stream);
+        },
+      };
+      state.activeExportKind = 'video';
+      state.gifExportCancelRequested = false;
+
+      shared.setControlsGroupOpen('gifRange', true);
+      shared.setGifExportUiState(true);
+      shared.setGifExportProgress(0, frameIndices.length, 'VIDEO');
+      shared.setStatus(
+        `Exporting VIDEO ${start}-${end} (0-based), stride=${stride}, fps=${safeFps.toFixed(2)}, frames=${frameIndices.length}...`
+      );
+
+      recorder.start(200);
+      recorderStarted = true;
+      const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+
+      let rendered = 0;
+      for (const frameIndex of frameIndices) {
+        if (state.gifExportCancelRequested) {
+          throw new Error(VIDEO_EXPORT_CANCELED_ERROR);
+        }
+        viewer.renderFrame(frameIndex);
+        await sleepToNextFrame();
+
+        rendered += 1;
+        shared.setGifExportProgress(rendered, frameIndices.length, 'VIDEO');
+
+        const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+        const elapsed = now - startedAt;
+        const targetElapsed = rendered * frameIntervalMs;
+        if (targetElapsed > elapsed) {
+          await waitMs(targetElapsed - elapsed);
+        }
+      }
+
+      if (state.gifExportCancelRequested) {
+        throw new Error(VIDEO_EXPORT_CANCELED_ERROR);
+      }
+
+      if (recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+
+      const blob = await stopPromise;
+
+      if (state.gifExportCancelRequested) {
+        throw new Error(VIDEO_EXPORT_CANCELED_ERROR);
+      }
+
+      const filename = makeVideoFilename({
+        trajId: state.currentTrajId,
+        start,
+        end,
+        stride,
+        fps: safeFps,
+      });
+      downloadBlobFile(blob, filename);
+      shared.setGifExportProgress(frameIndices.length, frameIndices.length, 'VIDEO');
+      shared.setStatus(`Saved VIDEO to ${filename}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isExportCanceledMessage(message) || state.gifExportCancelRequested) {
+        shared.setStatus('Video export canceled.');
+      } else {
+        shared.setStatus(`Failed to export video: ${message}`, true);
+      }
+    } finally {
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+        } catch (_) {
+          // best effort stop
+        }
+      }
+      if (stopPromise && recorderStarted) {
+        try {
+          await stopPromise;
+        } catch (_) {
+          // settled via cancel/error
+        }
+      }
+      stopMediaStreamTracks(stream);
+      state.gifExportTask = null;
+      state.videoExportTask = null;
+      state.gifExportCancelRequested = false;
+      state.activeExportKind = '';
       shared.setGifExportUiState(false);
     }
   }
@@ -345,8 +600,8 @@
     } catch (error) {
       if (requestSeq !== loadRequestSeq) return;
       const detail = error instanceof Error ? error.message : String(error);
-      measurement.clearMeasurementState();
       clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
       shared.setStatus(`Failed to load trajectory ${selectedTrajId} from API: ${detail}`, true);
       return;
     }
@@ -354,8 +609,8 @@
     if (requestSeq !== loadRequestSeq) return;
 
     if (!rec) {
-      measurement.clearMeasurementState();
       clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
       shared.setStatus(`Trajectory ${selectedTrajId} not found.`, true);
       return;
     }
@@ -366,11 +621,13 @@
     state.xyzFrames = transformers.buildXyzFrames(rec);
     state.currentTrajId = selectedTrajId;
     state.currentModel = null;
-    measurement.clearMeasurementState();
+    state.currentFrame = 0;
+    measurement.syncMeasurementStateForTrajectoryChange();
     vectorOps.applyTrajectoryNacMeta(rec);
 
     if (!state.xyzFrames.length) {
       clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
       shared.setStatus(`Trajectory ${selectedTrajId} has no valid coordinate frames.`, true);
       return;
     }
@@ -397,6 +654,7 @@
     saveTrajectoryXyz,
     syncGifExportRangeFromInputs,
     exportTrajectoryGif,
+    exportTrajectoryVideo,
     cancelGifExport,
     loadTrajectory,
     setNacVectorsVisible,

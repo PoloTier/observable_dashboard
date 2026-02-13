@@ -13,6 +13,7 @@
     buildXyzFrames: (...args) => transformers.buildXyzFrames(...args),
     syncGifExportRangeFromInputs: (...args) => app.syncGifExportRangeFromInputs(...args),
     exportTrajectoryGif: (...args) => app.exportTrajectoryGif(...args),
+    exportTrajectoryVideo: (...args) => app.exportTrajectoryVideo(...args),
     cancelGifExport: (...args) => app.cancelGifExport(...args),
     loadTrajectory: (...args) => app.loadTrajectory(...args),
     setNacVectorsVisible: (...args) => app.setNacVectorsVisible(...args),

@@ -104,6 +104,7 @@
     gifExportStartInput: document.getElementById('gif-export-start'),
     gifExportEndInput: document.getElementById('gif-export-end'),
     exportGifBtn: document.getElementById('export-gif-btn'),
+    exportVideoBtn: document.getElementById('export-video-btn'),
     cancelGifExportBtn: document.getElementById('cancel-gif-export-btn'),
     gifExportProgressEl: document.getElementById('gif-export-progress'),
     showNacVectorsCheckbox: document.getElementById('show-nac-vectors'),
@@ -151,6 +152,8 @@
     isGifExporting: false,
     gifExportCancelRequested: false,
     gifExportTask: null,
+    videoExportTask: null,
+    activeExportKind: '',
     gifExportRangeStart: 0,
     gifExportRangeEnd: 0,
     currentTrajId: null,
@@ -511,12 +514,22 @@
 
   function syncGifExportControlsUi() {
     const hasFrames = !!state.currentTrajId && Array.isArray(state.xyzFrames) && state.xyzFrames.length > 0;
+    const exporting = !!state.isGifExporting;
     if (dom.exportGifBtn) {
-      dom.exportGifBtn.disabled = state.isGifExporting || !hasFrames;
+      dom.exportGifBtn.disabled = exporting || !hasFrames;
+    }
+    if (dom.exportVideoBtn) {
+      dom.exportVideoBtn.disabled = exporting || !hasFrames;
     }
     if (dom.cancelGifExportBtn) {
-      dom.cancelGifExportBtn.hidden = !state.isGifExporting;
-      dom.cancelGifExportBtn.disabled = !state.isGifExporting;
+      dom.cancelGifExportBtn.hidden = !exporting;
+      dom.cancelGifExportBtn.disabled = !exporting;
+      if (exporting) {
+        const kind = state.activeExportKind === 'video' ? 'Video' : 'GIF';
+        dom.cancelGifExportBtn.textContent = 'Cancel ' + kind;
+      } else {
+        dom.cancelGifExportBtn.textContent = 'Cancel Export';
+      }
     }
     syncGifExportRangeUi();
   }
@@ -526,7 +539,7 @@
     syncGifExportControlsUi();
   }
 
-  function setGifExportProgress(current, total) {
+  function setGifExportProgress(current, total, label = 'GIF') {
     if (!dom.gifExportProgressEl) return;
     const nTotal = Number.parseInt(String(total), 10) || 0;
     if (nTotal <= 0) {
@@ -535,7 +548,8 @@
     }
     const nCurrent = Math.max(0, Math.min(nTotal, Number.parseInt(String(current), 10) || 0));
     const percent = Math.round((nCurrent / nTotal) * 100);
-    dom.gifExportProgressEl.textContent = `GIF ${nCurrent}/${nTotal} (${percent}%)`;
+    const prefix = String(label || 'GIF').trim().toUpperCase() || 'GIF';
+    dom.gifExportProgressEl.textContent = prefix + ' ' + nCurrent + '/' + nTotal + ' (' + percent + '%)';
   }
 
   function getControlsGroupElement(groupKey) {

@@ -175,6 +175,7 @@ def check_molecule3d_gif_controls() -> None:
     _assert('id="gif-export-start"' in mol, "molecule3d template missing gif-export-start")
     _assert('id="gif-export-end"' in mol, "molecule3d template missing gif-export-end")
     _assert('id="export-gif-btn"' in mol, "molecule3d template missing export-gif-btn")
+    _assert('id="export-video-btn"' in mol, "molecule3d template missing export-video-btn")
     _assert('id="cancel-gif-export-btn"' in mol, "molecule3d template missing cancel-gif-export-btn")
     _assert('id="gif-export-progress"' in mol, "molecule3d template missing gif-export-progress")
 

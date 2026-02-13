@@ -510,6 +510,22 @@
     refreshControlsOnly();
   }
 
+  function syncMeasurementStateForTrajectoryChange() {
+    state.isMeasureSelectMode = false;
+    state.pendingAtomIndices = [];
+
+    for (const type of constants.MEASURE_TYPES) {
+      const tracks = state.measurementTracks[type];
+      if (!Array.isArray(tracks) || !tracks.length) continue;
+      for (const track of tracks) {
+        const atoms = Array.isArray(track?.atoms) ? track.atoms : [];
+        track.series = computeMeasurementSeries(type, atoms);
+      }
+    }
+
+    refreshViews({ viewer: false });
+  }
+
   // --- Atom picking workflow --------------------------------------------------
   function handleAtomClick(atom) {
     if (!state.isMeasureSelectMode) return;
@@ -606,6 +622,7 @@
     removeTrack,
     removeHighlightedTracks,
     clearMeasurementState,
+    syncMeasurementStateForTrajectoryChange,
     handleAtomClick,
   };
 })();

@@ -99,6 +99,7 @@
     bind(dom.gifExportStartInput, 'change', () => io.syncGifExportRangeFromInputs(true));
     bind(dom.gifExportEndInput, 'change', () => io.syncGifExportRangeFromInputs(true));
     bind(dom.exportGifBtn, 'click', () => io.exportTrajectoryGif());
+    bind(dom.exportVideoBtn, 'click', () => io.exportTrajectoryVideo());
     bind(dom.cancelGifExportBtn, 'click', () => io.cancelGifExport());
   }
 
