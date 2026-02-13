@@ -21,6 +21,14 @@
     document.body.prepend(box);
   }
 
+  const constants = root.constants;
+  const utils = root.utils;
+  const createMol3dStore = root.createMol3dStore;
+  if (!constants || !utils || typeof createMol3dStore !== 'function') {
+    showBootError('3D page failed to initialize: missing base mol3d modules (constants/utils/store).');
+    return;
+  }
+
   function parseScriptJson(id, label, allowTemplateHint = false) {
     const el = document.getElementById(id);
     if (!el) return null;
@@ -62,12 +70,13 @@
     ? bootstrap.api_base
     : '/api';
 
-  // Cached DOM references used across mol3d modules.
   const dom = {
     controlsPrimary: document.getElementById('controls-primary'),
     controlsGroups: document.getElementById('controls-groups'),
     measureControlsGroup: document.getElementById('measure-controls-group'),
     playbackControlsGroup: document.getElementById('playback-controls-group'),
+    renderControlsGroup: document.getElementById('render-controls-group'),
+    nacControlsGroup: document.getElementById('nac-controls-group'),
     gifRangeControlsGroup: document.getElementById('gif-range-controls-group'),
     trajSelect: document.getElementById('traj-select'),
     playBtn: document.getElementById('play-btn'),
@@ -78,6 +87,10 @@
     frameSlider: document.getElementById('frame-slider'),
     frameLabel: document.getElementById('frame-label'),
     showAtomIndexCheckbox: document.getElementById('show-atom-index'),
+    atomSizeSlider: document.getElementById('atom-size-slider'),
+    atomSizeLabel: document.getElementById('atom-size-label'),
+    bondRadiusSlider: document.getElementById('bond-radius-slider'),
+    bondRadiusLabel: document.getElementById('bond-radius-label'),
     measureTypeBondBtn: document.getElementById('measure-type-bond-btn'),
     measureTypeAngleBtn: document.getElementById('measure-type-angle-btn'),
     measureTypeDihedralBtn: document.getElementById('measure-type-dihedral-btn'),
@@ -93,6 +106,24 @@
     exportGifBtn: document.getElementById('export-gif-btn'),
     cancelGifExportBtn: document.getElementById('cancel-gif-export-btn'),
     gifExportProgressEl: document.getElementById('gif-export-progress'),
+    showNacVectorsCheckbox: document.getElementById('show-nac-vectors'),
+    nacStateISelect: document.getElementById('nac-state-i'),
+    nacStateJSelect: document.getElementById('nac-state-j'),
+    nacScaleSlider: document.getElementById('nac-scale-slider'),
+    nacScaleLabel: document.getElementById('nac-scale-label'),
+    nacRangeLabel: document.getElementById('nac-range-label'),
+    showDeVectorsCheckbox: document.getElementById('show-de-vectors'),
+    dePairRowsContainer: document.getElementById('de-pair-rows'),
+    addDePairBtn: document.getElementById('add-de-pair-btn'),
+    dePairRowTemplate: document.getElementById('de-pair-row-template'),
+    deScaleSlider: document.getElementById('de-scale-slider'),
+    deScaleLabel: document.getElementById('de-scale-label'),
+    deRangeLabel: document.getElementById('de-range-label'),
+    deVisualHintEl: document.getElementById('de-visual-hint'),
+    showDeNacVectorsCheckbox: document.getElementById('show-de-nac-vectors'),
+    deNacScaleSlider: document.getElementById('de-nac-scale-slider'),
+    deNacScaleLabel: document.getElementById('de-nac-scale-label'),
+    deNacRangeLabel: document.getElementById('de-nac-range-label'),
     sourcePklEl: document.getElementById('source-pkl'),
     statusEl: document.getElementById('status'),
     bondColorSettingsBtn: document.getElementById('bond-color-settings-btn'),
@@ -101,94 +132,6 @@
     bondColorSettingsCloseBtn: document.getElementById('bond-color-settings-close-btn'),
     bondColorSettingsListEl: document.getElementById('bond-color-settings-list'),
     viewerEl: document.getElementById('viewer'),
-  };
-
-  // Centralized constants keep measurement/playback/gif behavior consistent.
-  const constants = {
-    BASE_FPS: 10,
-    PLAYBACK_RATE_MIN: 1,
-    PLAYBACK_RATE_MAX: 10,
-    PLAYBACK_RATE_STEP: 0.5,
-    PLAYBACK_RATE_DEFAULT: 1,
-    PLAYBACK_STRIDE_MIN: 1,
-    PLAYBACK_STRIDE_MAX: 20,
-    PLAYBACK_STRIDE_STEP: 1,
-    PLAYBACK_STRIDE_DEFAULT: 1,
-    GIF_EXPORT_DEFAULT_QUALITY: 10,
-    GIF_EXPORT_DEFAULT_WORKERS: 2,
-    GIF_EXPORT_MIN_FPS: 1,
-    GIF_EXPORT_MAX_FPS: 60,
-    GIF_EXPORT_WORKER_URL: 'assets/vendor/gif.worker.js',
-    MEASURE_PERF_HINT_THRESHOLD: 20,
-    PLOT_EXPORT_DPI: 300,
-    CSS_BASE_DPI: 96,
-    PLOT_EXPORT_SCALE: 300 / 96,
-    BOND_COLOR_PALETTE: [
-      '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
-      '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
-    ],
-    MEASURE_TYPES: ['bond', 'angle', 'dihedral'],
-    MEASURE_META: {
-      bond: {
-        displayName: 'Bond',
-        pluralName: 'Bonds',
-        lowerName: 'bond',
-        requiredAtoms: 2,
-        yAxisTitle: 'Distance (Å)',
-        valueUnit: 'Å',
-        hoverValueLabel: 'd',
-        hoverDecimals: 4,
-        decimals: 3,
-        plotEmptyText: 'Select Bond to show distance vs time.',
-        plotNoDataText: 'No valid bond-distance data for selected bonds.',
-        selectHintText: 'Select Bond mode: click atom A then atom B.',
-        needsUnwrap: false,
-      },
-      angle: {
-        displayName: 'Angle',
-        pluralName: 'Angles',
-        lowerName: 'angle',
-        requiredAtoms: 3,
-        yAxisTitle: 'Angle (deg)',
-        valueUnit: 'deg',
-        hoverValueLabel: 'θ',
-        hoverDecimals: 4,
-        decimals: 2,
-        plotEmptyText: 'Select Angle to show angle vs time.',
-        plotNoDataText: 'No valid angle data for selected angles.',
-        selectHintText: 'Select Angle mode: click atom A, atom B, then atom C.',
-        needsUnwrap: false,
-      },
-      dihedral: {
-        displayName: 'Dihedral',
-        pluralName: 'Dihedrals',
-        lowerName: 'dihedral',
-        requiredAtoms: 4,
-        yAxisTitle: 'Dihedral (deg, unwrapped)',
-        valueUnit: 'deg',
-        hoverValueLabel: 'φ',
-        hoverDecimals: 4,
-        decimals: 2,
-        plotEmptyText: 'Select Dihedral to show dihedral vs time.',
-        plotNoDataText: 'No valid dihedral data for selected dihedrals.',
-        selectHintText: 'Select Dihedral mode: click atoms A, B, C, then D.',
-        needsUnwrap: true,
-      },
-    },
-    PERIODIC_SYMBOLS: [
-      '', 'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
-      'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar', 'K', 'Ca',
-      'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
-      'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr', 'Rb', 'Sr', 'Y', 'Zr',
-      'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn',
-      'Sb', 'Te', 'I', 'Xe', 'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd',
-      'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb',
-      'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg',
-      'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn', 'Fr', 'Ra', 'Ac', 'Th',
-      'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm',
-      'Md', 'No', 'Lr', 'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds',
-      'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og'
-    ],
   };
 
   const measureTypeButtons = {
@@ -203,6 +146,8 @@
     isPlaying: false,
     playbackRate: constants.PLAYBACK_RATE_DEFAULT,
     playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
+    atomSizeScale: constants.RENDER_SCALE_DEFAULT,
+    bondRadiusScale: constants.RENDER_SCALE_DEFAULT,
     isGifExporting: false,
     gifExportCancelRequested: false,
     gifExportTask: null,
@@ -214,6 +159,50 @@
     currentCoords: [],
     currentTimes: [],
     currentModel: null,
+    nacAvailable: false,
+    nacStateCount: 0,
+    nacComponentCount: 0,
+    deAvailable: false,
+    deStateCount: 0,
+    deComponentCount: 0,
+    deGlobalNormScope: '',
+    deGlobalNormP5: null,
+    deGlobalNormP90: null,
+    deGlobalNormP95: null,
+    deGlobalNormCount: 0,
+    deNacAvailable: false,
+    deNacStateCount: 0,
+    deNacComponentCount: 0,
+    showNacVectors: false,
+    showDeVectors: false,
+    showDeNacVectors: false,
+    nacStateI: 0,
+    nacStateJ: 1,
+    deStateI: 0,
+    deStateJ: 0,
+    deRows: [],
+    deNextRowId: 1,
+    nacVectors: [],
+    nacTimes: [],
+    nacCurrentPairKey: null,
+    nacUserScale: constants.NAC_SCALE_DEFAULT,
+    nacAutoBaseScale: 1,
+    nacMagnitudeRange: null,
+    isNacLoading: false,
+    deVectors: [],
+    deTimes: [],
+    deCurrentPairKey: null,
+    deUserScale: constants.NAC_SCALE_DEFAULT,
+    deAutoBaseScale: 1,
+    deMagnitudeRange: null,
+    isDeLoading: false,
+    deNacVectors: [],
+    deNacTimes: [],
+    deNacCurrentPairKey: null,
+    deNacUserScale: constants.NAC_SCALE_DEFAULT,
+    deNacAutoBaseScale: 1,
+    deNacMagnitudeRange: null,
+    isDeNacLoading: false,
     activeMeasureType: 'bond',
     isMeasureSelectMode: false,
     pendingAtomIndices: [],
@@ -231,7 +220,43 @@
     isMeasurementColorSettingsOpen: false,
   };
 
-  // --- Generic state + UI helpers --------------------------------------------
+  const store = createMol3dStore(state);
+  const dispatch = (action) => store.dispatch(action);
+  const subscribe = (listener, keys) => store.subscribe(listener, keys);
+
+  const actions = Object.freeze({
+    setPlaybackRate(rate) {
+      return { type: 'SET_PLAYBACK_RATE', payload: { rate } };
+    },
+    setPlaybackStride(stride) {
+      return { type: 'SET_PLAYBACK_STRIDE', payload: { stride } };
+    },
+    setAtomSizeScale(scale) {
+      return { type: 'SET_ATOM_SIZE_SCALE', payload: { scale } };
+    },
+    setBondRadiusScale(scale) {
+      return { type: 'SET_BOND_RADIUS_SCALE', payload: { scale } };
+    },
+    setNacUserScale(scale) {
+      return { type: 'SET_NAC_USER_SCALE', payload: { scale } };
+    },
+    setDeUserScale(scale) {
+      return { type: 'SET_DE_USER_SCALE', payload: { scale } };
+    },
+    setDeNacUserScale(scale) {
+      return { type: 'SET_DE_NAC_USER_SCALE', payload: { scale } };
+    },
+    setGifExporting(exporting) {
+      return { type: 'SET_GIF_EXPORTING', payload: { exporting } };
+    },
+    setGifExportRange(start, end, nFrames) {
+      return {
+        type: 'SET_GIF_EXPORT_RANGE',
+        payload: { start, end, nFrames },
+      };
+    },
+  });
+
   function setStatus(message, isError = false) {
     if (!dom.statusEl) return;
     dom.statusEl.textContent = message || '';
@@ -239,13 +264,11 @@
   }
 
   function clampNumber(value, min, max) {
-    return Math.max(min, Math.min(max, value));
+    return utils.clampNumber(value, min, max);
   }
 
   function parseFiniteNumber(raw) {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return null;
-    return parsed;
+    return utils.parseFiniteNumber(raw);
   }
 
   function clampPlaybackRate(raw) {
@@ -266,15 +289,15 @@
   }
 
   function syncPlaybackRateUi() {
-    state.playbackRate = clampPlaybackRate(state.playbackRate);
+    const playbackRate = clampPlaybackRate(state.playbackRate);
     if (dom.playbackRateSlider) {
       dom.playbackRateSlider.min = String(constants.PLAYBACK_RATE_MIN);
       dom.playbackRateSlider.max = String(constants.PLAYBACK_RATE_MAX);
       dom.playbackRateSlider.step = String(constants.PLAYBACK_RATE_STEP);
-      dom.playbackRateSlider.value = String(state.playbackRate);
+      dom.playbackRateSlider.value = String(playbackRate);
     }
     if (dom.playbackRateLabel) {
-      dom.playbackRateLabel.textContent = formatPlaybackRate(state.playbackRate);
+      dom.playbackRateLabel.textContent = formatPlaybackRate(playbackRate);
     }
   }
 
@@ -296,19 +319,143 @@
   }
 
   function syncPlaybackStrideUi() {
-    state.playbackStride = clampPlaybackStride(state.playbackStride);
+    const playbackStride = clampPlaybackStride(state.playbackStride);
     if (dom.playbackStrideSlider) {
       dom.playbackStrideSlider.min = String(constants.PLAYBACK_STRIDE_MIN);
       dom.playbackStrideSlider.max = String(constants.PLAYBACK_STRIDE_MAX);
       dom.playbackStrideSlider.step = String(constants.PLAYBACK_STRIDE_STEP);
-      dom.playbackStrideSlider.value = String(state.playbackStride);
+      dom.playbackStrideSlider.value = String(playbackStride);
     }
     if (dom.playbackStrideLabel) {
-      dom.playbackStrideLabel.textContent = formatPlaybackStride(state.playbackStride);
+      dom.playbackStrideLabel.textContent = formatPlaybackStride(playbackStride);
     }
   }
 
-  // --- GIF range + progress helpers ------------------------------------------
+  function clampAtomSizeScale(raw) {
+    const fallback = constants.RENDER_SCALE_DEFAULT;
+    const minScale = constants.RENDER_SCALE_MIN;
+    const maxScale = constants.RENDER_SCALE_MAX;
+    const step = constants.RENDER_SCALE_STEP;
+    const parsed = parseFiniteNumber(raw);
+    if (parsed === null) return fallback;
+    const clamped = clampNumber(parsed, minScale, maxScale);
+    const normalizedStep = Number.isFinite(step) && step > 0 ? step : 0;
+    if (normalizedStep <= 0) return Number(clamped.toFixed(4));
+    const snapped = minScale + Math.round((clamped - minScale) / normalizedStep) * normalizedStep;
+    return Number(clampNumber(snapped, minScale, maxScale).toFixed(4));
+  }
+
+  function formatAtomSizeScale(scale) {
+    return `${clampAtomSizeScale(scale).toFixed(1)}x`;
+  }
+
+  function syncAtomSizeScaleUi() {
+    const atomSizeScale = clampAtomSizeScale(state.atomSizeScale);
+    if (dom.atomSizeSlider) {
+      dom.atomSizeSlider.min = String(constants.RENDER_SCALE_MIN);
+      dom.atomSizeSlider.max = String(constants.RENDER_SCALE_MAX);
+      dom.atomSizeSlider.step = String(constants.RENDER_SCALE_STEP);
+      dom.atomSizeSlider.value = String(atomSizeScale);
+    }
+    if (dom.atomSizeLabel) {
+      dom.atomSizeLabel.textContent = formatAtomSizeScale(atomSizeScale);
+    }
+  }
+
+  function clampBondRadiusScale(raw) {
+    return clampAtomSizeScale(raw);
+  }
+
+  function formatBondRadiusScale(scale) {
+    return `${clampBondRadiusScale(scale).toFixed(1)}x`;
+  }
+
+  function syncBondRadiusScaleUi() {
+    const bondRadiusScale = clampBondRadiusScale(state.bondRadiusScale);
+    if (dom.bondRadiusSlider) {
+      dom.bondRadiusSlider.min = String(constants.RENDER_SCALE_MIN);
+      dom.bondRadiusSlider.max = String(constants.RENDER_SCALE_MAX);
+      dom.bondRadiusSlider.step = String(constants.RENDER_SCALE_STEP);
+      dom.bondRadiusSlider.value = String(bondRadiusScale);
+    }
+    if (dom.bondRadiusLabel) {
+      dom.bondRadiusLabel.textContent = formatBondRadiusScale(bondRadiusScale);
+    }
+  }
+
+  function clampNacScale(raw) {
+    const fallback = constants.NAC_SCALE_DEFAULT;
+    const minScale = constants.NAC_SCALE_MIN;
+    const maxScale = constants.NAC_SCALE_MAX;
+    const step = constants.NAC_SCALE_STEP;
+    const parsed = parseFiniteNumber(raw);
+    if (parsed === null) return fallback;
+    const clamped = clampNumber(parsed, minScale, maxScale);
+    const normalizedStep = Number.isFinite(step) && step > 0 ? step : 0;
+    if (normalizedStep <= 0) return Number(clamped.toFixed(4));
+    const snapped = minScale + Math.round((clamped - minScale) / normalizedStep) * normalizedStep;
+    return Number(clampNumber(snapped, minScale, maxScale).toFixed(4));
+  }
+
+  function formatNacScale(scale) {
+    return `${clampNacScale(scale).toFixed(1)}x`;
+  }
+
+  function syncNacScaleUi() {
+    const nacScale = clampNacScale(state.nacUserScale);
+    if (dom.nacScaleSlider) {
+      dom.nacScaleSlider.min = String(constants.NAC_SCALE_MIN);
+      dom.nacScaleSlider.max = String(constants.NAC_SCALE_MAX);
+      dom.nacScaleSlider.step = String(constants.NAC_SCALE_STEP);
+      dom.nacScaleSlider.value = String(nacScale);
+    }
+    if (dom.nacScaleLabel) {
+      dom.nacScaleLabel.textContent = formatNacScale(nacScale);
+    }
+  }
+
+  function clampDeScale(raw) {
+    return clampNacScale(raw);
+  }
+
+  function formatDeScale(scale) {
+    return `${clampDeScale(scale).toFixed(1)}x`;
+  }
+
+  function syncDeScaleUi() {
+    const deScale = clampDeScale(state.deUserScale);
+    if (dom.deScaleSlider) {
+      dom.deScaleSlider.min = String(constants.NAC_SCALE_MIN);
+      dom.deScaleSlider.max = String(constants.NAC_SCALE_MAX);
+      dom.deScaleSlider.step = String(constants.NAC_SCALE_STEP);
+      dom.deScaleSlider.value = String(deScale);
+    }
+    if (dom.deScaleLabel) {
+      dom.deScaleLabel.textContent = formatDeScale(deScale);
+    }
+  }
+
+  function clampDeNacScale(raw) {
+    return clampNacScale(raw);
+  }
+
+  function formatDeNacScale(scale) {
+    return `${clampDeNacScale(scale).toFixed(1)}x`;
+  }
+
+  function syncDeNacScaleUi() {
+    const deNacScale = clampDeNacScale(state.deNacUserScale);
+    if (dom.deNacScaleSlider) {
+      dom.deNacScaleSlider.min = String(constants.NAC_SCALE_MIN);
+      dom.deNacScaleSlider.max = String(constants.NAC_SCALE_MAX);
+      dom.deNacScaleSlider.step = String(constants.NAC_SCALE_STEP);
+      dom.deNacScaleSlider.value = String(deNacScale);
+    }
+    if (dom.deNacScaleLabel) {
+      dom.deNacScaleLabel.textContent = formatDeNacScale(deNacScale);
+    }
+  }
+
   function clampGifExportRange(start, end, nFrames) {
     const frameCount = Math.max(0, Number.parseInt(String(nFrames), 10) || 0);
     if (frameCount <= 0) {
@@ -345,8 +492,6 @@
   function syncGifExportRangeUi() {
     const frameCount = Array.isArray(state.xyzFrames) ? state.xyzFrames.length : 0;
     const range = clampGifExportRange(state.gifExportRangeStart, state.gifExportRangeEnd, frameCount);
-    state.gifExportRangeStart = range.start;
-    state.gifExportRangeEnd = range.end;
     const maxIdx = Math.max(0, frameCount - 1);
     if (dom.gifExportStartInput) {
       dom.gifExportStartInput.min = '0';
@@ -364,8 +509,7 @@
     }
   }
 
-  function setGifExportUiState(exporting) {
-    state.isGifExporting = !!exporting;
+  function syncGifExportControlsUi() {
     const hasFrames = !!state.currentTrajId && Array.isArray(state.xyzFrames) && state.xyzFrames.length > 0;
     if (dom.exportGifBtn) {
       dom.exportGifBtn.disabled = state.isGifExporting || !hasFrames;
@@ -375,6 +519,11 @@
       dom.cancelGifExportBtn.disabled = !state.isGifExporting;
     }
     syncGifExportRangeUi();
+  }
+
+  function setGifExportUiState(exporting) {
+    dispatch(actions.setGifExporting(exporting));
+    syncGifExportControlsUi();
   }
 
   function setGifExportProgress(current, total) {
@@ -389,10 +538,11 @@
     dom.gifExportProgressEl.textContent = `GIF ${nCurrent}/${nTotal} (${percent}%)`;
   }
 
-  // --- Collapsible control groups --------------------------------------------
   function getControlsGroupElement(groupKey) {
     if (groupKey === 'measure') return dom.measureControlsGroup;
     if (groupKey === 'playback') return dom.playbackControlsGroup;
+    if (groupKey === 'render') return dom.renderControlsGroup;
+    if (groupKey === 'nac') return dom.nacControlsGroup;
     if (groupKey === 'gifRange') return dom.gifRangeControlsGroup;
     return null;
   }
@@ -414,7 +564,6 @@
     return groupEl.hasAttribute('open');
   }
 
-  // --- Measurement model helpers ---------------------------------------------
   function normalizeMeasureType(type) {
     return constants.MEASURE_META[type] ? type : 'bond';
   }
@@ -436,21 +585,11 @@
   }
 
   function normalizeHexColor(color) {
-    const text = String(color || '').trim();
-    if (!text) return '#1f77b4';
-    const m = text.match(/^#([0-9A-Fa-f]{6})$/);
-    if (m) return `#${m[1].toLowerCase()}`;
-    return '#1f77b4';
+    return utils.normalizeHexColor(color);
   }
 
   function sanitizeColorInput(color) {
-    const text = String(color || '').trim();
-    if (/^#([0-9A-Fa-f]{6})$/.test(text)) return text.toLowerCase();
-    if (/^#([0-9A-Fa-f]{3})$/.test(text)) {
-      const s = text.slice(1).toLowerCase();
-      return `#${s[0]}${s[0]}${s[1]}${s[1]}${s[2]}${s[2]}`;
-    }
-    return null;
+    return utils.sanitizeColorInput(color);
   }
 
   function getNextColor(type) {
@@ -473,19 +612,115 @@
     const disabled = !enabled;
     if (dom.saveFrameBtn) dom.saveFrameBtn.disabled = disabled;
     if (dom.saveTrajBtn) dom.saveTrajBtn.disabled = disabled;
-    setGifExportUiState(state.isGifExporting);
+    syncGifExportControlsUi();
+  }
+
+  function setNacRangeLabel(text) {
+    if (!dom.nacRangeLabel) return;
+    const normalized = String(text || '').trim();
+    dom.nacRangeLabel.textContent = normalized || '|NAC|: n/a';
+  }
+
+  function setDeRangeLabel(text) {
+    if (!dom.deRangeLabel) return;
+    const normalized = String(text || '').trim();
+    dom.deRangeLabel.textContent = normalized || '|dE|: n/a';
+  }
+
+  function setDeNacRangeLabel(text) {
+    if (!dom.deNacRangeLabel) return;
+    const normalized = String(text || '').trim();
+    dom.deNacRangeLabel.textContent = normalized || '|dE*NAC|: n/a';
+  }
+
+  function setNacControlsEnabled(enabled) {
+    const hasNac = !!enabled && !!state.nacAvailable && state.nacStateCount >= 2;
+    const hasDe = !!enabled && !!state.deAvailable && state.deStateCount >= 1;
+    const hasDeNac = !!enabled && !!state.deNacAvailable && state.deNacStateCount >= 2;
+
+    const hasAnyPairVector = hasNac || hasDeNac;
+    const pairStateCount = Math.max(
+      hasNac ? Number(state.nacStateCount) : 0,
+      hasDeNac ? Number(state.deNacStateCount) : 0
+    );
+    const pairSelectLoading = !!state.isNacLoading || !!state.isDeNacLoading;
+    const selectDisabled = !hasAnyPairVector || pairSelectLoading || pairStateCount < 2;
+
+    const deRowsLoading = !!state.isDeLoading;
+    const deRowsDisabled = !hasDe || deRowsLoading;
+
+    const nacScaleDisabled = !hasNac || state.isNacLoading || !state.showNacVectors;
+    const deScaleDisabled = !hasDe || state.isDeLoading || !state.showDeVectors;
+    const deNacScaleDisabled = !hasDeNac || state.isDeNacLoading || !state.showDeNacVectors;
+
+    if (dom.showNacVectorsCheckbox) {
+      dom.showNacVectorsCheckbox.checked = !!state.showNacVectors;
+      dom.showNacVectorsCheckbox.disabled = !hasNac || state.isNacLoading;
+    }
+    if (dom.showDeVectorsCheckbox) {
+      dom.showDeVectorsCheckbox.checked = !!state.showDeVectors;
+      dom.showDeVectorsCheckbox.disabled = !hasDe || state.isDeLoading;
+    }
+    if (dom.showDeNacVectorsCheckbox) {
+      dom.showDeNacVectorsCheckbox.checked = !!state.showDeNacVectors;
+      dom.showDeNacVectorsCheckbox.disabled = !hasDeNac || state.isDeNacLoading;
+    }
+
+    if (dom.nacStateISelect) dom.nacStateISelect.disabled = selectDisabled;
+    if (dom.nacStateJSelect) dom.nacStateJSelect.disabled = selectDisabled;
+
+    if (dom.addDePairBtn) {
+      dom.addDePairBtn.disabled = deRowsDisabled;
+    }
+    if (dom.dePairRowsContainer) {
+      const rows = dom.dePairRowsContainer.querySelectorAll('.de-pair-row');
+      const rowCount = Math.max(0, Number.parseInt(String(state.deRows?.length || 0), 10) || 0);
+      for (const rowEl of rows) {
+        const enableInput = rowEl.querySelector('.de-row-enabled');
+        const stateISelect = rowEl.querySelector('.de-row-state-i');
+        const stateJSelect = rowEl.querySelector('.de-row-state-j');
+        const removeBtn = rowEl.querySelector('.de-row-remove-btn');
+        if (enableInput) enableInput.disabled = deRowsDisabled;
+        if (stateISelect) stateISelect.disabled = deRowsDisabled;
+        if (stateJSelect) stateJSelect.disabled = deRowsDisabled;
+        if (removeBtn) removeBtn.disabled = deRowsDisabled || rowCount <= 1;
+      }
+    }
+
+    if (dom.nacScaleSlider) dom.nacScaleSlider.disabled = nacScaleDisabled;
+    if (dom.deScaleSlider) dom.deScaleSlider.disabled = deScaleDisabled;
+    if (dom.deNacScaleSlider) dom.deNacScaleSlider.disabled = deNacScaleDisabled;
+    if (dom.deVisualHintEl) {
+      dom.deVisualHintEl.style.opacity = hasDe ? '1' : '0.55';
+    }
   }
 
   function sanitizeFilenamePart(text) {
-    const cleaned = String(text).trim().replace(/[^A-Za-z0-9._-]+/g, '_');
-    return cleaned || 'unknown';
+    return utils.sanitizeFilenamePart(text);
   }
+
+  subscribe(syncPlaybackRateUi, ['playbackRate']);
+  subscribe(syncPlaybackStrideUi, ['playbackStride']);
+  subscribe(syncAtomSizeScaleUi, ['atomSizeScale']);
+  subscribe(syncBondRadiusScaleUi, ['bondRadiusScale']);
+  subscribe(syncNacScaleUi, ['nacUserScale']);
+  subscribe(syncDeScaleUi, ['deUserScale']);
+  subscribe(syncDeNacScaleUi, ['deNacUserScale']);
+  subscribe(syncGifExportControlsUi, ['gifExportRangeStart', 'gifExportRangeEnd', 'isGifExporting']);
 
   syncPlaybackRateUi();
   syncPlaybackStrideUi();
-  syncGifExportRangeUi();
-  setGifExportUiState(false);
+  syncAtomSizeScaleUi();
+  syncBondRadiusScaleUi();
+  syncNacScaleUi();
+  syncDeScaleUi();
+  syncDeNacScaleUi();
+  syncGifExportControlsUi();
   setGifExportProgress(0, 0);
+  setNacRangeLabel('|NAC|: n/a');
+  setDeRangeLabel('|dE|: n/a');
+  setDeNacRangeLabel('|dE*NAC|: n/a');
+  setNacControlsEnabled(false);
 
   root.shared = {
     bootstrap,
@@ -498,13 +733,34 @@
     constants,
     measureTypeButtons,
     state,
+    store,
+    actions,
+    dispatch,
+    subscribe,
     setStatus,
+    clampNumber,
+    parseFiniteNumber,
     clampPlaybackRate,
     formatPlaybackRate,
     syncPlaybackRateUi,
     clampPlaybackStride,
     formatPlaybackStride,
     syncPlaybackStrideUi,
+    clampAtomSizeScale,
+    formatAtomSizeScale,
+    syncAtomSizeScaleUi,
+    clampBondRadiusScale,
+    formatBondRadiusScale,
+    syncBondRadiusScaleUi,
+    clampNacScale,
+    formatNacScale,
+    syncNacScaleUi,
+    clampDeScale,
+    formatDeScale,
+    syncDeScaleUi,
+    clampDeNacScale,
+    formatDeNacScale,
+    syncDeNacScaleUi,
     clampGifExportRange,
     effectivePlaybackFps,
     syncGifExportRangeUi,
@@ -522,6 +778,10 @@
     getNextColor,
     setColorSettingsOpen,
     setDownloadButtonsEnabled,
+    setNacRangeLabel,
+    setDeRangeLabel,
+    setDeNacRangeLabel,
+    setNacControlsEnabled,
     sanitizeFilenamePart,
   };
 })();

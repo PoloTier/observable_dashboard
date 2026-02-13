@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 
 import yaml
 
-ALLOWED_OBSERVABLES = {"bond", "angle", "dihedral", "etot", "eig", "nac", "state", "|c|^2"}
+ALLOWED_OBSERVABLES = {"bond", "angle", "dihedral", "etot", "eig", "nac", "de_nac", "state", "|c|^2"}
 
 
 def required_index_count(observable: str) -> int:
@@ -13,6 +13,8 @@ def required_index_count(observable: str) -> int:
         return 3
     if observable == "dihedral":
         return 4
+    if observable == "de_nac":
+        return 2
     return 0
 
 
@@ -53,8 +55,13 @@ def normalize_panel(panel_cfg: Dict[str, Any], fallback: Dict[str, Any]) -> Dict
             if len(fallback.get("indices", [])) > len(parsed_indices):
                 parsed_indices.append(int(fallback["indices"][len(parsed_indices)]))
             else:
-                parsed_indices.append(0)
+                if observable == "de_nac" and len(parsed_indices) == 1:
+                    parsed_indices.append(1)
+                else:
+                    parsed_indices.append(0)
         parsed_indices = parsed_indices[:count]
+        if observable == "de_nac" and len(parsed_indices) == 2 and parsed_indices[0] == parsed_indices[1]:
+            parsed_indices[1] = parsed_indices[0] + 1
     else:
         parsed_indices = []
 

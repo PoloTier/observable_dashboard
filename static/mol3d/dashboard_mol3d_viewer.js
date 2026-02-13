@@ -140,6 +140,14 @@
     }
   }
 
+  function renderVectorOverlayForFrame() {
+    const vectorOverlay = root.vectorOverlay;
+    if (!vectorOverlay || typeof vectorOverlay.renderRegisteredOverlays !== 'function') {
+      return;
+    }
+    vectorOverlay.renderRegisteredOverlays(state.currentFrame);
+  }
+
   function getAtomIndexLabelText(atomIndex) {
     return String(atomIndex);
   }
@@ -228,13 +236,16 @@
     clearScene();
     const model = state.viewer.addModel(state.xyzFrames[idx], 'xyz');
     state.currentModel = model;
+    const bondRadius = constants.MODEL_STICK_RADIUS_BASE * shared.clampBondRadiusScale(state.bondRadiusScale);
+    const atomScale = constants.MODEL_SPHERE_SCALE_BASE * shared.clampAtomSizeScale(state.atomSizeScale);
     state.viewer.setStyle({}, {
-      stick: { radius: 0.15, colorscheme: 'Jmol' },
-      sphere: { scale: 0.28, colorscheme: 'Jmol' }
+      stick: { radius: bondRadius, colorscheme: 'Jmol' },
+      sphere: { scale: atomScale, colorscheme: 'Jmol' }
     });
     bindAtomClickHandler();
     addAtomIndexLabels(model);
     renderMeasurementOverlayForFrame();
+    renderVectorOverlayForFrame();
     if (refitView) {
       state.viewer.zoomTo();
       state.viewer.zoom(1.12, 0);
@@ -259,14 +270,12 @@
   }
 
   function setPlaybackRate(rate) {
-    state.playbackRate = shared.clampPlaybackRate(rate);
-    shared.syncPlaybackRateUi();
+    shared.dispatch(shared.actions.setPlaybackRate(rate));
     restartPlaybackTimerIfPlaying();
   }
 
   function setPlaybackStride(stride) {
-    state.playbackStride = shared.clampPlaybackStride(stride);
-    shared.syncPlaybackStrideUi();
+    shared.dispatch(shared.actions.setPlaybackStride(stride));
     restartPlaybackTimerIfPlaying();
   }
 
@@ -278,6 +287,7 @@
     addOverlayLabel,
     formatOverlayValue,
     renderMeasurementOverlayForFrame,
+    renderVectorOverlayForFrame,
     getAtomIndexLabelText,
     addAtomIndexLabels,
     bindAtomClickHandler,

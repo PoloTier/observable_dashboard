@@ -111,7 +111,12 @@
       border-color: var(--accent);
     }
     #playback-rate-slider,
-    #playback-stride-slider {
+    #playback-stride-slider,
+    #nac-scale-slider,
+    #de-scale-slider,
+    #de-nac-scale-slider,
+    #atom-size-slider,
+    #bond-radius-slider {
       width: clamp(110px, 18vw, 160px);
       min-width: 96px;
       padding: 0;
@@ -120,12 +125,98 @@
       accent-color: var(--accent);
     }
     #playback-rate-label,
-    #playback-stride-label {
+    #playback-stride-label,
+    #nac-scale-label,
+    #de-scale-label,
+    #de-nac-scale-label,
+    #atom-size-label,
+    #bond-radius-label {
       font-size: 12px;
       color: var(--muted);
       min-width: 32px;
       text-align: right;
       white-space: nowrap;
+    }
+    .de-pair-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+    }
+    .de-pair-row {
+      display: grid;
+      grid-template-columns: 14px auto auto minmax(56px, 80px) auto minmax(56px, 80px) auto;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #d9dee7;
+      border-radius: 8px;
+      background: #fff;
+      padding: 6px 8px;
+    }
+    .de-pair-row.disabled {
+      opacity: 0.6;
+    }
+    .de-row-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(17, 24, 39, 0.24);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+      justify-self: center;
+      align-self: center;
+      background: #6b7280;
+    }
+    .de-row-label {
+      font-size: 12px;
+      color: #64748b;
+    }
+    #de-visual-hint {
+      width: 100%;
+      color: #64748b;
+    }
+    .de-row-remove-btn {
+      justify-self: end;
+      border: 1px solid #efc5c1;
+      color: #b42318;
+      background: #fff7f6;
+      padding: 4px 8px;
+      line-height: 1.1;
+    }
+    .de-row-remove-btn:hover:not(:disabled) {
+      background: #ffe9e7;
+    }
+    .de-pair-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #add-de-pair-btn {
+      border: 1px solid #b7c8ea;
+      color: #0b5ed7;
+      background: #eef5ff;
+      font-weight: 600;
+      line-height: 1.1;
+      padding: 4px 8px;
+    }
+    #add-de-pair-btn:hover:not(:disabled) {
+      background: #dceaff;
+    }
+    #add-de-pair-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    @media (max-width: 760px) {
+      .de-pair-row {
+        grid-template-columns: 14px auto auto 1fr;
+        grid-auto-rows: minmax(0, auto);
+      }
+      .de-row-label {
+        justify-self: end;
+      }
+      .de-row-remove-btn {
+        grid-column: 1 / -1;
+        justify-self: start;
+      }
     }
     #gif-export-start,
     #gif-export-end {
@@ -407,6 +498,81 @@
           </div>
         </details>
 
+        <details id="render-controls-group" class="control-group">
+          <summary>Render Style</summary>
+          <div class="controls control-group-body">
+            <label for="atom-size-slider">Atom Size</label>
+            <input id="atom-size-slider" type="range" min="0.2" max="3.0" step="0.1" value="1" />
+            <span id="atom-size-label">1.0x</span>
+
+            <label for="bond-radius-slider">Bond Radius</label>
+            <input id="bond-radius-slider" type="range" min="0.2" max="3.0" step="0.1" value="1" />
+            <span id="bond-radius-label">1.0x</span>
+          </div>
+        </details>
+
+        <details id="nac-controls-group" class="control-group">
+          <summary>NAC Vectors</summary>
+          <div class="controls control-group-body">
+            <label class="check-label" for="show-nac-vectors">
+              <input id="show-nac-vectors" type="checkbox" />
+              Show NAC Vectors
+            </label>
+
+            <label for="nac-state-i">State i</label>
+            <select id="nac-state-i"></select>
+
+            <label for="nac-state-j">State j</label>
+            <select id="nac-state-j"></select>
+
+            <label for="nac-scale-slider">Scale</label>
+            <input id="nac-scale-slider" type="range" min="0.1" max="10" step="0.1" value="1" />
+            <span id="nac-scale-label">1.0x</span>
+            <span class="bond-selection-info" id="nac-range-label">|NAC|: n/a</span>
+
+            <label class="check-label" for="show-de-vectors">
+              <input id="show-de-vectors" type="checkbox" />
+              Show dE Vectors
+            </label>
+
+            <div class="de-pair-actions">
+              <label>dE State Pairs</label>
+              <button id="add-de-pair-btn" type="button" aria-label="Add dE state pair">+ Add Pair</button>
+            </div>
+            <div id="de-pair-rows" class="de-pair-rows"></div>
+            <template id="de-pair-row-template">
+              <div class="de-pair-row" data-de-row-id="">
+                <span class="de-row-swatch" aria-hidden="true"></span>
+                <label class="check-label" title="Toggle this dE pair">
+                  <input class="de-row-enabled" type="checkbox" checked />
+                  On
+                </label>
+                <label class="de-row-label">i</label>
+                <select class="de-row-state-i"></select>
+                <label class="de-row-label">j</label>
+                <select class="de-row-state-j"></select>
+                <button class="de-row-remove-btn" type="button">Remove</button>
+              </div>
+            </template>
+            <span id="de-visual-hint" class="bond-selection-info">Hue = pair, Brightness = |dE|</span>
+
+            <label for="de-scale-slider">dE Scale</label>
+            <input id="de-scale-slider" type="range" min="0.1" max="10" step="0.1" value="1" />
+            <span id="de-scale-label">1.0x</span>
+            <span class="bond-selection-info" id="de-range-label">|dE|: n/a</span>
+
+            <label class="check-label" for="show-de-nac-vectors">
+              <input id="show-de-nac-vectors" type="checkbox" />
+              Show (E_j-E_i)*NAC Vectors
+            </label>
+
+            <label for="de-nac-scale-slider">dE*NAC Scale</label>
+            <input id="de-nac-scale-slider" type="range" min="0.1" max="10" step="0.1" value="1" />
+            <span id="de-nac-scale-label">1.0x</span>
+            <span class="bond-selection-info" id="de-nac-range-label">|dE*NAC|: n/a</span>
+          </div>
+        </details>
+
         <details id="gif-range-controls-group" class="control-group">
           <summary>GIF Range</summary>
           <div class="controls control-group-body">
@@ -442,11 +608,19 @@
   </div>
 
   <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
+  <script src="assets/mol3d/dashboard_mol3d_constants.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_utils.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_store.js?v={{ static_version }}"></script>
   <script src="assets/mol3d/dashboard_mol3d_shared.js?v={{ static_version }}"></script>
   <script src="assets/math/dashboard_math3d.js?v={{ static_version }}"></script>
   <script src="assets/mol3d/dashboard_mol3d_geometry.js?v={{ static_version }}"></script>
   <script src="assets/mol3d/dashboard_mol3d_measurement.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_vector_overlay.js?v={{ static_version }}"></script>
   <script src="assets/mol3d/dashboard_mol3d_viewer.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_io_transformers.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_io_network.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_io_vector_ops.js?v={{ static_version }}"></script>
+  <script src="assets/mol3d/dashboard_mol3d_io_app.js?v={{ static_version }}"></script>
   <script src="assets/mol3d/dashboard_mol3d_io.js?v={{ static_version }}"></script>
   <script src="assets/mol3d/dashboard_mol3d_page.js?v={{ static_version }}"></script>
 </body>

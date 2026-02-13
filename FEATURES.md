@@ -30,7 +30,10 @@ python -m tools.observable_dashboard.serve \
 
 - `GET /api/healthz`
 - `GET /api/bootstrap`
+- `POST /api/inspect-keys`
+- `POST /api/raw-key-series`
 - `POST /api/series`
+- `POST /api/ensemble-series`
 - `GET /api/molecule3d/trajectory/{traj_id}`
 
 ### 布局与路由自动检查
@@ -64,7 +67,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 ### 1) 全局控件
 
 - `Trajectory`：可选单条轨线或 `All`
-- `Show ensemble (median + q25/q75)`：显示集合统计
+- `Show ensemble`：显示集合统计（由后端计算）
 - `Show all traces in All mode`：在 `All` 模式显示每条轨线
 - `3D Molecule View`：打开 `molecule3d.html`（新标签页）
 - `PKL: ...`：显示当前读取的 pkl 文件名（悬浮可见完整路径）
@@ -76,6 +79,22 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - `Reset to Default`：恢复默认布局
 - `Apply`：应用当前面板参数
 - `Apply to all panels`：把当前面板设置复制到所有面板
+- 每个 panel 可独立选择 ensemble 统计模式：
+  - `Mean + 95% CI`（默认）
+  - `Median + q25/q75`
+
+### 2.1) PKL Key Inspector（自定义 key 预览与一键加图）
+
+- 支持输入任意 raw key（每行一个或逗号分隔），点击 `Inspect`
+- 结果表按 `traj_id x key` 展示 safe preview，缺失显示 `MISSING`
+- 每个 key 可点击 `Add to panel` 新增一个 `raw_key` 面板
+- `raw_key` 绘图严格要求：
+  - key 值必须是时序数据（非静态标量）
+  - 第 0 维长度必须与轨迹基准帧轴一致
+  - 不满足条件时拒绝绘图并给出错误提示
+  - 复数时序会自动拆成实部/虚部并按分量绘图
+    - 复数标量时序：`re` / `im`
+    - 复数多分量时序：`compK.re` / `compK.im`
 
 ### 3) 可观测量类型
 
@@ -89,6 +108,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - `nac`
 - `state`
 - `|c|^2`
+- `raw_key`（由 Inspector 添加）
 
 索引要求：
 
@@ -99,10 +119,16 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 ### 4) All 模式显示说明
 
 - 在 `All` 模式下，轨线 hover 第一行显示当前轨线编号（即子文件夹/`traj_id`）
-- 统计线（median / q25 / q75 / mean）不显示轨线编号
+- 统计线（`mean + 95% CI` 或 `median + q25 / q75`）不显示轨线编号
 - `|c|^2` 在 `All` 模式下与 `eig` 一致：按分量分别显示轨线与集合统计
 - `All` 模式不需要手动刷新：若当前 panel 缺数据，会自动触发后端计算并显示进度
 - 快速连续改参数时，请求按顺序排队执行，完成后展示最终结果
+
+统计口径说明：
+
+- `Mean + 95% CI` 使用后端 bootstrap 估计均值标准差后计算区间：`mean ± 1.96 * std_bootstrap`
+- bootstrap 采样次数固定为 `B=1000`
+- 使用固定 seed，确保相同输入下统计结果可复现
 
 ---
 

@@ -66,12 +66,76 @@
     MAX_PANELS,
     Math.max(MIN_PANELS, Number(defaults?.ui?.default_panel_count || 4))
   );
-  const observableOptions = ['bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'state', '|c|^2'];
+  const RAW_ALIAS_PREFIX = 'raw_alias::';
+  const observableOptions = ['bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key'];
+  const ensembleStatModes = ['mean_ci95_bootstrap', 'median_iqr'];
+
+  function normalizeRawKeyAliases(rawAliases) {
+    const out = {};
+    if (Array.isArray(rawAliases)) {
+      for (const item of rawAliases) {
+        const alias = String(item?.alias || '').trim();
+        const rawKey = String(item?.raw_key || '').trim();
+        if (!alias || !rawKey) continue;
+        out[alias] = rawKey;
+      }
+      return out;
+    }
+    if (rawAliases && typeof rawAliases === 'object') {
+      for (const [rawAlias, rawKeyValue] of Object.entries(rawAliases)) {
+        const alias = String(rawAlias || '').trim();
+        const rawKey = String(rawKeyValue || '').trim();
+        if (!alias || !rawKey) continue;
+        out[alias] = rawKey;
+      }
+    }
+    return out;
+  }
+
+  function parseRawAliasObservable(observable) {
+    const text = String(observable || '');
+    if (!text.startsWith(RAW_ALIAS_PREFIX)) return '';
+    return text.slice(RAW_ALIAS_PREFIX.length).trim();
+  }
+
+  function isRawAliasObservable(observable) {
+    return parseRawAliasObservable(observable).length > 0;
+  }
+
+  function makeRawAliasObservable(alias) {
+    return `${RAW_ALIAS_PREFIX}${String(alias || '').trim()}`;
+  }
+
+  function rawAliasFromObservable(observable) {
+    return parseRawAliasObservable(observable);
+  }
+
+  function isRawObservable(observable) {
+    return String(observable || '') === 'raw_key' || isRawAliasObservable(observable);
+  }
+
+  function canonicalObservable(observable) {
+    if (isRawAliasObservable(observable)) return 'raw_key';
+    return String(observable || '');
+  }
+
+  function resolveRawKeyForPanel(panelState, rawKeyAliases) {
+    const observable = String(panelState?.observable || '');
+    if (observable === 'raw_key') {
+      return String(panelState?.rawKey || '').trim();
+    }
+    const alias = rawAliasFromObservable(observable);
+    if (!alias) return '';
+    const aliasMap = normalizeRawKeyAliases(rawKeyAliases);
+    return String(aliasMap[alias] || '').trim();
+  }
 
   function requiredIndexCount(observable) {
-    if (observable === 'bond') return 2;
-    if (observable === 'angle') return 3;
-    if (observable === 'dihedral') return 4;
+    const canonical = canonicalObservable(observable);
+    if (canonical === 'bond') return 2;
+    if (canonical === 'angle') return 3;
+    if (canonical === 'dihedral') return 4;
+    if (canonical === 'de_nac') return 2;
     return 0;
   }
 
@@ -89,10 +153,26 @@
 
   function normalizePanel(panel, fallbackIndex) {
     const fallback = defaultPanelForIndex(fallbackIndex);
+    const fallbackObservable = String(fallback?.observable || 'etot');
+    const fallbackAllowed = observableOptions.includes(fallbackObservable) || isRawAliasObservable(fallbackObservable)
+      ? fallbackObservable
+      : 'etot';
+    const observableCandidate = String(panel?.observable || fallbackAllowed);
+    const normalizedObservable = observableOptions.includes(observableCandidate) || isRawAliasObservable(observableCandidate)
+      ? observableCandidate
+      : fallbackAllowed;
+    const modeCandidate = String(panel?.ensembleStatMode ?? fallback?.ensembleStatMode ?? 'mean_ci95_bootstrap');
     const out = {
-      observable: observableOptions.includes(panel?.observable) ? panel.observable : fallback.observable,
-      indices: []
+      observable: normalizedObservable,
+      indices: [],
+      rawKey: '',
+      ensembleStatMode: ensembleStatModes.includes(modeCandidate) ? modeCandidate : 'mean_ci95_bootstrap',
     };
+
+    if (out.observable === 'raw_key') {
+      const candidate = panel?.rawKey ?? fallback?.rawKey ?? '';
+      out.rawKey = String(candidate || '').trim();
+    }
 
     const needed = requiredIndexCount(out.observable);
     const raw = Array.isArray(panel?.indices)
@@ -106,8 +186,17 @@
     }
 
     if (needed > 0) {
-      while (parsed.length < needed) parsed.push(0);
+      while (parsed.length < needed) {
+        if (out.observable === 'de_nac' && parsed.length === 1) {
+          parsed.push(1);
+        } else {
+          parsed.push(0);
+        }
+      }
       out.indices = parsed.slice(0, needed);
+      if (out.observable === 'de_nac' && out.indices.length === 2 && out.indices[0] === out.indices[1]) {
+        out.indices[1] = out.indices[0] + 1;
+      }
     }
 
     return out;
@@ -134,6 +223,7 @@
       showEnsemble: !!defaults?.plot?.show_ensemble_by_default,
       showAllTraces: !!defaults?.plot?.show_all_traces_in_all_mode,
       panels: makeDefaultPanels(),
+      rawKeyAliases: normalizeRawKeyAliases(bootstrap?.raw_key_aliases),
       dataMode: 'api',
     };
   }
@@ -204,7 +294,17 @@
     MIN_PANELS,
     MAX_PANELS,
     DEFAULT_PANEL_COUNT,
+    RAW_ALIAS_PREFIX,
     observableOptions,
+    ensembleStatModes,
+    normalizeRawKeyAliases,
+    parseRawAliasObservable,
+    isRawAliasObservable,
+    makeRawAliasObservable,
+    rawAliasFromObservable,
+    isRawObservable,
+    canonicalObservable,
+    resolveRawKeyForPanel,
     requiredIndexCount,
     defaultPanelForIndex,
     normalizePanel,

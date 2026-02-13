@@ -4,7 +4,15 @@
   const dataLoader = root.dataLoader;
   if (!shared || !dataLoader) return;
 
-  const { state, trajIds, requiredIndexCount, setGlobalStatus } = shared;
+  const {
+    state,
+    trajIds,
+    requiredIndexCount,
+    canonicalObservable,
+    rawAliasFromObservable,
+    resolveRawKeyForPanel,
+    setGlobalStatus,
+  } = shared;
 
   const PLOT_EXPORT_DPI = 300;
   const CSS_BASE_DPI = 96;
@@ -117,72 +125,16 @@
     plotEl.dataset.hoverSyncBound = '1';
   }
 
-  function quantile(sortedArr, p) {
-    if (!sortedArr.length) return NaN;
-    if (sortedArr.length === 1) return sortedArr[0];
-    const pos = (sortedArr.length - 1) * p;
-    const lo = Math.floor(pos);
-    const hi = Math.ceil(pos);
-    if (lo === hi) return sortedArr[lo];
-    const w = pos - lo;
-    return sortedArr[lo] * (1 - w) + sortedArr[hi] * w;
+  function normalizedPanelStatMode(panelState) {
+    return String(panelState?.ensembleStatMode) === 'median_iqr' ? 'median_iqr' : 'mean_ci95_bootstrap';
   }
 
-  function computeQuantiles(seriesList) {
-    const timeMap = new Map();
-    for (const series of seriesList) {
-      const n = Math.min(series.time.length, series.value.length);
-      for (let i = 0; i < n; i++) {
-        const t = Number(series.time[i]);
-        const y = Number(series.value[i]);
-        if (!Number.isFinite(t) || !Number.isFinite(y)) continue;
-        const key = t.toFixed(8);
-        if (!timeMap.has(key)) {
-          timeMap.set(key, { t: t, vals: [] });
-        }
-        timeMap.get(key).vals.push(y);
-      }
-    }
-
-    const items = Array.from(timeMap.values()).sort((a, b) => a.t - b.t);
-    const out = { time: [], q25: [], q50: [], q75: [] };
-    for (const item of items) {
-      if (!item.vals.length) continue;
-      const vals = item.vals.slice().sort((a, b) => a - b);
-      out.time.push(item.t);
-      out.q25.push(quantile(vals, 0.25));
-      out.q50.push(quantile(vals, 0.50));
-      out.q75.push(quantile(vals, 0.75));
-    }
-    return out;
+  function ensembleCenterName(statMode) {
+    return statMode === 'median_iqr' ? 'median' : 'mean';
   }
 
-  function computeMeanSeries(seriesList) {
-    const timeMap = new Map();
-    for (const series of seriesList) {
-      const n = Math.min(series.time.length, series.value.length);
-      for (let i = 0; i < n; i++) {
-        const t = Number(series.time[i]);
-        const y = Number(series.value[i]);
-        if (!Number.isFinite(t) || !Number.isFinite(y)) continue;
-        const key = t.toFixed(8);
-        if (!timeMap.has(key)) {
-          timeMap.set(key, { t: t, sum: 0, count: 0 });
-        }
-        const item = timeMap.get(key);
-        item.sum += y;
-        item.count += 1;
-      }
-    }
-
-    const items = Array.from(timeMap.values()).sort((a, b) => a.t - b.t);
-    const out = { time: [], mean: [] };
-    for (const item of items) {
-      if (!item.count) continue;
-      out.time.push(item.t);
-      out.mean.push(item.sum / item.count);
-    }
-    return out;
+  function ensembleIntervalName(statMode) {
+    return statMode === 'median_iqr' ? 'q25-q75' : '95% CI';
   }
 
   function getSelectedTrajIds() {
@@ -213,6 +165,7 @@
     if (observable === 'angle') return 'Angle (deg)';
     if (observable === 'dihedral') return 'Dihedral (deg, unwrapped)';
     if (observable === 'etot') return 'ΔEtot (Hartree, E-E0)';
+    if (observable === 'de_nac') return '|(E_j-E_i)NAC_ij|';
     if (observable === 'state') return 'State index (argmax |c|²)';
     if (observable === '|c|^2') return '|c_i|^2';
     if (observable === 'eig') return 'eig';
@@ -250,6 +203,106 @@
     };
   }
 
+  async function getRawKeySeriesRecord(trajId, rawKey, allowFetch) {
+    if (allowFetch) {
+      await dataLoader.ensureRawKeySeries(trajId, rawKey);
+    }
+    const record = dataLoader.getRawKeySeries(trajId, rawKey);
+    if (!record) return null;
+    const seriesKind = record.series_kind === 'matrix' ? 'matrix' : 'scalar';
+    if (seriesKind === 'matrix') {
+      return {
+        series_kind: 'matrix',
+        time: Array.isArray(record.time) ? record.time : [],
+        values: Array.isArray(record.values) ? record.values : [],
+        n_components: Number.isFinite(Number(record.n_components)) ? Number(record.n_components) : 0,
+        component_labels: Array.isArray(record.component_labels)
+          ? record.component_labels.map((v) => String(v))
+          : null,
+      };
+    }
+    return {
+      series_kind: 'scalar',
+      time: Array.isArray(record.time) ? record.time : [],
+      value: Array.isArray(record.value) ? record.value : [],
+      n_components: null,
+      component_labels: null,
+    };
+  }
+
+  async function getEnsembleSeriesRecord(observable, indices, rawKey, statMode, allowFetch) {
+    if (allowFetch) {
+      await dataLoader.ensureEnsembleSeries(observable, indices, rawKey, statMode);
+    }
+    const record = dataLoader.getEnsembleSeries(observable, indices, rawKey, statMode);
+    return record || null;
+  }
+
+  function addEnsembleBandAndCenter(
+    figData,
+    componentSeries,
+    {
+      namePrefix,
+      statMode,
+      lineColor,
+      fillColor,
+      lineShape = null,
+      centerHoverLabel = 'y',
+    }
+  ) {
+    const time = Array.isArray(componentSeries?.time) ? componentSeries.time : [];
+    const low = Array.isArray(componentSeries?.low) ? componentSeries.low : [];
+    const center = Array.isArray(componentSeries?.center) ? componentSeries.center : [];
+    const high = Array.isArray(componentSeries?.high) ? componentSeries.high : [];
+    const sampleCount = Array.isArray(componentSeries?.sample_count) ? componentSeries.sample_count : [];
+    const n = Math.min(time.length, low.length, center.length, high.length);
+    if (!n) return;
+    const x = time.slice(0, n);
+    const lowY = low.slice(0, n);
+    const centerY = center.slice(0, n);
+    const highY = high.slice(0, n);
+    const countData = sampleCount.length >= n ? sampleCount.slice(0, n) : x.map(() => NaN);
+    const centerMetric = ensembleCenterName(statMode);
+    const intervalMetric = ensembleIntervalName(statMode);
+    const shapePart = lineShape ? { shape: lineShape } : {};
+
+    figData.push({
+      x: x,
+      y: highY,
+      customdata: countData,
+      type: 'scatter',
+      mode: 'lines',
+      line: { color: lineColor, width: 0, ...shapePart },
+      name: `${namePrefix} ${intervalMetric} upper`,
+      showlegend: false,
+      hoverinfo: 'skip'
+    });
+    figData.push({
+      x: x,
+      y: lowY,
+      customdata: countData,
+      type: 'scatter',
+      mode: 'lines',
+      fill: 'tonexty',
+      fillcolor: fillColor,
+      line: { color: lineColor, width: 0, ...shapePart },
+      name: `${namePrefix} ${intervalMetric}`,
+      showlegend: true,
+      hovertemplate: 't=%{x:.4f}<br>low=%{y:.6f}<br>n=%{customdata:.0f}<extra></extra>'
+    });
+    figData.push({
+      x: x,
+      y: centerY,
+      customdata: countData,
+      type: 'scatter',
+      mode: 'lines',
+      line: { color: lineColor, width: 2.5, ...shapePart },
+      name: `${namePrefix} ${centerMetric}`,
+      showlegend: true,
+      hovertemplate: `t=%{x:.4f}<br>${centerHoverLabel}=%{y:.6f}<br>n=%{customdata:.0f}<extra></extra>`
+    });
+  }
+
   function stateColor(stateIndex) {
     const palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'];
     return palette[stateIndex % palette.length];
@@ -259,8 +312,25 @@
     return String(trajId);
   }
 
-  function addAllModeScalar(figData, seriesList, namePrefix, lineColor) {
+  function componentLabel(componentLabels, index) {
+    if (!Array.isArray(componentLabels) || index < 0 || index >= componentLabels.length) {
+      return `component ${index}`;
+    }
+    const text = String(componentLabels[index] || '').trim();
+    return text || `component ${index}`;
+  }
+
+  function addAllModeScalar(
+    figData,
+    seriesList,
+    namePrefix,
+    lineColor,
+    ensembleRecord,
+    statMode,
+    { lineShape = null, fillColor = 'rgba(31,119,180,0.18)', centerHoverLabel = 'y' } = {}
+  ) {
     const drawTraces = state.showAllTraces || !state.showEnsemble;
+    const shapePart = lineShape ? { shape: lineShape } : {};
     if (drawTraces) {
       for (const series of seriesList) {
         const trajLabel = trajHoverLabel(series.traj_id);
@@ -269,7 +339,7 @@
           y: series.value,
           type: 'scatter',
           mode: 'lines',
-          line: { color: 'rgba(120,120,120,0.35)', width: 1 },
+          line: { color: 'rgba(120,120,120,0.35)', width: 1, ...shapePart },
           name: `${namePrefix} traj ${series.traj_id}`,
           showlegend: false,
           hovertemplate: `${trajLabel}<br>t=%{x:.4f}<br>y=%{y:.6f}<extra></extra>`
@@ -278,47 +348,34 @@
     }
 
     if (state.showEnsemble) {
-      const q = computeQuantiles(seriesList);
-      if (q.time.length) {
-        figData.push({
-          x: q.time,
-          y: q.q75,
-          type: 'scatter',
-          mode: 'lines',
-          line: { color: lineColor, width: 0 },
-          name: `${namePrefix} q75`,
-          showlegend: false,
-          hoverinfo: 'skip'
-        });
-        figData.push({
-          x: q.time,
-          y: q.q25,
-          type: 'scatter',
-          mode: 'lines',
-          fill: 'tonexty',
-          fillcolor: 'rgba(31,119,180,0.18)',
-          line: { color: lineColor, width: 0 },
-          name: `${namePrefix} q25-q75`,
-          showlegend: true,
-          hovertemplate: 't=%{x:.4f}<br>q25=%{y:.6f}<extra></extra>'
-        });
-        figData.push({
-          x: q.time,
-          y: q.q50,
-          type: 'scatter',
-          mode: 'lines',
-          line: { color: lineColor, width: 2.5 },
-          name: `${namePrefix} median`,
-          showlegend: true,
-          hovertemplate: 't=%{x:.4f}<br>median=%{y:.6f}<extra></extra>'
-        });
-      }
+      const componentSeries = Array.isArray(ensembleRecord?.component_series)
+        ? ensembleRecord.component_series[0]
+        : null;
+      addEnsembleBandAndCenter(figData, componentSeries, {
+        namePrefix,
+        statMode,
+        lineColor,
+        fillColor,
+        lineShape,
+        centerHoverLabel,
+      });
     }
   }
 
-  function addAllModeEig(figData, eigSeriesList) {
-    const stateCount = Math.max(...eigSeriesList.map((s) => (s.values[0] ? s.values[0].length : 0)), 0);
+  function addAllModeEig(figData, eigSeriesList, ensembleRecord, statMode) {
+    const traceStateCount = Math.max(...eigSeriesList.map((s) => (s.values[0] ? s.values[0].length : 0)), 0);
+    const ensembleComponents = Array.isArray(ensembleRecord?.component_series) ? ensembleRecord.component_series : [];
+    const ensembleStateCount = Math.max(
+      ...ensembleComponents.map((s) => (Number.isFinite(Number(s?.component)) ? Number(s.component) + 1 : 0)),
+      0
+    );
+    const stateCount = Math.max(traceStateCount, ensembleStateCount);
     const drawTraces = state.showAllTraces || !state.showEnsemble;
+    const ensembleByComponent = new Map();
+    for (const comp of ensembleComponents) {
+      if (!Number.isFinite(Number(comp?.component))) continue;
+      ensembleByComponent.set(Number(comp.component), comp);
+    }
 
     for (let s = 0; s < stateCount; s++) {
       const scalarSeries = [];
@@ -333,8 +390,8 @@
         }
         if (x.length) scalarSeries.push({ traj_id: item.traj_id, time: x, value: y });
       }
-
-      if (!scalarSeries.length) continue;
+      const ensembleComp = ensembleByComponent.get(s);
+      if (!scalarSeries.length && !ensembleComp) continue;
       const color = stateColor(s);
 
       if (drawTraces) {
@@ -355,48 +412,30 @@
       }
 
       if (state.showEnsemble) {
-        const q = computeQuantiles(scalarSeries);
-        if (q.time.length) {
-          figData.push({
-            x: q.time,
-            y: q.q75,
-            type: 'scatter',
-            mode: 'lines',
-            line: { color: color, width: 0 },
-            name: `eig state ${s} q75`,
-            showlegend: false,
-            hoverinfo: 'skip'
-          });
-          figData.push({
-            x: q.time,
-            y: q.q25,
-            type: 'scatter',
-            mode: 'lines',
-            fill: 'tonexty',
-            fillcolor: 'rgba(0,0,0,0.08)',
-            line: { color: color, width: 0 },
-            name: `eig state ${s} q25-q75`,
-            showlegend: true,
-            hovertemplate: 't=%{x:.4f}<br>q25=%{y:.6f}<extra></extra>'
-          });
-          figData.push({
-            x: q.time,
-            y: q.q50,
-            type: 'scatter',
-            mode: 'lines',
-            line: { color: color, width: 2.5 },
-            name: `eig state ${s} median`,
-            showlegend: true,
-            hovertemplate: 't=%{x:.4f}<br>median=%{y:.6f}<extra></extra>'
-          });
-        }
+        addEnsembleBandAndCenter(figData, ensembleComp, {
+          namePrefix: `eig state ${s}`,
+          statMode,
+          lineColor: color,
+          fillColor: 'rgba(0,0,0,0.08)',
+        });
       }
     }
   }
 
-  function addAllModeCProb(figData, cProbSeriesList) {
-    const componentCount = Math.max(...cProbSeriesList.map((s) => (s.values[0] ? s.values[0].length : 0)), 0);
+  function addAllModeCProb(figData, cProbSeriesList, ensembleRecord, statMode) {
+    const traceComponentCount = Math.max(...cProbSeriesList.map((s) => (s.values[0] ? s.values[0].length : 0)), 0);
+    const ensembleComponents = Array.isArray(ensembleRecord?.component_series) ? ensembleRecord.component_series : [];
+    const ensembleComponentCount = Math.max(
+      ...ensembleComponents.map((s) => (Number.isFinite(Number(s?.component)) ? Number(s.component) + 1 : 0)),
+      0
+    );
+    const componentCount = Math.max(traceComponentCount, ensembleComponentCount);
     const drawTraces = state.showAllTraces || !state.showEnsemble;
+    const ensembleByComponent = new Map();
+    for (const comp of ensembleComponents) {
+      if (!Number.isFinite(Number(comp?.component))) continue;
+      ensembleByComponent.set(Number(comp.component), comp);
+    }
 
     for (let component = 0; component < componentCount; component++) {
       const scalarSeries = [];
@@ -411,8 +450,8 @@
         }
         if (x.length) scalarSeries.push({ traj_id: item.traj_id, time: x, value: y });
       }
-
-      if (!scalarSeries.length) continue;
+      const ensembleComp = ensembleByComponent.get(component);
+      if (!scalarSeries.length && !ensembleComp) continue;
       const color = stateColor(component);
 
       if (drawTraces) {
@@ -433,41 +472,81 @@
       }
 
       if (state.showEnsemble) {
-        const q = computeQuantiles(scalarSeries);
-        if (q.time.length) {
+        addEnsembleBandAndCenter(figData, ensembleComp, {
+          namePrefix: `|c|^2 component ${component}`,
+          statMode,
+          lineColor: color,
+          fillColor: 'rgba(0,0,0,0.08)',
+          centerHoverLabel: '|c|^2',
+        });
+      }
+    }
+  }
+
+  function addAllModeRawKeyMatrix(figData, matrixSeriesList, rawKey, componentLabels = null, ensembleRecord, statMode) {
+    const traceComponentCount = Math.max(...matrixSeriesList.map((s) => (s.values[0] ? s.values[0].length : 0)), 0);
+    const ensembleComponents = Array.isArray(ensembleRecord?.component_series) ? ensembleRecord.component_series : [];
+    const ensembleComponentCount = Math.max(
+      ...ensembleComponents.map((s) => (Number.isFinite(Number(s?.component)) ? Number(s.component) + 1 : 0)),
+      0
+    );
+    const componentCount = Math.max(traceComponentCount, ensembleComponentCount);
+    const drawTraces = state.showAllTraces || !state.showEnsemble;
+    const ensembleByComponent = new Map();
+    for (const comp of ensembleComponents) {
+      if (!Number.isFinite(Number(comp?.component))) continue;
+      ensembleByComponent.set(Number(comp.component), comp);
+    }
+
+    for (let component = 0; component < componentCount; component++) {
+      const scalarSeries = [];
+      for (const item of matrixSeriesList) {
+        const n = Math.min(item.time.length, item.values.length);
+        const y = [];
+        const x = [];
+        for (let i = 0; i < n; i++) {
+          if (!Array.isArray(item.values[i]) || item.values[i].length <= component) continue;
+          x.push(item.time[i]);
+          y.push(item.values[i][component]);
+        }
+        if (x.length) scalarSeries.push({ traj_id: item.traj_id, time: x, value: y });
+      }
+      const ensembleComp = ensembleByComponent.get(component);
+      if (!scalarSeries.length && !ensembleComp) continue;
+      const color = stateColor(component);
+      let label = componentLabel(componentLabels, component);
+      if (
+        (!Array.isArray(componentLabels) || component < 0 || component >= componentLabels.length)
+        && typeof ensembleComp?.label === 'string'
+        && ensembleComp.label.trim()
+      ) {
+        label = ensembleComp.label.trim();
+      }
+
+      if (drawTraces) {
+        for (const series of scalarSeries) {
+          const trajLabel = trajHoverLabel(series.traj_id);
           figData.push({
-            x: q.time,
-            y: q.q75,
+            x: series.time,
+            y: series.value,
             type: 'scatter',
             mode: 'lines',
-            line: { color: color, width: 0 },
-            name: `|c|^2 component ${component} q75`,
+            line: { color: color, width: 1 },
+            opacity: 0.25,
+            name: `${rawKey} ${label} traj ${series.traj_id}`,
             showlegend: false,
-            hoverinfo: 'skip'
-          });
-          figData.push({
-            x: q.time,
-            y: q.q25,
-            type: 'scatter',
-            mode: 'lines',
-            fill: 'tonexty',
-            fillcolor: 'rgba(0,0,0,0.08)',
-            line: { color: color, width: 0 },
-            name: `|c|^2 component ${component} q25-q75`,
-            showlegend: true,
-            hovertemplate: 't=%{x:.4f}<br>q25=%{y:.6f}<extra></extra>'
-          });
-          figData.push({
-            x: q.time,
-            y: q.q50,
-            type: 'scatter',
-            mode: 'lines',
-            line: { color: color, width: 2.5 },
-            name: `|c|^2 component ${component} median`,
-            showlegend: true,
-            hovertemplate: 't=%{x:.4f}<br>median=%{y:.6f}<extra></extra>'
+            hovertemplate: `${trajLabel}<br>t=%{x:.4f}<br>y=%{y:.6f}<extra></extra>`
           });
         }
+      }
+
+      if (state.showEnsemble) {
+        addEnsembleBandAndCenter(figData, ensembleComp, {
+          namePrefix: `${rawKey} ${label}`,
+          statMode,
+          lineColor: color,
+          fillColor: 'rgba(0,0,0,0.08)',
+        });
       }
     }
   }
@@ -483,8 +562,11 @@
     const panelState = state.panels[panelIndex];
     if (!panelState) return;
 
-    const observable = panelState.observable;
-    const needed = requiredIndexCount(observable);
+    const panelObservable = String(panelState.observable || '');
+    const observable = canonicalObservable(panelObservable);
+    const rawAlias = rawAliasFromObservable(panelObservable);
+    const panelStatMode = normalizedPanelStatMode(panelState);
+    const needed = requiredIndexCount(panelObservable);
     const plotId = `plot-${panelIndex}`;
 
     let indices = [];
@@ -501,7 +583,8 @@
       panelState.indices = [];
     }
 
-    if (state.selectedTraj === 'all') {
+    const drawAllTraces = state.selectedTraj === 'all' && (state.showAllTraces || !state.showEnsemble);
+    if (drawAllTraces && observable !== 'raw_key') {
       try {
         setGlobalStatus(`Computing All (Panel ${panelIndex + 1}): 0/0`);
         const result = await dataLoader.ensureAllForPanelRequirements(
@@ -531,60 +614,263 @@
 
     const fetchAllowed = state.selectedTraj !== 'all';
     const figData = [];
-    const yLabel = panelYLabel(observable);
+    let yLabel = panelYLabel(observable);
     let title = observable;
-    if (needed > 0) {
+    const rawKey = observable === 'raw_key' ? resolveRawKeyForPanel(panelState, state.rawKeyAliases) : '';
+    const rawName = String(rawAlias || rawKey || 'raw_key').trim();
+    if (observable === 'raw_key') {
+      if (rawAlias) {
+        title = rawKey ? `${rawAlias} (raw_key: ${rawKey})` : `${rawAlias} (raw key missing)`;
+        yLabel = rawAlias;
+      } else {
+        title = rawKey ? `raw_key: ${rawKey}` : 'raw_key';
+        yLabel = rawKey || 'raw_key';
+      }
+    } else if (needed > 0) {
       title = `${observable} (${indices.join('-')})`;
     }
 
     try {
-      if (observable === 'state') {
-        const stateSeries = [];
-        for (const trajId of selectedIds) {
-          const series = await getScalarSeries(trajId, 'state', [], fetchAllowed);
-          if (!series) continue;
-          stateSeries.push({ traj_id: trajId, time: series.time, value: series.value });
-        }
-
-        if (!stateSeries.length) {
-          panelMessage(panelIndex, 'No state data for selection.');
+      if (observable === 'raw_key') {
+        if (!rawKey) {
+          if (rawAlias) {
+            panelMessage(panelIndex, `Raw key alias '${rawAlias}' is not mapped. Re-add it from PKL Key Inspector.`);
+          } else {
+            panelMessage(panelIndex, 'No raw key set. Use PKL Key Inspector and click "Add to panel".');
+          }
           purgePlot(plotId);
           return;
         }
 
         if (state.selectedTraj === 'all') {
           const drawTraces = state.showAllTraces || !state.showEnsemble;
+          const rawScalarSeries = [];
+          const rawMatrixSeries = [];
+          let expectedKind = '';
+          let allModeComponentLabels = null;
+          let allModeLabelsMismatch = false;
+          let allModeSawMissingLabels = false;
+          let ensembleRecord = null;
+
           if (drawTraces) {
-            for (const series of stateSeries) {
-              const trajLabel = trajHoverLabel(series.traj_id);
-              figData.push({
-                x: series.time,
-                y: series.value,
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: 'rgba(214,39,40,0.28)', width: 1.1, shape: 'hv' },
-                name: `state traj ${series.traj_id}`,
-                showlegend: false,
-                hovertemplate: `${trajLabel}<br>t=%{x:.4f}<br>state=%{y:.0f}<extra></extra>`
-              });
+            let done = 0;
+            const total = selectedIds.length;
+            setGlobalStatus(`Computing All (Panel ${panelIndex + 1}): 0/${total}`);
+
+            for (const trajId of selectedIds) {
+              const series = await getRawKeySeriesRecord(trajId, rawKey, true);
+              done += 1;
+              setGlobalStatus(`Computing All (Panel ${panelIndex + 1}): ${done}/${total}`);
+              if (!series) continue;
+              if (!expectedKind) {
+                expectedKind = series.series_kind;
+              } else if (series.series_kind !== expectedKind) {
+                throw new Error(
+                  (
+                    `Raw key '${rawKey}' has mixed series kinds across trajectories `
+                    + '(scalar and matrix), which is not supported in All mode.'
+                  )
+                );
+              }
+
+              if (series.series_kind === 'matrix') {
+                const labels = Array.isArray(series.component_labels) ? series.component_labels : null;
+                if (labels && !allModeComponentLabels) {
+                  allModeComponentLabels = labels.slice();
+                } else if (labels && allModeComponentLabels) {
+                  if (
+                    labels.length !== allModeComponentLabels.length
+                    || labels.some((label, idx) => String(label) !== String(allModeComponentLabels[idx]))
+                  ) {
+                    allModeLabelsMismatch = true;
+                  }
+                } else if (!labels) {
+                  allModeSawMissingLabels = true;
+                }
+                rawMatrixSeries.push({ traj_id: trajId, time: series.time, values: series.values });
+              } else {
+                rawScalarSeries.push({ traj_id: trajId, time: series.time, value: series.value });
+              }
+            }
+            setGlobalStatus(`All auto compute complete (Panel ${panelIndex + 1}): ${done}/${total}`);
+          }
+
+          if (state.showEnsemble) {
+            ensembleRecord = await getEnsembleSeriesRecord('raw_key', [], rawKey, panelStatMode, true);
+            const hasComponents = Array.isArray(ensembleRecord?.component_series) && ensembleRecord.component_series.length > 0;
+            if (!hasComponents) {
+              panelMessage(panelIndex, `No raw key ensemble data found for '${rawKey}'.`);
+              purgePlot(plotId);
+              return;
             }
           }
-          if (state.showEnsemble) {
-            const meanSeries = computeMeanSeries(stateSeries);
-            if (meanSeries.time.length) {
-              figData.push({
-                x: meanSeries.time,
-                y: meanSeries.mean,
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: '#d62728', width: 2.5, shape: 'hv' },
-                name: 'state mean (all trajectories)',
-                showlegend: true,
-                hovertemplate: 't=%{x:.4f}<br>mean state=%{y:.3f}<extra></extra>'
+
+          if (drawTraces) {
+            if (!expectedKind) {
+              panelMessage(panelIndex, `No raw key data found for '${rawKey}'.`);
+              purgePlot(plotId);
+              return;
+            }
+
+            if (expectedKind === 'matrix') {
+              if (!rawMatrixSeries.length) {
+                panelMessage(panelIndex, `No raw key matrix data found for '${rawKey}'.`);
+                purgePlot(plotId);
+                return;
+              }
+              if (allModeSawMissingLabels && allModeComponentLabels) {
+                allModeLabelsMismatch = true;
+              }
+              if (allModeLabelsMismatch) {
+                allModeComponentLabels = null;
+                console.warn(
+                  `Raw key '${rawKey}' has inconsistent component labels across trajectories; fallback to index labels.`
+                );
+              }
+              addAllModeRawKeyMatrix(
+                figData,
+                rawMatrixSeries,
+                rawName,
+                allModeComponentLabels,
+                ensembleRecord,
+                panelStatMode
+              );
+              if (!figData.length) {
+                panelMessage(panelIndex, `No raw key components available for '${rawKey}'.`);
+                purgePlot(plotId);
+                return;
+              }
+            } else {
+              if (!rawScalarSeries.length) {
+                panelMessage(panelIndex, `No raw key scalar data found for '${rawKey}'.`);
+                purgePlot(plotId);
+                return;
+              }
+              addAllModeScalar(figData, rawScalarSeries, rawName, '#1f77b4', ensembleRecord, panelStatMode);
+            }
+          } else {
+            const componentSeries = Array.isArray(ensembleRecord?.component_series)
+              ? ensembleRecord.component_series
+              : [];
+            if (!componentSeries.length) {
+              panelMessage(panelIndex, `No raw key ensemble data found for '${rawKey}'.`);
+              purgePlot(plotId);
+              return;
+            }
+            if (componentSeries.length === 1) {
+              addAllModeScalar(figData, [], rawName, '#1f77b4', ensembleRecord, panelStatMode);
+            } else {
+              const labels = componentSeries.map((series, idx) => {
+                const text = String(series?.label || '').trim();
+                return text || `component ${idx}`;
               });
+              addAllModeRawKeyMatrix(figData, [], rawName, labels, ensembleRecord, panelStatMode);
             }
           }
         } else {
+          const series = await getRawKeySeriesRecord(selectedIds[0], rawKey, true);
+          if (!series) {
+            panelMessage(panelIndex, `No raw key data found for '${rawKey}'.`);
+            purgePlot(plotId);
+            return;
+          }
+
+          if (series.series_kind === 'matrix') {
+            const labels = Array.isArray(series.component_labels) ? series.component_labels : null;
+            const nComponents = Number(series.n_components) > 0
+              ? Number(series.n_components)
+              : (labels && labels.length ? labels.length : (Array.isArray(series.values[0]) ? series.values[0].length : 0));
+            if (!nComponents) {
+              panelMessage(panelIndex, `No raw key components available for '${rawKey}'.`);
+              purgePlot(plotId);
+              return;
+            }
+
+            for (let component = 0; component < nComponents; component++) {
+              const n = Math.min(series.time.length, series.values.length);
+              const x = [];
+              const y = [];
+              for (let i = 0; i < n; i++) {
+                if (!Array.isArray(series.values[i]) || series.values[i].length <= component) continue;
+                x.push(series.time[i]);
+                y.push(series.values[i][component]);
+              }
+              if (!x.length) continue;
+              const label = componentLabel(labels, component);
+              figData.push({
+                x: x,
+                y: y,
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: stateColor(component), width: 2 },
+                name: `${rawName} ${label}`,
+                showlegend: true,
+                hovertemplate: 't=%{x:.4f}<br>y=%{y:.6f}<extra></extra>'
+              });
+            }
+
+            if (!figData.length) {
+              panelMessage(panelIndex, `No raw key components available for '${rawKey}'.`);
+              purgePlot(plotId);
+              return;
+            }
+          } else {
+            figData.push({
+              x: series.time,
+              y: series.value,
+              type: 'scatter',
+              mode: 'lines',
+              line: { color: '#1f77b4', width: 2 },
+              name: `${rawName} traj ${selectedIds[0]}`,
+              showlegend: true,
+              hovertemplate: 't=%{x:.4f}<br>y=%{y:.6f}<extra></extra>'
+            });
+          }
+        }
+      } else if (observable === 'state') {
+        if (state.selectedTraj === 'all') {
+          const drawTraces = state.showAllTraces || !state.showEnsemble;
+          const stateSeries = [];
+          let ensembleRecord = null;
+          if (drawTraces) {
+            for (const trajId of selectedIds) {
+              const series = await getScalarSeries(trajId, 'state', [], fetchAllowed);
+              if (!series) continue;
+              stateSeries.push({ traj_id: trajId, time: series.time, value: series.value });
+            }
+          }
+          if (state.showEnsemble) {
+            ensembleRecord = await getEnsembleSeriesRecord('state', [], '', panelStatMode, true);
+            const hasComponents = Array.isArray(ensembleRecord?.component_series)
+              && ensembleRecord.component_series.length > 0;
+            if (!hasComponents) {
+              panelMessage(panelIndex, 'No state ensemble data for selection.');
+              purgePlot(plotId);
+              return;
+            }
+          }
+          if (!stateSeries.length && !state.showEnsemble) {
+            panelMessage(panelIndex, 'No state data for selection.');
+            purgePlot(plotId);
+            return;
+          }
+          addAllModeScalar(figData, stateSeries, 'state', '#d62728', ensembleRecord, panelStatMode, {
+            lineShape: 'hv',
+            fillColor: 'rgba(214,39,40,0.18)',
+            centerHoverLabel: 'state'
+          });
+        } else {
+          const stateSeries = [];
+          for (const trajId of selectedIds) {
+            const series = await getScalarSeries(trajId, 'state', [], fetchAllowed);
+            if (!series) continue;
+            stateSeries.push({ traj_id: trajId, time: series.time, value: series.value });
+          }
+          if (!stateSeries.length) {
+            panelMessage(panelIndex, 'No state data for selection.');
+            purgePlot(plotId);
+            return;
+          }
           const series = stateSeries[0];
           figData.push({
             x: series.time,
@@ -599,19 +885,37 @@
         }
       } else if (observable === 'eig') {
         if (state.selectedTraj === 'all') {
+          const drawTraces = state.showAllTraces || !state.showEnsemble;
           const eigSeriesList = [];
-          for (const trajId of selectedIds) {
-            const series = await getMatrixSeries(trajId, 'eig', [], fetchAllowed);
-            if (!series) continue;
-            eigSeriesList.push({ traj_id: trajId, time: series.time, values: series.values });
+          let ensembleRecord = null;
+          if (drawTraces) {
+            for (const trajId of selectedIds) {
+              const series = await getMatrixSeries(trajId, 'eig', [], fetchAllowed);
+              if (!series) continue;
+              eigSeriesList.push({ traj_id: trajId, time: series.time, values: series.values });
+            }
           }
-
-          if (!eigSeriesList.length) {
+          if (state.showEnsemble) {
+            ensembleRecord = await getEnsembleSeriesRecord('eig', [], '', panelStatMode, true);
+            const hasComponents = Array.isArray(ensembleRecord?.component_series)
+              && ensembleRecord.component_series.length > 0;
+            if (!hasComponents) {
+              panelMessage(panelIndex, 'No eig ensemble data for selected trajectory set.');
+              purgePlot(plotId);
+              return;
+            }
+          }
+          if (!eigSeriesList.length && !state.showEnsemble) {
             panelMessage(panelIndex, 'No eig data for selected trajectory set.');
             purgePlot(plotId);
             return;
           }
-          addAllModeEig(figData, eigSeriesList);
+          addAllModeEig(figData, eigSeriesList, ensembleRecord, panelStatMode);
+          if (!figData.length) {
+            panelMessage(panelIndex, 'No eig components available for selected trajectory set.');
+            purgePlot(plotId);
+            return;
+          }
         } else {
           const series = await getMatrixSeries(selectedIds[0], 'eig', [], true);
           if (!series || !series.values.length) {
@@ -643,19 +947,37 @@
         }
       } else if (observable === '|c|^2') {
         if (state.selectedTraj === 'all') {
+          const drawTraces = state.showAllTraces || !state.showEnsemble;
           const cProbSeriesList = [];
-          for (const trajId of selectedIds) {
-            const series = await getMatrixSeries(trajId, '|c|^2', [], fetchAllowed);
-            if (!series) continue;
-            cProbSeriesList.push({ traj_id: trajId, time: series.time, values: series.values });
+          let ensembleRecord = null;
+          if (drawTraces) {
+            for (const trajId of selectedIds) {
+              const series = await getMatrixSeries(trajId, '|c|^2', [], fetchAllowed);
+              if (!series) continue;
+              cProbSeriesList.push({ traj_id: trajId, time: series.time, values: series.values });
+            }
           }
-
-          if (!cProbSeriesList.length) {
+          if (state.showEnsemble) {
+            ensembleRecord = await getEnsembleSeriesRecord('|c|^2', [], '', panelStatMode, true);
+            const hasComponents = Array.isArray(ensembleRecord?.component_series)
+              && ensembleRecord.component_series.length > 0;
+            if (!hasComponents) {
+              panelMessage(panelIndex, 'No |c|^2 ensemble data for selected trajectory set.');
+              purgePlot(plotId);
+              return;
+            }
+          }
+          if (!cProbSeriesList.length && !state.showEnsemble) {
             panelMessage(panelIndex, 'No |c|^2 data for selected trajectory set.');
             purgePlot(plotId);
             return;
           }
-          addAllModeCProb(figData, cProbSeriesList);
+          addAllModeCProb(figData, cProbSeriesList, ensembleRecord, panelStatMode);
+          if (!figData.length) {
+            panelMessage(panelIndex, 'No |c|^2 components available for selected trajectory set.');
+            purgePlot(plotId);
+            return;
+          }
         } else {
           const series = await getMatrixSeries(selectedIds[0], '|c|^2', [], true);
           if (!series || !series.values.length) {
@@ -700,21 +1022,40 @@
           }
         }
       } else {
+        const drawTraces = state.selectedTraj !== 'all' || state.showAllTraces || !state.showEnsemble;
         const scalarSeries = [];
-        for (const trajId of selectedIds) {
-          const series = await getScalarSeries(trajId, observable, indices, fetchAllowed);
-          if (!series) continue;
-          scalarSeries.push({ traj_id: trajId, time: series.time, value: series.value });
+        if (drawTraces) {
+          for (const trajId of selectedIds) {
+            const series = await getScalarSeries(trajId, observable, indices, fetchAllowed);
+            if (!series) continue;
+            scalarSeries.push({ traj_id: trajId, time: series.time, value: series.value });
+          }
         }
 
-        if (!scalarSeries.length) {
+        if (!scalarSeries.length && !(state.selectedTraj === 'all' && state.showEnsemble)) {
           panelMessage(panelIndex, `No ${observable} data for selection.`);
           purgePlot(plotId);
           return;
         }
 
         if (state.selectedTraj === 'all') {
-          addAllModeScalar(figData, scalarSeries, observable, '#1f77b4');
+          let ensembleRecord = null;
+          if (state.showEnsemble) {
+            ensembleRecord = await getEnsembleSeriesRecord(observable, indices, '', panelStatMode, true);
+            const hasComponents = Array.isArray(ensembleRecord?.component_series)
+              && ensembleRecord.component_series.length > 0;
+            if (!hasComponents) {
+              panelMessage(panelIndex, `No ${observable} ensemble data for selection.`);
+              purgePlot(plotId);
+              return;
+            }
+          }
+          addAllModeScalar(figData, scalarSeries, observable, '#1f77b4', ensembleRecord, panelStatMode);
+          if (!figData.length) {
+            panelMessage(panelIndex, `No ${observable} data for selection.`);
+            purgePlot(plotId);
+            return;
+          }
         } else {
           const series = scalarSeries[0];
           figData.push({

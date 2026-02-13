@@ -61,6 +61,18 @@
       if (!state.currentTrajId || !state.xyzFrames.length) return;
       viewer.renderFrame(state.currentFrame);
     });
+
+    bind(dom.atomSizeSlider, 'input', () => {
+      shared.dispatch(shared.actions.setAtomSizeScale(dom.atomSizeSlider?.value));
+      if (!state.currentTrajId || !state.xyzFrames.length) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+
+    bind(dom.bondRadiusSlider, 'input', () => {
+      shared.dispatch(shared.actions.setBondRadiusScale(dom.bondRadiusSlider?.value));
+      if (!state.currentTrajId || !state.xyzFrames.length) return;
+      viewer.renderFrame(state.currentFrame);
+    });
   }
 
   // Measurement-type switching and per-track controls.
@@ -90,6 +102,91 @@
     bind(dom.cancelGifExportBtn, 'click', () => io.cancelGifExport());
   }
 
+  function bindNacControls() {
+    bind(dom.showNacVectorsCheckbox, 'change', async () => {
+      const enabled = !!dom.showNacVectorsCheckbox?.checked;
+      await io.setNacVectorsVisible(enabled);
+    });
+
+    bind(dom.showDeVectorsCheckbox, 'change', async () => {
+      const enabled = !!dom.showDeVectorsCheckbox?.checked;
+      await io.setDeVectorsVisible(enabled);
+    });
+
+    bind(dom.showDeNacVectorsCheckbox, 'change', async () => {
+      const enabled = !!dom.showDeNacVectorsCheckbox?.checked;
+      await io.setDeNacVectorsVisible(enabled);
+    });
+
+    bind(dom.nacStateISelect, 'change', async () => {
+      await io.updateNacStatePairFromControls('i');
+    });
+
+    bind(dom.nacStateJSelect, 'change', async () => {
+      await io.updateNacStatePairFromControls('j');
+    });
+
+    bind(dom.addDePairBtn, 'click', async () => {
+      await io.addDeRow();
+    });
+
+    bind(dom.dePairRowsContainer, 'change', async (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      if (target.classList.contains('de-row-enabled')) {
+        const rowId = target.getAttribute('data-de-row-id');
+        if (rowId !== null) {
+          await io.toggleDeRowEnabled(rowId, !!target.checked);
+        }
+        return;
+      }
+
+      if (target.classList.contains('de-row-state-i')) {
+        const rowId = target.getAttribute('data-de-row-id');
+        if (rowId !== null) {
+          await io.updateDeRowPair(rowId, 'i');
+        }
+        return;
+      }
+
+      if (target.classList.contains('de-row-state-j')) {
+        const rowId = target.getAttribute('data-de-row-id');
+        if (rowId !== null) {
+          await io.updateDeRowPair(rowId, 'j');
+        }
+      }
+    });
+
+    bind(dom.dePairRowsContainer, 'click', async (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const removeBtn = target.closest('.de-row-remove-btn');
+      if (!removeBtn) return;
+      const rowId = removeBtn.getAttribute('data-de-row-id');
+      if (rowId === null) return;
+      await io.removeDeRow(rowId);
+    });
+
+    bind(dom.nacScaleSlider, 'input', () => {
+      shared.dispatch(shared.actions.setNacUserScale(dom.nacScaleSlider?.value));
+      if (!state.currentTrajId || !state.xyzFrames.length || !state.showNacVectors) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+
+    bind(dom.deScaleSlider, 'input', () => {
+      shared.dispatch(shared.actions.setDeUserScale(dom.deScaleSlider?.value));
+      if (!state.currentTrajId || !state.xyzFrames.length || !state.showDeVectors) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+
+    bind(dom.deNacScaleSlider, 'input', () => {
+      shared.dispatch(shared.actions.setDeNacUserScale(dom.deNacScaleSlider?.value));
+      if (!state.currentTrajId || !state.xyzFrames.length || !state.showDeNacVectors) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+  }
+
   function bindLifecycleCleanup() {
     window.addEventListener('beforeunload', () => {
       io.cancelGifExport(false);
@@ -101,6 +198,7 @@
   function init() {
     io.setSourcePklInfo();
     shared.setDownloadButtonsEnabled(false);
+    shared.setNacControlsEnabled(false);
     measurement.updateMeasurementControlState();
 
     if (typeof $3Dmol === 'undefined') {
@@ -120,6 +218,7 @@
     bindPlaybackControls();
     bindMeasurementControls();
     bindExportControls();
+    bindNacControls();
     bindLifecycleCleanup();
 
     if (!trajIds.length) {

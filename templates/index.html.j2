@@ -18,7 +18,7 @@
           <select id="global-traj"></select>
         </div>
         <div class="control-group">
-          <label><input type="checkbox" id="global-ensemble" /> Show ensemble (median + q25/q75)</label>
+          <label><input type="checkbox" id="global-ensemble" /> Show ensemble</label>
         </div>
         <div class="control-group">
           <label><input type="checkbox" id="global-traces" /> Show all traces in All mode</label>
@@ -30,6 +30,26 @@
           <button class="btn" id="refresh-pkl-btn" type="button">Refresh PKL</button>
         </div>
       </div>
+
+      <details id="key-inspector" class="inspector">
+        <summary>PKL Key Inspector</summary>
+        <div class="inspector-body">
+          <label for="key-inspector-input">Custom keys (one per line or comma-separated)</label>
+          <textarea
+            id="key-inspector-input"
+            rows="5"
+            placeholder="_.0.record.time
+model.atoms
+_.0.record.c"
+          ></textarea>
+          <div class="inspector-actions">
+            <button class="btn" id="key-inspector-run" type="button">Inspect</button>
+            <button class="btn" id="key-inspector-clear" type="button">Clear</button>
+          </div>
+          <div id="key-inspector-status" class="inspector-status"></div>
+          <div id="key-inspector-results" class="inspector-results"></div>
+        </div>
+      </details>
     </div>
 
     <div id="dashboard" class="dashboard"></div>
