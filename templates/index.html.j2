@@ -48,6 +48,50 @@ _.0.record.c"
           </div>
           <div id="key-inspector-status" class="inspector-status"></div>
           <div id="key-inspector-results" class="inspector-results"></div>
+
+          <div class="inspector-divider"></div>
+
+          <label for="expr-inspector-input">Expression (supports tadd/tminus/tprod/tdiv/tneg/tinv/tabs/reduce/cmean/csum)</label>
+          <textarea
+            id="expr-inspector-input"
+            rows="4"
+            placeholder="tadd{_.0.record.Etot,-5}
+tdiv{_.0.record.Etot,cmean{_.0.record.A}}
+reduce{tabs{_.0.record.TWFpop},[-1]}"
+          ></textarea>
+          <label for="expr-inspector-label">Expression label (optional)</label>
+          <input
+            id="expr-inspector-label"
+            type="text"
+            placeholder="Etot minus 5"
+          />
+          <div class="inspector-actions">
+            <button class="btn" id="expr-inspector-run" type="button">Run Expression</button>
+            <button class="btn" id="expr-inspector-add" type="button">Add Expression Panel</button>
+            <button class="btn" id="expr-inspector-clear" type="button">Clear</button>
+          </div>
+          <div id="expr-inspector-status" class="inspector-status"></div>
+          <div id="expr-inspector-results" class="inspector-results"></div>
+        </div>
+      </details>
+
+      <details id="notebook-workspace" class="inspector">
+        <summary>Notebook Workspace</summary>
+        <div class="inspector-body notebook-body">
+          <div class="notebook-toolbar">
+            <button class="btn" id="notebook-add-cell" type="button">Add Cell</button>
+            <button class="btn" id="notebook-run-all-cells-current" type="button">Run All Cells (Current)</button>
+            <button class="btn" id="notebook-run-all-cells-all" type="button">Run All Cells (All Traj)</button>
+            <button class="btn" id="notebook-refresh-published" type="button">Refresh Published</button>
+            <button class="btn danger" id="notebook-reset" type="button">Reset Kernel</button>
+          </div>
+          <div id="notebook-status" class="inspector-status"></div>
+          <div id="notebook-cells" class="notebook-cells"></div>
+          <div class="inspector-divider"></div>
+          <div class="inspector-key-actions-title">Published Variables</div>
+          <div id="notebook-published-list" class="inspector-results"></div>
+          <div class="inspector-key-actions-title">Preview</div>
+          <div id="notebook-preview" class="inspector-results"></div>
         </div>
       </details>
     </div>
@@ -64,6 +108,7 @@ _.0.record.c"
   <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
   <script src="assets/dashboard/dashboard_state.js?v={{ static_version }}"></script>
   <script src="assets/dashboard/dashboard_data_loader.js?v={{ static_version }}"></script>
+  <script src="assets/dashboard/dashboard_notebook.js?v={{ static_version }}"></script>
   <script src="assets/math/dashboard_math3d.js?v={{ static_version }}"></script>
   <script src="assets/dashboard/dashboard_plot.js?v={{ static_version }}"></script>
   <script src="assets/dashboard/dashboard_ui.js?v={{ static_version }}"></script>

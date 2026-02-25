@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from threading import Lock
 import time
 from typing import Any, Callable
@@ -14,12 +15,26 @@ from ..renderer import STATIC_DIR, _json_html_safe, _render_html
 from .cache import SeriesLRUCache
 from .compute import aggregate_scalar_series_by_mode, compute_observable_series
 from .dataset_store import DatasetStore
+from .expression import ExpressionEvaluationError, evaluate_expression_payload
 from .models import (
     BootstrapResponse,
+    ExpressionDatasetRequest,
+    ExpressionDatasetResponse,
+    ExpressionSeriesRequest,
+    ExpressionSeriesResponse,
     EnsembleSeriesRequest,
     EnsembleSeriesResponse,
     InspectKeysRequest,
     InspectKeysResponse,
+    NotebookEnsembleRequest,
+    NotebookEnsembleResponse,
+    NotebookExecuteRequest,
+    NotebookExecuteResponse,
+    NotebookPublishedListResponse,
+    NotebookSeriesRequest,
+    NotebookSeriesResponse,
+    NotebookSessionResetResponse,
+    NotebookSessionResponse,
     MoleculeDeNacResponse,
     MoleculeDeResponse,
     HealthzResponse,
@@ -32,6 +47,16 @@ from .models import (
     RefreshDatasetResponse,
     SeriesRequest,
     SeriesResponse,
+)
+from .notebook_runtime import (
+    NotebookRuntimeError,
+    NotebookSessionManager,
+    NotebookSessionNotFoundError,
+    execute_notebook_code,
+    get_published_series_payload,
+    list_published_variable_summaries,
+    snapshot_published_variable_records,
+    validate_session_revision,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,6 +185,50 @@ def _build_ensemble_component_payload(
     }
 
 
+def _json_safe_float_list(values: list[float] | None) -> list[float | None] | None:
+    if values is None:
+        return None
+    out: list[float | None] = []
+    for item in values:
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            out.append(None)
+            continue
+        out.append(number if math.isfinite(number) else None)
+    return out
+
+
+def _json_safe_matrix(values: list[list[float]] | None) -> list[list[float | None]] | None:
+    if values is None:
+        return None
+    out: list[list[float | None]] = []
+    for row in values:
+        out.append(_json_safe_float_list(list(row)) or [])
+    return out
+
+
+def _require_notebook_session(
+    *,
+    notebook_sessions: NotebookSessionManager,
+    session_id: str,
+    dataset_revision: int,
+) -> Any:
+    try:
+        session = notebook_sessions.get_session(session_id)
+    except NotebookSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to load notebook session: {exc}") from exc
+
+    try:
+        validate_session_revision(session, dataset_revision)
+    except NotebookRuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return session
+
+
 def _validate_request(
     *,
     observable: str,
@@ -215,6 +284,7 @@ def create_app(
     static_version = str(int(time.time()))
     if mol3d_cache is None:
         mol3d_cache = cache
+    notebook_sessions = NotebookSessionManager()
 
     runtime_lock = Lock()
     runtime_state: dict[str, Any] = {
@@ -283,6 +353,114 @@ def create_app(
     def get_bootstrap() -> BootstrapResponse:
         _, bootstrap, _ = _get_runtime_snapshot()
         return BootstrapResponse(**bootstrap)
+
+    @app.post(f"{api_base}/notebook/session", response_model=NotebookSessionResponse)
+    def create_notebook_session() -> NotebookSessionResponse:
+        current_store, _, dataset_revision = _get_runtime_snapshot()
+        source_pkl = str(current_store.meta.get("source_pkl") or current_store.input_path)
+        session = notebook_sessions.create_session(
+            dataset_revision=int(dataset_revision),
+            source_pkl=source_pkl,
+            traj_ids=[str(v) for v in current_store.traj_ids],
+        )
+        return NotebookSessionResponse(
+            session_id=str(session.session_id),
+            dataset_revision=int(dataset_revision),
+            source_pkl=source_pkl,
+            traj_ids=[str(v) for v in current_store.traj_ids],
+            session_version=int(session.session_version),
+        )
+
+    @app.delete(f"{api_base}/notebook/session/{{session_id}}")
+    def delete_notebook_session(session_id: str) -> dict[str, Any]:
+        deleted = notebook_sessions.delete_session(session_id)
+        return {"status": "ok", "session_id": str(session_id), "deleted": bool(deleted)}
+
+    @app.post(f"{api_base}/notebook/session/{{session_id}}/reset", response_model=NotebookSessionResetResponse)
+    def reset_notebook_session(session_id: str) -> NotebookSessionResetResponse:
+        _, _, dataset_revision = _get_runtime_snapshot()
+        session = _require_notebook_session(
+            notebook_sessions=notebook_sessions,
+            session_id=session_id,
+            dataset_revision=dataset_revision,
+        )
+        with session.lock:
+            session.reset()
+            session_version = int(session.session_version)
+        return NotebookSessionResetResponse(
+            status="ok",
+            session_id=str(session.session_id),
+            dataset_revision=int(dataset_revision),
+            session_version=session_version,
+        )
+
+    @app.get(
+        f"{api_base}/notebook/session/{{session_id}}/published",
+        response_model=NotebookPublishedListResponse,
+    )
+    def list_notebook_published(session_id: str) -> NotebookPublishedListResponse:
+        _, _, dataset_revision = _get_runtime_snapshot()
+        session = _require_notebook_session(
+            notebook_sessions=notebook_sessions,
+            session_id=session_id,
+            dataset_revision=dataset_revision,
+        )
+        variables = list_published_variable_summaries(session)
+        return NotebookPublishedListResponse(
+            session_id=str(session.session_id),
+            session_version=int(session.session_version),
+            variables=variables,
+        )
+
+    @app.post(
+        f"{api_base}/notebook/session/{{session_id}}/execute",
+        response_model=NotebookExecuteResponse,
+    )
+    def execute_notebook_session(session_id: str, req: NotebookExecuteRequest) -> NotebookExecuteResponse:
+        mode = str(req.mode)
+        code = str(req.code or "")
+        traj_id = None if req.traj_id is None else str(req.traj_id).strip()
+        if not code.strip():
+            raise HTTPException(status_code=422, detail="code must be a non-empty string.")
+        if mode == "current" and not traj_id:
+            raise HTTPException(status_code=422, detail="mode='current' requires traj_id.")
+        if mode not in {"current", "all"}:
+            raise HTTPException(status_code=422, detail=f"Unsupported execute mode: {mode}")
+
+        current_store, _, dataset_revision = _get_runtime_snapshot()
+        session = _require_notebook_session(
+            notebook_sessions=notebook_sessions,
+            session_id=session_id,
+            dataset_revision=dataset_revision,
+        )
+
+        try:
+            result = execute_notebook_code(
+                session=session,
+                store=current_store,
+                code=code,
+                mode=mode,  # type: ignore[arg-type]
+                traj_id=traj_id,
+            )
+        except NotebookRuntimeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to execute notebook code: {exc}") from exc
+
+        return NotebookExecuteResponse(
+            ok=bool(result.ok),
+            session_id=str(session.session_id),
+            mode=mode,  # type: ignore[arg-type]
+            traj_id=(None if mode == "all" else traj_id),
+            stdout=str(result.stdout),
+            stderr=str(result.stderr),
+            error_message=(None if result.error_message is None else str(result.error_message)),
+            traceback=(None if result.traceback is None else str(result.traceback)),
+            published_updates=[str(v) for v in result.published_updates],
+            run_ms=float(result.run_ms),
+            session_version=int(result.session_version),
+            dataset_revision=int(dataset_revision),
+        )
 
     @app.post(f"{api_base}/inspect-keys", response_model=InspectKeysResponse)
     def inspect_keys(req: InspectKeysRequest) -> InspectKeysResponse:
@@ -371,6 +549,290 @@ def create_app(
         out = dict(response_payload)
         out["cached"] = False
         return RawKeySeriesResponse(**out)
+
+    @app.post(f"{api_base}/expression-series", response_model=ExpressionSeriesResponse)
+    def get_expression_series(req: ExpressionSeriesRequest) -> ExpressionSeriesResponse:
+        traj_id = str(req.traj_id)
+        expression = str(req.expression).strip()
+        if not expression:
+            raise HTTPException(status_code=422, detail="expression must be a non-empty string.")
+
+        cache_key = ("expression_series", traj_id, expression)
+        cached_value = cache.get(cache_key)
+        if cached_value is not None:
+            payload = dict(cached_value)
+            payload["cached"] = True
+            return ExpressionSeriesResponse(**payload)
+
+        current_store, _, _ = _get_runtime_snapshot()
+        try:
+            payload = evaluate_expression_payload(
+                store=current_store,
+                expression=expression,
+                traj_id=traj_id,
+            )
+        except KeyError as exc:
+            detail = str(exc.args[0]) if exc.args else str(exc)
+            raise HTTPException(status_code=404, detail=detail) from exc
+        except (ExpressionEvaluationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to evaluate expression series: {exc}") from exc
+
+        response_payload: dict[str, Any] = {
+            "traj_id": traj_id,
+            "expression": expression,
+            "scope": str(payload.scope),
+            "series_kind": str(payload.series_kind),
+            "time": [float(v) for v in payload.time],
+            "value": _json_safe_float_list(payload.value),
+            "values": _json_safe_matrix(payload.values),
+            "n_points": int(payload.n_points),
+            "n_components": (None if payload.n_components is None else int(payload.n_components)),
+            "n_trajectories": int(payload.n_trajectories),
+            "sample_count": (None if payload.sample_count is None else [int(v) for v in payload.sample_count]),
+        }
+        cache.put(cache_key, response_payload)
+
+        out = dict(response_payload)
+        out["cached"] = False
+        return ExpressionSeriesResponse(**out)
+
+    @app.post(f"{api_base}/expression-dataset", response_model=ExpressionDatasetResponse)
+    def get_expression_dataset(req: ExpressionDatasetRequest) -> ExpressionDatasetResponse:
+        expression = str(req.expression).strip()
+        if not expression:
+            raise HTTPException(status_code=422, detail="expression must be a non-empty string.")
+
+        cache_key = ("expression_dataset", expression)
+        cached_value = cache.get(cache_key)
+        if cached_value is not None:
+            payload = dict(cached_value)
+            payload["cached"] = True
+            return ExpressionDatasetResponse(**payload)
+
+        current_store, _, _ = _get_runtime_snapshot()
+        try:
+            payload = evaluate_expression_payload(
+                store=current_store,
+                expression=expression,
+                traj_id=None,
+            )
+        except KeyError as exc:
+            detail = str(exc.args[0]) if exc.args else str(exc)
+            raise HTTPException(status_code=404, detail=detail) from exc
+        except (ExpressionEvaluationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to evaluate dataset expression: {exc}") from exc
+
+        if str(payload.scope) != "dataset":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Expression resolved to trajectory scope. Use /expression-series with a traj_id or "
+                    "wrap trajectory variables with cmean/csum."
+                ),
+            )
+
+        response_payload: dict[str, Any] = {
+            "expression": expression,
+            "scope": "dataset",
+            "series_kind": str(payload.series_kind),
+            "time": [float(v) for v in payload.time],
+            "value": _json_safe_float_list(payload.value),
+            "values": _json_safe_matrix(payload.values),
+            "n_points": int(payload.n_points),
+            "n_components": (None if payload.n_components is None else int(payload.n_components)),
+            "n_trajectories": int(payload.n_trajectories),
+            "sample_count": (None if payload.sample_count is None else [int(v) for v in payload.sample_count]),
+        }
+        cache.put(cache_key, response_payload)
+
+        out = dict(response_payload)
+        out["cached"] = False
+        return ExpressionDatasetResponse(**out)
+
+    @app.post(f"{api_base}/notebook-series", response_model=NotebookSeriesResponse)
+    def get_notebook_series(req: NotebookSeriesRequest) -> NotebookSeriesResponse:
+        session_id = str(req.session_id).strip()
+        variable = str(req.variable).strip()
+        traj_id = str(req.traj_id).strip()
+        if not session_id:
+            raise HTTPException(status_code=422, detail="session_id must be a non-empty string.")
+        if not variable:
+            raise HTTPException(status_code=422, detail="variable must be a non-empty string.")
+        if not traj_id:
+            raise HTTPException(status_code=422, detail="traj_id must be a non-empty string.")
+
+        _, _, dataset_revision = _get_runtime_snapshot()
+        session = _require_notebook_session(
+            notebook_sessions=notebook_sessions,
+            session_id=session_id,
+            dataset_revision=dataset_revision,
+        )
+
+        cache_key = ("notebook_series", session_id, int(session.session_version), variable, traj_id)
+        cached_value = cache.get(cache_key)
+        if cached_value is not None:
+            payload = dict(cached_value)
+            payload["cached"] = True
+            return NotebookSeriesResponse(**payload)
+
+        try:
+            series_payload = get_published_series_payload(session, variable, traj_id)
+        except NotebookRuntimeError as exc:
+            message = str(exc)
+            status = 404 if ("not found" in message.lower() or "no data" in message.lower()) else 422
+            raise HTTPException(status_code=status, detail=message) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to read notebook series: {exc}") from exc
+
+        response_payload: dict[str, Any] = {
+            "session_id": session_id,
+            "variable": variable,
+            "traj_id": traj_id,
+            "series_kind": str(series_payload.get("series_kind", "scalar")),
+            "time": [float(v) for v in list(series_payload.get("time", []) or [])],
+            "value": _json_safe_float_list(series_payload.get("value")),
+            "values": _json_safe_matrix(series_payload.get("values")),
+            "n_points": int(series_payload.get("n_points", 0)),
+            "n_components": (
+                None
+                if series_payload.get("n_components") is None
+                else int(series_payload.get("n_components", 0))
+            ),
+            "component_labels": (
+                [str(v) for v in list(series_payload.get("component_labels", []) or [])]
+                if series_payload.get("component_labels") is not None
+                else None
+            ),
+        }
+        cache.put(cache_key, response_payload)
+        out = dict(response_payload)
+        out["cached"] = False
+        return NotebookSeriesResponse(**out)
+
+    @app.post(f"{api_base}/notebook-ensemble", response_model=NotebookEnsembleResponse)
+    def get_notebook_ensemble(req: NotebookEnsembleRequest) -> NotebookEnsembleResponse:
+        session_id = str(req.session_id).strip()
+        variable = str(req.variable).strip()
+        stat_mode = str(req.stat_mode)
+        if not session_id:
+            raise HTTPException(status_code=422, detail="session_id must be a non-empty string.")
+        if not variable:
+            raise HTTPException(status_code=422, detail="variable must be a non-empty string.")
+
+        _, _, dataset_revision = _get_runtime_snapshot()
+        session = _require_notebook_session(
+            notebook_sessions=notebook_sessions,
+            session_id=session_id,
+            dataset_revision=dataset_revision,
+        )
+
+        cache_key = ("notebook_ensemble", session_id, int(session.session_version), variable, stat_mode)
+        cached_value = cache.get(cache_key)
+        if cached_value is not None:
+            payload = dict(cached_value)
+            payload["cached"] = True
+            return NotebookEnsembleResponse(**payload)
+
+        try:
+            _, records = snapshot_published_variable_records(session, variable)
+        except NotebookRuntimeError as exc:
+            message = str(exc)
+            status = 404 if "not found" in message.lower() else 422
+            raise HTTPException(status_code=status, detail=message) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to load notebook variable: {exc}") from exc
+
+        if not records:
+            raise HTTPException(status_code=422, detail=f"No data published for notebook variable '{variable}'.")
+
+        component_series: list[dict[str, Any]] = []
+        series_kind: str | None = None
+        component_labels: list[str] | None = None
+        labels_mismatch = False
+        scalar_series_records: list[dict[str, Any]] = []
+        matrix_series_records: list[dict[str, Any]] = []
+
+        for _, record in records:
+            current_kind = str(record.get("series_kind", "scalar"))
+            if series_kind is None:
+                series_kind = current_kind
+            elif current_kind != series_kind:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Notebook variable '{variable}' has mixed series kinds across trajectories "
+                        "(scalar and matrix), which is unsupported for ensemble statistics."
+                    ),
+                )
+
+            if current_kind == "matrix":
+                labels = record.get("component_labels")
+                if isinstance(labels, list):
+                    labels_text = [str(v) for v in labels]
+                    if component_labels is None:
+                        component_labels = labels_text
+                    elif labels_text != component_labels:
+                        labels_mismatch = True
+                elif component_labels is not None:
+                    labels_mismatch = True
+                matrix_series_records.append(record)
+            else:
+                scalar_series_records.append(record)
+
+        if series_kind is None:
+            raise HTTPException(status_code=422, detail=f"No notebook variable data found for '{variable}'.")
+
+        if series_kind == "scalar":
+            scalar_series_list = [_as_scalar_series_record(record) for record in scalar_series_records]
+            component_series.append(
+                _build_ensemble_component_payload(
+                    scalar_series_list=scalar_series_list,
+                    stat_mode=stat_mode,
+                    context_key=f"notebook:{variable}",
+                    component_index=0,
+                )
+            )
+        else:
+            if labels_mismatch:
+                component_labels = None
+            max_components = 0
+            for record in matrix_series_records:
+                n_components = int(record.get("n_components") or 0)
+                if n_components > max_components:
+                    max_components = n_components
+            for component_index in range(max_components):
+                scalar_series_list = [
+                    _matrix_component_to_scalar_series(record, component_index)
+                    for record in matrix_series_records
+                ]
+                label = None
+                if component_labels is not None and component_index < len(component_labels):
+                    label = str(component_labels[component_index])
+                component_series.append(
+                    _build_ensemble_component_payload(
+                        scalar_series_list=scalar_series_list,
+                        stat_mode=stat_mode,
+                        context_key=f"notebook:{variable}",
+                        component_index=component_index,
+                        label=label,
+                    )
+                )
+
+        response_payload: dict[str, Any] = {
+            "session_id": session_id,
+            "variable": variable,
+            "stat_mode": stat_mode,
+            "component_series": component_series,
+            "n_trajectories": len(records),
+        }
+        cache.put(cache_key, response_payload)
+        out = dict(response_payload)
+        out["cached"] = False
+        return NotebookEnsembleResponse(**out)
 
     @app.post(f"{api_base}/ensemble-series", response_model=EnsembleSeriesResponse)
     def get_ensemble_series(req: EnsembleSeriesRequest) -> EnsembleSeriesResponse:
@@ -606,17 +1068,20 @@ def create_app(
             logger.exception("Dataset activation failed.")
             raise HTTPException(status_code=500, detail=f"Failed to activate refreshed dataset: {exc}") from exc
 
+        cleared_notebook_sessions = notebook_sessions.clear()
         source_pkl = str(new_store.meta.get("source_pkl") or new_store.input_path)
         logger.info(
             (
                 "Dataset refresh succeeded. revision=%d traj_count=%d source_pkl=%s "
-                "cleared_series_cache_entries=%d cleared_mol3d_cache_entries=%d"
+                "cleared_series_cache_entries=%d cleared_mol3d_cache_entries=%d "
+                "cleared_notebook_sessions=%d"
             ),
             dataset_revision,
             len(new_store.traj_ids),
             source_pkl,
             cleared_series_cache_entries,
             cleared_mol3d_cache_entries,
+            cleared_notebook_sessions,
         )
         return RefreshDatasetResponse(
             status="ok",

@@ -19,6 +19,18 @@
     return String(rawKey || '').trim();
   }
 
+  function normalizeExpression(expression) {
+    return String(expression || '').trim();
+  }
+
+  function normalizeNotebookVariable(variable) {
+    return String(variable || '').trim();
+  }
+
+  function normalizeNotebookSessionId(sessionId) {
+    return String(sessionId || '').trim();
+  }
+
   function normalizeIndices(indices) {
     if (!Array.isArray(indices)) return [];
     const out = [];
@@ -50,6 +62,32 @@
       String(observable),
       normalizeIndices(indices).join(','),
       normalizeRawKey(rawKey),
+      normalizeEnsembleStatMode(statMode),
+    ].join('::');
+  }
+
+  function makeExpressionSeriesKey(trajId, expression) {
+    return `expr_series::${normalizeTrajId(trajId)}::${normalizeExpression(expression)}`;
+  }
+
+  function makeExpressionDatasetKey(expression) {
+    return `expr_dataset::${normalizeExpression(expression)}`;
+  }
+
+  function makeNotebookSeriesKey(sessionId, variable, trajId) {
+    return [
+      'notebook_series',
+      normalizeNotebookSessionId(sessionId),
+      normalizeNotebookVariable(variable),
+      normalizeTrajId(trajId),
+    ].join('::');
+  }
+
+  function makeNotebookEnsembleKey(sessionId, variable, statMode) {
+    return [
+      'notebook_ensemble',
+      normalizeNotebookSessionId(sessionId),
+      normalizeNotebookVariable(variable),
       normalizeEnsembleStatMode(statMode),
     ].join('::');
   }
@@ -125,6 +163,116 @@
       component_series: componentSeries,
       n_trajectories: Number.isFinite(Number(payload?.n_trajectories)) ? Number(payload.n_trajectories) : 0,
       cached: !!payload?.cached,
+    };
+  }
+
+  function normalizeSampleCount(values) {
+    if (!Array.isArray(values)) return null;
+    const out = [];
+    for (const value of values) {
+      const n = Number.parseInt(value, 10);
+      out.push(Number.isFinite(n) ? n : 0);
+    }
+    return out;
+  }
+
+  function normalizeExpressionPayload(trajId, expression, payload) {
+    const normalizedExpression = normalizeExpression(expression);
+    const scope = payload?.scope === 'trajectory' ? 'trajectory' : 'dataset';
+    const seriesKind = payload?.series_kind === 'matrix' ? 'matrix' : 'scalar';
+    const out = {
+      traj_id: trajId == null ? null : normalizeTrajId(trajId),
+      expression: normalizedExpression,
+      scope,
+      series_kind: seriesKind,
+      time: Array.isArray(payload?.time) ? payload.time : [],
+      value: null,
+      values: null,
+      n_points: Number.isFinite(Number(payload?.n_points)) ? Number(payload.n_points) : 0,
+      n_components: null,
+      n_trajectories: Number.isFinite(Number(payload?.n_trajectories)) ? Number(payload.n_trajectories) : 0,
+      sample_count: normalizeSampleCount(payload?.sample_count),
+      cached: !!payload?.cached,
+    };
+
+    if (seriesKind === 'matrix') {
+      out.values = Array.isArray(payload?.values) ? payload.values : [];
+      out.n_components = Number.isFinite(Number(payload?.n_components)) ? Number(payload.n_components) : 0;
+    } else {
+      out.value = Array.isArray(payload?.value) ? payload.value : [];
+    }
+
+    return out;
+  }
+
+  function normalizeNotebookSeriesPayload(sessionId, variable, trajId, payload) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const normalizedVariable = normalizeNotebookVariable(variable);
+    const normalizedTraj = normalizeTrajId(trajId);
+    const seriesKind = payload?.series_kind === 'matrix' ? 'matrix' : 'scalar';
+    const out = {
+      session_id: normalizedSessionId,
+      variable: normalizedVariable,
+      traj_id: normalizedTraj,
+      series_kind: seriesKind,
+      time: Array.isArray(payload?.time) ? payload.time : [],
+      value: null,
+      values: null,
+      n_points: Number.isFinite(Number(payload?.n_points)) ? Number(payload.n_points) : 0,
+      n_components: null,
+      component_labels: Array.isArray(payload?.component_labels)
+        ? payload.component_labels.map((v) => String(v))
+        : null,
+      cached: !!payload?.cached,
+    };
+
+    if (seriesKind === 'matrix') {
+      out.values = Array.isArray(payload?.values) ? payload.values : [];
+      out.n_components = Number.isFinite(Number(payload?.n_components)) ? Number(payload.n_components) : 0;
+    } else {
+      out.value = Array.isArray(payload?.value) ? payload.value : [];
+    }
+
+    return out;
+  }
+
+  function normalizeNotebookEnsemblePayload(sessionId, variable, statMode, payload) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const normalizedVariable = normalizeNotebookVariable(variable);
+    const normalizedMode = normalizeEnsembleStatMode(statMode);
+    const componentSeriesRaw = Array.isArray(payload?.component_series) ? payload.component_series : [];
+    const componentSeries = componentSeriesRaw.map((series, idx) => ({
+      component: Number.isFinite(Number(series?.component)) ? Number(series.component) : idx,
+      label: typeof series?.label === 'string' ? series.label : null,
+      time: Array.isArray(series?.time) ? series.time : [],
+      low: Array.isArray(series?.low) ? series.low : [],
+      center: Array.isArray(series?.center) ? series.center : [],
+      high: Array.isArray(series?.high) ? series.high : [],
+      sample_count: Array.isArray(series?.sample_count) ? series.sample_count : [],
+    }));
+    return {
+      session_id: normalizedSessionId,
+      variable: normalizedVariable,
+      stat_mode: normalizedMode,
+      component_series: componentSeries,
+      n_trajectories: Number.isFinite(Number(payload?.n_trajectories)) ? Number(payload.n_trajectories) : 0,
+      cached: !!payload?.cached,
+    };
+  }
+
+  function normalizeNotebookVariableSummary(item) {
+    return {
+      name: String(item?.name || ''),
+      series_kind: item?.series_kind === 'matrix' ? 'matrix' : 'scalar',
+      traj_count: Number.isFinite(Number(item?.traj_count)) ? Number(item.traj_count) : 0,
+      n_points: Number.isFinite(Number(item?.n_points)) ? Number(item.n_points) : 0,
+      n_components: Number.isFinite(Number(item?.n_components)) ? Number(item.n_components) : null,
+      component_labels: Array.isArray(item?.component_labels) ? item.component_labels.map((v) => String(v)) : null,
+      preview_traj_id: item?.preview_traj_id == null ? null : String(item.preview_traj_id),
+      dtype: String(item?.dtype || ''),
+      shape: Array.isArray(item?.shape) ? item.shape.map((v) => Number.parseInt(v, 10)).filter(Number.isFinite) : [],
+      nan_count: Number.isFinite(Number(item?.nan_count)) ? Number(item.nan_count) : 0,
+      updated_at: Number.isFinite(Number(item?.updated_at)) ? Number(item.updated_at) : 0,
     };
   }
 
@@ -220,6 +368,269 @@
       normalizedMode,
       payload
     );
+  }
+
+  async function fetchExpressionSeries(trajId, expression) {
+    const normalizedTraj = normalizeTrajId(trajId);
+    const normalizedExpression = normalizeExpression(expression);
+    const response = await fetch(`${apiBase}/expression-series`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        traj_id: normalizedTraj,
+        expression: normalizedExpression,
+      }),
+    });
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error and keep generic detail
+      }
+      throw new Error(`Expression series request failed: ${detail}`);
+    }
+
+    const payload = await response.json();
+    return normalizeExpressionPayload(normalizedTraj, normalizedExpression, payload);
+  }
+
+  async function fetchExpressionDataset(expression) {
+    const normalizedExpression = normalizeExpression(expression);
+    const response = await fetch(`${apiBase}/expression-dataset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expression: normalizedExpression,
+      }),
+    });
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error and keep generic detail
+      }
+      throw new Error(`Expression dataset request failed: ${detail}`);
+    }
+
+    const payload = await response.json();
+    return normalizeExpressionPayload(null, normalizedExpression, payload);
+  }
+
+  async function createNotebookSession() {
+    const response = await fetch(`${apiBase}/notebook/session`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook session create failed: ${detail}`);
+    }
+    const payload = await response.json();
+    return {
+      session_id: normalizeNotebookSessionId(payload?.session_id),
+      dataset_revision: Number.isFinite(Number(payload?.dataset_revision)) ? Number(payload.dataset_revision) : 0,
+      source_pkl: String(payload?.source_pkl || ''),
+      traj_ids: Array.isArray(payload?.traj_ids) ? payload.traj_ids.map((v) => String(v)) : [],
+      session_version: Number.isFinite(Number(payload?.session_version)) ? Number(payload.session_version) : 0,
+    };
+  }
+
+  async function deleteNotebookSession(sessionId) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const response = await fetch(`${apiBase}/notebook/session/${encodeURIComponent(normalizedSessionId)}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook session delete failed: ${detail}`);
+    }
+    return response.json();
+  }
+
+  async function resetNotebookSession(sessionId) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const response = await fetch(
+      `${apiBase}/notebook/session/${encodeURIComponent(normalizedSessionId)}/reset`,
+      { method: 'POST' }
+    );
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook session reset failed: ${detail}`);
+    }
+    const payload = await response.json();
+    return {
+      status: String(payload?.status || ''),
+      session_id: normalizeNotebookSessionId(payload?.session_id),
+      dataset_revision: Number.isFinite(Number(payload?.dataset_revision)) ? Number(payload.dataset_revision) : 0,
+      session_version: Number.isFinite(Number(payload?.session_version)) ? Number(payload.session_version) : 0,
+    };
+  }
+
+  async function fetchNotebookPublished(sessionId) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const response = await fetch(
+      `${apiBase}/notebook/session/${encodeURIComponent(normalizedSessionId)}/published`,
+      { method: 'GET' }
+    );
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook published variables request failed: ${detail}`);
+    }
+    const payload = await response.json();
+    return {
+      session_id: normalizeNotebookSessionId(payload?.session_id),
+      session_version: Number.isFinite(Number(payload?.session_version)) ? Number(payload.session_version) : 0,
+      variables: Array.isArray(payload?.variables) ? payload.variables.map(normalizeNotebookVariableSummary) : [],
+    };
+  }
+
+  async function executeNotebookCell(sessionId, code, mode, trajId) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const normalizedMode = String(mode) === 'all' ? 'all' : 'current';
+    const normalizedCode = String(code || '');
+    const normalizedTrajId = trajId == null ? null : normalizeTrajId(trajId);
+    const body = {
+      code: normalizedCode,
+      mode: normalizedMode,
+      traj_id: normalizedMode === 'current' ? normalizedTrajId : null,
+    };
+
+    const response = await fetch(
+      `${apiBase}/notebook/session/${encodeURIComponent(normalizedSessionId)}/execute`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook execute failed: ${detail}`);
+    }
+    const payload = await response.json();
+    return {
+      ok: !!payload?.ok,
+      session_id: normalizeNotebookSessionId(payload?.session_id),
+      mode: String(payload?.mode) === 'all' ? 'all' : 'current',
+      traj_id: payload?.traj_id == null ? null : normalizeTrajId(payload.traj_id),
+      stdout: String(payload?.stdout || ''),
+      stderr: String(payload?.stderr || ''),
+      error_message: payload?.error_message == null ? null : String(payload.error_message),
+      traceback: payload?.traceback == null ? null : String(payload.traceback),
+      published_updates: Array.isArray(payload?.published_updates)
+        ? payload.published_updates.map((v) => String(v)).filter((v) => v.trim())
+        : [],
+      run_ms: Number.isFinite(Number(payload?.run_ms)) ? Number(payload.run_ms) : 0,
+      session_version: Number.isFinite(Number(payload?.session_version)) ? Number(payload.session_version) : 0,
+      dataset_revision: Number.isFinite(Number(payload?.dataset_revision)) ? Number(payload.dataset_revision) : 0,
+    };
+  }
+
+  async function fetchNotebookSeries(sessionId, variable, trajId) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const normalizedVariable = normalizeNotebookVariable(variable);
+    const normalizedTraj = normalizeTrajId(trajId);
+    const response = await fetch(`${apiBase}/notebook-series`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: normalizedSessionId,
+        variable: normalizedVariable,
+        traj_id: normalizedTraj,
+      }),
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook series request failed: ${detail}`);
+    }
+    const payload = await response.json();
+    return normalizeNotebookSeriesPayload(normalizedSessionId, normalizedVariable, normalizedTraj, payload);
+  }
+
+  async function fetchNotebookEnsemble(sessionId, variable, statMode) {
+    const normalizedSessionId = normalizeNotebookSessionId(sessionId);
+    const normalizedVariable = normalizeNotebookVariable(variable);
+    const normalizedMode = normalizeEnsembleStatMode(statMode);
+    const response = await fetch(`${apiBase}/notebook-ensemble`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: normalizedSessionId,
+        variable: normalizedVariable,
+        stat_mode: normalizedMode,
+      }),
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(`Notebook ensemble request failed: ${detail}`);
+    }
+    const payload = await response.json();
+    return normalizeNotebookEnsemblePayload(normalizedSessionId, normalizedVariable, normalizedMode, payload);
   }
 
   async function refreshDataset() {
@@ -424,6 +835,106 @@
     await pending;
   }
 
+  async function ensureExpressionSeries(trajId, expression) {
+    const key = makeExpressionSeriesKey(trajId, expression);
+    if (cache.has(key)) return;
+
+    if (inflight.has(key)) {
+      await inflight.get(key);
+      return;
+    }
+
+    const pending = fetchExpressionSeries(trajId, expression)
+      .then((series) => {
+        cache.set(key, series);
+      })
+      .finally(() => {
+        inflight.delete(key);
+      });
+
+    inflight.set(key, pending);
+    await pending;
+  }
+
+  async function ensureExpressionDataset(expression) {
+    const key = makeExpressionDatasetKey(expression);
+    if (cache.has(key)) return;
+
+    if (inflight.has(key)) {
+      await inflight.get(key);
+      return;
+    }
+
+    const pending = fetchExpressionDataset(expression)
+      .then((series) => {
+        cache.set(key, series);
+      })
+      .finally(() => {
+        inflight.delete(key);
+      });
+
+    inflight.set(key, pending);
+    await pending;
+  }
+
+  async function ensureNotebookSeries(sessionId, variable, trajId) {
+    const key = makeNotebookSeriesKey(sessionId, variable, trajId);
+    if (cache.has(key)) return;
+
+    if (inflight.has(key)) {
+      await inflight.get(key);
+      return;
+    }
+
+    const pending = fetchNotebookSeries(sessionId, variable, trajId)
+      .then((series) => {
+        cache.set(key, series);
+      })
+      .finally(() => {
+        inflight.delete(key);
+      });
+
+    inflight.set(key, pending);
+    await pending;
+  }
+
+  async function ensureNotebookEnsemble(sessionId, variable, statMode) {
+    const key = makeNotebookEnsembleKey(sessionId, variable, statMode);
+    if (cache.has(key)) return;
+
+    if (inflight.has(key)) {
+      await inflight.get(key);
+      return;
+    }
+
+    const pending = fetchNotebookEnsemble(sessionId, variable, statMode)
+      .then((series) => {
+        cache.set(key, series);
+      })
+      .finally(() => {
+        inflight.delete(key);
+      });
+
+    inflight.set(key, pending);
+    await pending;
+  }
+
+  function clearNotebookCacheForSession(sessionId) {
+    const prefix = `${normalizeNotebookSessionId(sessionId)}::`;
+    for (const key of Array.from(cache.keys())) {
+      const text = String(key);
+      if (text.startsWith(`notebook_series::${prefix}`) || text.startsWith(`notebook_ensemble::${prefix}`)) {
+        cache.delete(key);
+      }
+    }
+    for (const key of Array.from(inflight.keys())) {
+      const text = String(key);
+      if (text.startsWith(`notebook_series::${prefix}`) || text.startsWith(`notebook_ensemble::${prefix}`)) {
+        inflight.delete(key);
+      }
+    }
+  }
+
   function getSeries(trajId, observable, indices) {
     const key = makeSeriesKey(trajId, observable, indices);
     return cache.get(key) || null;
@@ -436,6 +947,26 @@
 
   function getEnsembleSeries(observable, indices, rawKey, statMode) {
     const key = makeEnsembleSeriesKey(observable, indices, rawKey, statMode);
+    return cache.get(key) || null;
+  }
+
+  function getExpressionSeries(trajId, expression) {
+    const key = makeExpressionSeriesKey(trajId, expression);
+    return cache.get(key) || null;
+  }
+
+  function getExpressionDataset(expression) {
+    const key = makeExpressionDatasetKey(expression);
+    return cache.get(key) || null;
+  }
+
+  function getNotebookSeries(sessionId, variable, trajId) {
+    const key = makeNotebookSeriesKey(sessionId, variable, trajId);
+    return cache.get(key) || null;
+  }
+
+  function getNotebookEnsemble(sessionId, variable, statMode) {
+    const key = makeNotebookEnsembleKey(sessionId, variable, statMode);
     return cache.get(key) || null;
   }
 
@@ -514,10 +1045,28 @@
     getRawKeySeries,
     ensureEnsembleSeries,
     getEnsembleSeries,
+    ensureExpressionSeries,
+    getExpressionSeries,
+    ensureExpressionDataset,
+    getExpressionDataset,
+    createNotebookSession,
+    deleteNotebookSession,
+    resetNotebookSession,
+    fetchNotebookPublished,
+    executeNotebookCell,
+    ensureNotebookSeries,
+    getNotebookSeries,
+    ensureNotebookEnsemble,
+    getNotebookEnsemble,
+    clearNotebookCacheForSession,
     ensureAllForPanelRequirements,
     makeSeriesKey,
     makeRawKeySeriesKey,
     makeEnsembleSeriesKey,
+    makeExpressionSeriesKey,
+    makeExpressionDatasetKey,
+    makeNotebookSeriesKey,
+    makeNotebookEnsembleKey,
     refreshDataset,
     inspectKeys,
     fetchRawKeyAliases,

@@ -36,6 +36,11 @@ python -m tools.observable_dashboard.serve \
 - `POST /api/ensemble-series`
 - `GET /api/molecule3d/trajectory/{traj_id}`
 
+### Notebook publish 规则
+
+- Notebook `publish()` 产出的变量会在后端入库时默认丢弃 `t == 0` 的点（严格等于零判定）。
+- 该规则仅作用于 notebook 变量，不影响 `raw_key`、`expression` 与内建 observable 的计算结果。
+
 ### 布局与路由自动检查
 
 可运行以下脚本进行自动化冒烟校验（资源路径、模板脚本顺序、API-only 模板注入、关键路由可用性）：

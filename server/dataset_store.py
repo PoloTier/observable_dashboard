@@ -67,6 +67,7 @@ class DatasetStore:
         raw_key_previews: dict[str, dict[str, str]] | None = None,
         raw_records_by_traj: dict[str, dict[str, Any]] | None = None,
         raw_frame_meta_by_traj: dict[str, RawFrameMeta] | None = None,
+        time_key: str = "_.0.record.time",
     ) -> None:
         self.input_path = Path(input_path)
         self.meta = meta
@@ -75,6 +76,7 @@ class DatasetStore:
         self.raw_key_previews = raw_key_previews or {}
         self.raw_records_by_traj = raw_records_by_traj or {}
         self.raw_frame_meta_by_traj = raw_frame_meta_by_traj or {}
+        self.time_key = str(time_key or "_.0.record.time")
         self.traj_ids = sorted(
             trajectories.keys(),
             key=lambda x: int(x) if str(x).isdigit() else str(x),
@@ -550,6 +552,116 @@ class DatasetStore:
             "n_components": int(filtered.shape[1]),
         }
 
+    def build_raw_key_expression_value(self, traj_id: str, raw_key: str) -> dict[str, Any]:
+        tid = str(traj_id)
+        key = str(raw_key)
+
+        traj = self.get_trajectory(tid)
+        if traj is None:
+            raise KeyError(f"Trajectory not found: {tid}")
+
+        raw_record = self.raw_records_by_traj.get(tid)
+        if raw_record is None:
+            raise KeyError(f"Raw record not found for trajectory: {tid}")
+        if key not in raw_record:
+            raise KeyError(f"Raw key not found for trajectory {tid}: {key}")
+
+        raw_value = raw_record[key]
+        arr = np.asarray(raw_value)
+        is_complex = np.iscomplexobj(arr)
+        if is_complex:
+            try:
+                arr_numeric = np.asarray(arr, dtype=np.complex128)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"Raw key '{key}' is not convertible to complex128 values: {exc}") from exc
+        else:
+            try:
+                arr_numeric = np.asarray(arr, dtype=float)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"Raw key '{key}' is not convertible to real numeric values: {exc}") from exc
+
+        if not key.startswith("_."):
+            return {
+                "data": arr_numeric,
+                "has_time": False,
+                "time": None,
+            }
+
+        if arr_numeric.ndim == 0:
+            raise ValueError(
+                (
+                    f"Raw key '{key}' was expected to be time-dependent (prefix '_.') but is scalar (ndim=0). "
+                    "This key cannot be used as a timed expression input."
+                )
+            )
+
+        frame_meta = self.raw_frame_meta_by_traj.get(tid)
+        if frame_meta is None:
+            raise ValueError(f"Trajectory {tid} has no valid frame metadata for timed expression key '{key}'.")
+
+        base_len = int(frame_meta.base_len)
+        if int(arr_numeric.shape[0]) != base_len:
+            raise ValueError(
+                (
+                    f"Raw key '{key}' has first dimension {arr_numeric.shape[0]}, "
+                    f"but expected base frame length {base_len}."
+                )
+            )
+
+        valid_indices = np.asarray(frame_meta.valid_indices, dtype=int).reshape(-1)
+        if valid_indices.size > 0:
+            if np.any((valid_indices < 0) | (valid_indices >= base_len)):
+                raise ValueError(
+                    (
+                        f"Trajectory {tid} has out-of-range valid indices for timed key '{key}': "
+                        f"base_len={base_len}, min={int(valid_indices.min())}, max={int(valid_indices.max())}."
+                    )
+                )
+
+        # Build full-length time axis for expression semantics. Invalid frames stay visible as NaN.
+        time_axis: np.ndarray
+        raw_time_value = raw_record.get(self.time_key)
+        if raw_time_value is not None:
+            try:
+                raw_time = np.asarray(flatten_time_array(raw_time_value), dtype=float).reshape(-1)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(
+                    f"Timed key '{key}' could not load raw time axis '{self.time_key}' for trajectory {tid}: {exc}"
+                ) from exc
+            if int(raw_time.shape[0]) < base_len:
+                raise ValueError(
+                    (
+                        f"Raw time axis '{self.time_key}' for trajectory {tid} is shorter than base frame length: "
+                        f"time_len={raw_time.shape[0]}, base_len={base_len}."
+                    )
+                )
+            time_axis = np.asarray(raw_time[:base_len], dtype=float)
+        else:
+            # Fallback path should be rare; map filtered trajectory time back to full-length axis.
+            time_axis = np.full((base_len,), np.nan, dtype=float)
+            traj_time = np.asarray(traj.time, dtype=float).reshape(-1)
+            if int(traj_time.shape[0]) != int(valid_indices.shape[0]):
+                raise ValueError(
+                    (
+                        f"Trajectory {tid} has mismatched filtered time/valid index counts while building key '{key}': "
+                        f"traj.time={traj_time.shape[0]}, valid_indices={valid_indices.shape[0]}."
+                    )
+                )
+            if valid_indices.size > 0:
+                time_axis[valid_indices] = traj_time
+
+        fill_value: complex | float = (np.nan + 0j) if is_complex else np.nan
+        full_dtype: type[np.complex128] | type[float] = np.complex128 if is_complex else float
+        full = np.full(arr_numeric.shape, fill_value, dtype=full_dtype)
+        if valid_indices.size > 0:
+            full[valid_indices] = arr_numeric[valid_indices]
+
+        return {
+            "data": full,
+            "has_time": True,
+            "time": time_axis,
+        }
+
 
 _PREVIEW_TEXT_LIMIT = 200
 _PREVIEW_ARRAY_ELEMS = 6
@@ -891,4 +1003,5 @@ def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
         raw_key_previews=raw_key_previews,
         raw_records_by_traj=raw_records_by_traj,
         raw_frame_meta_by_traj=raw_frame_meta_by_traj,
+        time_key=options.time_key,
     )

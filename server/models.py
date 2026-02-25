@@ -125,6 +125,141 @@ class EnsembleSeriesResponse(BaseModel):
     cached: bool
 
 
+ExpressionScope = Literal["trajectory", "dataset"]
+
+
+class ExpressionSeriesRequest(BaseModel):
+    traj_id: str = Field(..., min_length=1)
+    expression: str = Field(..., min_length=1)
+
+
+class ExpressionSeriesResponse(BaseModel):
+    traj_id: str
+    expression: str
+    scope: ExpressionScope
+    series_kind: Literal["scalar", "matrix"]
+    time: list[float]
+    value: list[float | None] | None = None
+    values: list[list[float | None]] | None = None
+    n_points: int
+    n_components: int | None = None
+    n_trajectories: int
+    sample_count: list[int] | None = None
+    cached: bool
+
+
+class ExpressionDatasetRequest(BaseModel):
+    expression: str = Field(..., min_length=1)
+
+
+class ExpressionDatasetResponse(BaseModel):
+    expression: str
+    scope: Literal["dataset"]
+    series_kind: Literal["scalar", "matrix"]
+    time: list[float]
+    value: list[float | None] | None = None
+    values: list[list[float | None]] | None = None
+    n_points: int
+    n_components: int | None = None
+    n_trajectories: int
+    sample_count: list[int] | None = None
+    cached: bool
+
+
+NotebookExecMode = Literal["current", "all"]
+
+
+class NotebookSessionResponse(BaseModel):
+    session_id: str
+    dataset_revision: int
+    source_pkl: str
+    traj_ids: list[str]
+    session_version: int
+
+
+class NotebookSessionResetResponse(BaseModel):
+    status: str
+    session_id: str
+    dataset_revision: int
+    session_version: int
+
+
+class NotebookVariableSummary(BaseModel):
+    name: str
+    series_kind: Literal["scalar", "matrix"]
+    traj_count: int
+    n_points: int
+    n_components: int | None = None
+    component_labels: list[str] | None = None
+    preview_traj_id: str | None = None
+    dtype: str
+    shape: list[int]
+    nan_count: int
+    updated_at: float
+
+
+class NotebookPublishedListResponse(BaseModel):
+    session_id: str
+    session_version: int
+    variables: list[NotebookVariableSummary]
+
+
+class NotebookExecuteRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+    mode: NotebookExecMode
+    traj_id: str | None = None
+
+
+class NotebookExecuteResponse(BaseModel):
+    ok: bool
+    session_id: str
+    mode: NotebookExecMode
+    traj_id: str | None = None
+    stdout: str
+    stderr: str
+    error_message: str | None = None
+    traceback: str | None = None
+    published_updates: list[str]
+    run_ms: float
+    session_version: int
+    dataset_revision: int
+
+
+class NotebookSeriesRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    variable: str = Field(..., min_length=1)
+    traj_id: str = Field(..., min_length=1)
+
+
+class NotebookSeriesResponse(BaseModel):
+    session_id: str
+    variable: str
+    traj_id: str
+    series_kind: Literal["scalar", "matrix"]
+    time: list[float]
+    value: list[float | None] | None = None
+    values: list[list[float | None]] | None = None
+    n_points: int
+    n_components: int | None = None
+    component_labels: list[str] | None = None
+    cached: bool
+
+
+class NotebookEnsembleRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    variable: str = Field(..., min_length=1)
+    stat_mode: EnsembleStatMode
+
+
+class NotebookEnsembleResponse(BaseModel):
+    session_id: str
+    variable: str
+    stat_mode: EnsembleStatMode
+    component_series: list[EnsembleComponentSeries]
+    n_trajectories: int
+    cached: bool
+
+
 class MoleculeTrajectoryResponse(BaseModel):
     traj_id: str
     time: list[float]

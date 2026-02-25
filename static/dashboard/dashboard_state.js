@@ -67,7 +67,10 @@
     Math.max(MIN_PANELS, Number(defaults?.ui?.default_panel_count || 4))
   );
   const RAW_ALIAS_PREFIX = 'raw_alias::';
-  const observableOptions = ['bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key'];
+  const observableOptions = [
+    'bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key', 'expression',
+    'notebook_var'
+  ];
   const ensembleStatModes = ['mean_ci95_bootstrap', 'median_iqr'];
 
   function normalizeRawKeyAliases(rawAliases) {
@@ -136,6 +139,8 @@
     if (canonical === 'angle') return 3;
     if (canonical === 'dihedral') return 4;
     if (canonical === 'de_nac') return 2;
+    if (canonical === 'expression') return 0;
+    if (canonical === 'notebook_var') return 0;
     return 0;
   }
 
@@ -166,12 +171,27 @@
       observable: normalizedObservable,
       indices: [],
       rawKey: '',
+      expression: '',
+      expressionLabel: '',
+      notebookVar: '',
       ensembleStatMode: ensembleStatModes.includes(modeCandidate) ? modeCandidate : 'mean_ci95_bootstrap',
     };
 
     if (out.observable === 'raw_key') {
       const candidate = panel?.rawKey ?? fallback?.rawKey ?? '';
       out.rawKey = String(candidate || '').trim();
+    }
+
+    if (out.observable === 'expression') {
+      const expressionCandidate = panel?.expression ?? fallback?.expression ?? '';
+      const expressionLabelCandidate = panel?.expressionLabel ?? fallback?.expressionLabel ?? '';
+      out.expression = String(expressionCandidate || '').trim();
+      out.expressionLabel = String(expressionLabelCandidate || '').trim();
+    }
+
+    if (out.observable === 'notebook_var') {
+      const notebookVarCandidate = panel?.notebookVar ?? fallback?.notebookVar ?? '';
+      out.notebookVar = String(notebookVarCandidate || '').trim();
     }
 
     const needed = requiredIndexCount(out.observable);

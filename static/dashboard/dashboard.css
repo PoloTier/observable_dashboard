@@ -89,7 +89,8 @@ body {
   font-size: 12px;
   color: var(--muted);
 }
-#key-inspector-input {
+#key-inspector-input,
+#expr-inspector-input {
   width: 100%;
   min-height: 84px;
   box-sizing: border-box;
@@ -99,6 +100,23 @@ body {
   border-radius: 8px;
   padding: 8px;
   background: #fff;
+}
+#expr-inspector-input {
+  min-height: 72px;
+}
+#expr-inspector-label {
+  width: 100%;
+  min-height: 32px;
+  box-sizing: border-box;
+  font-size: 12px;
+  border: 1px solid #cdd4df;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+}
+.inspector-divider {
+  border-top: 1px dashed #d9e0ec;
+  margin: 2px 0;
 }
 .inspector-actions {
   display: flex;
@@ -119,6 +137,82 @@ body {
   background: #fff;
   max-height: 320px;
   overflow: auto;
+}
+.notebook-body {
+  gap: 10px;
+}
+.notebook-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.notebook-cells {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.notebook-cell {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+.notebook-cell-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.notebook-cell-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+.notebook-cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.notebook-cell-code {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 100px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  border: 1px solid #cdd4df;
+  border-radius: 6px;
+  padding: 8px;
+}
+.notebook-cell-status {
+  min-height: 16px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #475569;
+}
+.notebook-cell-status.error {
+  color: #c0392b;
+}
+.notebook-cell-output {
+  margin: 6px 0 0 0;
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid #e6ebf3;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #fbfcff;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.notebook-cell-output.error {
+  background: #fff8f8;
+  border-color: #f0d0d0;
+  color: #a33;
+}
+.notebook-mini-plot {
+  width: 100%;
+  min-height: 220px;
 }
 .inspector-table {
   width: 100%;
@@ -254,6 +348,31 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+.panel-controls .expr-wrap {
+  display: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 320px;
+}
+.panel-controls .notebook-wrap {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 220px;
+}
+.panel-controls .notebook-wrap .notebook-var-select {
+  min-width: 220px;
+  width: clamp(220px, 30vw, 420px);
+}
+.panel-controls .expr-wrap .expr-input {
+  min-width: 220px;
+  width: clamp(220px, 40vw, 560px);
+}
+.panel-controls .expr-wrap .expr-label-input {
+  min-width: 140px;
+  width: clamp(140px, 18vw, 280px);
 }
 .panel-controls .panel-stat-mode {
   min-width: 170px;
