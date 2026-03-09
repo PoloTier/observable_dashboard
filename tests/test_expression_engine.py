@@ -116,34 +116,6 @@ def _build_store() -> DatasetStore:
     )
 
 
-def _build_store_with_time_value_mismatch() -> DatasetStore:
-    # Same shapes and valid indices, but different raw time values between trajectories.
-    traj0 = _build_traj("0", [0.0, 2.0])
-    traj1 = _build_traj("1", [0.0, 2.0])
-    return DatasetStore(
-        input_path=Path("/tmp/expression_test_time_mismatch.pkl"),
-        meta={},
-        defaults={},
-        trajectories={"0": traj0, "1": traj1},
-        raw_records_by_traj={
-            "0": {
-                "_.0.record.time": np.asarray([0.0, 1.0, 2.0], dtype=float),
-                "_.0.record.A": np.asarray([1.0, 2.0, 3.0], dtype=float),
-            },
-            "1": {
-                # Different values on axis=0 but identical length/shape.
-                "_.0.record.time": np.asarray([10.0, 11.0, 12.0], dtype=float),
-                "_.0.record.A": np.asarray([2.0, 4.0, 6.0], dtype=float),
-            },
-        },
-        raw_frame_meta_by_traj={
-            "0": RawFrameMeta(base_len=3, valid_indices=[0, 2]),
-            "1": RawFrameMeta(base_len=3, valid_indices=[0, 2]),
-        },
-        time_key="_.0.record.time",
-    )
-
-
 def _scalar_values(payload: object) -> np.ndarray:
     values = getattr(payload, "value", None)
     assert isinstance(values, list)
@@ -331,45 +303,6 @@ def test_axis_list_literal_is_only_allowed_for_reduce() -> None:
         )
 
 
-def test_cmean_returns_scalar_time_series_with_sample_count() -> None:
-    store = _build_store()
-    out = evaluate_expression_payload(
-        store=store,
-        expression="cmean{_.0.record.A}",
-        traj_id=None,
-    )
-
-    assert out.scope == "dataset"
-    assert out.series_kind == "scalar"
-    assert out.n_trajectories == 2
-    assert len(out.time) == 3
-    assert out.sample_count == [2, 0, 2]
-    np.testing.assert_allclose(_scalar_values(out), np.asarray([1.5, np.nan, 4.5], dtype=float), equal_nan=True)
-
-
-def test_cmean_nested_is_rejected() -> None:
-    store = _build_store()
-    with pytest.raises(ExpressionEvaluationError, match="expects trajectory scope"):
-        evaluate_expression_payload(
-            store=store,
-            expression="cmean{cmean{_.0.record.A}}",
-            traj_id=None,
-        )
-
-
-def test_csum_returns_nan_when_all_values_are_nan() -> None:
-    store = _build_store()
-    out = evaluate_expression_payload(
-        store=store,
-        expression="csum{_.0.record.A}",
-        traj_id=None,
-    )
-
-    assert out.series_kind == "scalar"
-    assert out.sample_count == [2, 0, 2]
-    np.testing.assert_allclose(_scalar_values(out), np.asarray([3.0, np.nan, 9.0], dtype=float), equal_nan=True)
-
-
 @pytest.mark.parametrize(
     ("expression", "traj_id"),
     [
@@ -381,11 +314,9 @@ def test_csum_returns_nan_when_all_values_are_nan() -> None:
         ("tinv{_.0.record.A}", "0"),
         ("tabs{_.0.record.A}", "0"),
         ("reduce{_.0.record.M,[-1]}", "0"),
-        ("cmean{_.0.record.A}", None),
-        ("csum{_.0.record.A}", None),
     ],
 )
-def test_operator_registry_dispatch_covers_supported_ops(expression: str, traj_id: str | None) -> None:
+def test_operator_registry_dispatch_covers_supported_ops(expression: str, traj_id: str) -> None:
     store = _build_store()
     out = evaluate_expression_payload(
         store=store,
@@ -396,34 +327,29 @@ def test_operator_registry_dispatch_covers_supported_ops(expression: str, traj_i
     assert out.n_points >= 1
 
 
-def test_deprecated_mean_sum_still_rejected_with_hint() -> None:
+def test_removed_cross_trajectory_functions_are_rejected_with_hint() -> None:
     store = _build_store()
-    with pytest.raises(ExpressionEvaluationError, match="Please use 'cmean'"):
+    with pytest.raises(ExpressionEvaluationError, match="Function 'cmean' is not supported"):
+        evaluate_expression_payload(
+            store=store,
+            expression="cmean{_.0.record.A}",
+            traj_id="0",
+        )
+    with pytest.raises(ExpressionEvaluationError, match="Function 'csum' is not supported"):
+        evaluate_expression_payload(
+            store=store,
+            expression="csum{_.0.record.A}",
+            traj_id="0",
+        )
+    with pytest.raises(ExpressionEvaluationError, match="Function 'mean' is not supported"):
         evaluate_expression_payload(
             store=store,
             expression="mean{_.0.record.A}",
-            traj_id=None,
+            traj_id="0",
         )
-    with pytest.raises(ExpressionEvaluationError, match="Please use 'csum'"):
+    with pytest.raises(ExpressionEvaluationError, match="Function 'sum' is not supported"):
         evaluate_expression_payload(
             store=store,
             expression="sum{_.0.record.A}",
-            traj_id=None,
+            traj_id="0",
         )
-
-
-def test_cross_reduce_no_longer_requires_time_value_equality() -> None:
-    store = _build_store_with_time_value_mismatch()
-    out = evaluate_expression_payload(
-        store=store,
-        expression="cmean{_.0.record.A}",
-        traj_id=None,
-    )
-    # Should succeed despite time-value mismatch because only data shape consistency is enforced.
-    assert out.scope == "dataset"
-    assert out.series_kind == "scalar"
-    np.testing.assert_allclose(
-        _scalar_values(out),
-        np.asarray([1.5, np.nan, 4.5], dtype=float),
-        equal_nan=True,
-    )

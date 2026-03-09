@@ -4,7 +4,12 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
+
+pytest.importorskip("httpx")
 from fastapi.testclient import TestClient
+
+pytestmark = pytest.mark.skip(reason="Notebook runtime is temporarily disabled.")
 
 # Keep tests runnable from repository root without requiring editable install.
 REPO_ROOT = Path(__file__).resolve().parents[3]

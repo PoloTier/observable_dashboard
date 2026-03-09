@@ -12,7 +12,6 @@
     trajIds,
     state,
     MIN_PANELS,
-    MAX_PANELS,
     observableOptions,
     ensembleStatModes,
     normalizeRawKeyAliases,
@@ -32,6 +31,58 @@
   const EXPR_INSPECTOR_INPUT_STORAGE_KEY = 'traj_dashboard_expression_input_v1';
   const EXPR_INSPECTOR_LABEL_STORAGE_KEY = 'traj_dashboard_expression_label_v1';
   const EXPR_PREVIEW_LIMIT = 12;
+  const PANEL_ROW_LAYOUT_STORAGE_KEY = 'traj_dashboard_panel_row_layout_v1';
+  let draggingPanelIndex = -1;
+  let draggingPanelRef = null;
+  let panelRows = [];
+
+  function loadSavedPanelRowLayout() {
+    try {
+      const raw = localStorage.getItem(PANEL_ROW_LAYOUT_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      const out = [];
+      for (const value of parsed) {
+        const n = Number.parseInt(value, 10);
+        if (!Number.isFinite(n) || n <= 0) continue;
+        out.push(n);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  function buildRowsFromLayout(panels, rowSizes) {
+    const panelList = Array.isArray(panels) ? panels : [];
+    if (!panelList.length) return [];
+    if (!Array.isArray(rowSizes) || !rowSizes.length) return [panelList.slice()];
+    if (rowSizes.reduce((acc, n) => acc + n, 0) !== panelList.length) return [panelList.slice()];
+
+    const rows = [];
+    let cursor = 0;
+    for (const size of rowSizes) {
+      rows.push(panelList.slice(cursor, cursor + size));
+      cursor += size;
+    }
+    return rows.length ? rows : [panelList.slice()];
+  }
+
+  function savePanelRowLayout(rows) {
+    try {
+      const sizes = Array.isArray(rows)
+        ? rows
+            .map((row) => (Array.isArray(row) ? row.length : 0))
+            .filter((count) => count > 0)
+        : [];
+      localStorage.setItem(PANEL_ROW_LAYOUT_STORAGE_KEY, JSON.stringify(sizes));
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  panelRows = buildRowsFromLayout(state.panels, loadSavedPanelRowLayout());
 
   function parseInspectorKeys(rawText) {
     const out = [];
@@ -154,10 +205,6 @@
       setGlobalStatus('Cannot add panel: alias is empty.', true);
       return false;
     }
-    if (state.panels.length >= MAX_PANELS) {
-      setGlobalStatus(`Reached maximum panels (${MAX_PANELS}).`, true);
-      return false;
-    }
 
     try {
       const payload = await dataLoader.upsertRawKeyAlias(alias, key);
@@ -189,10 +236,6 @@
     const labelText = normalizeExpressionLabel(label);
     if (!expressionText) {
       setGlobalStatus('Cannot add panel: expression is empty.', true);
-      return false;
-    }
-    if (state.panels.length >= MAX_PANELS) {
-      setGlobalStatus(`Reached maximum panels (${MAX_PANELS}).`, true);
       return false;
     }
 
@@ -312,9 +355,7 @@
       let record = null;
       let contextText = '';
       if (state.selectedTraj === 'all') {
-        await dataLoader.ensureExpressionDataset(expression);
-        record = dataLoader.getExpressionDataset(expression);
-        contextText = 'context=dataset(all)';
+        throw new Error('Expression supports single trajectory only. Select a specific traj_id instead of all.');
       } else {
         const trajId = String(state.selectedTraj || '');
         if (!trajId || !trajIds.includes(trajId)) {
@@ -623,10 +664,9 @@
     const notebookWrap = document.getElementById(`notebook-wrap-${panelIndex}`);
     const notebookVarSelect = document.getElementById(`notebook-var-${panelIndex}`);
     const applyBtn = document.getElementById(`apply-${panelIndex}`);
-    const cloneBtn = document.getElementById(`clone-${panelIndex}`);
     const subtitleEl = document.getElementById(`panel-subtitle-${panelIndex}`);
 
-    if (!indicesWrap || !applyBtn || !cloneBtn) return;
+    if (!indicesWrap || !applyBtn) return;
     if (statSelect) {
       if (!ensembleStatModes.includes(panelState.ensembleStatMode)) {
         panelState.ensembleStatMode = 'mean_ci95_bootstrap';
@@ -700,14 +740,12 @@
       if (statSelect) statSelect.style.display = 'none';
       indicesWrap.style.display = 'none';
       applyBtn.style.display = 'inline-block';
-      cloneBtn.style.display = 'inline-block';
     } else if (observable === 'notebook_var') {
       if (exprWrap) exprWrap.style.display = 'none';
       if (notebookWrap) notebookWrap.style.display = 'flex';
       if (statSelect) statSelect.style.display = 'none';
       indicesWrap.style.display = 'none';
       applyBtn.style.display = 'inline-block';
-      cloneBtn.style.display = 'inline-block';
     } else {
       if (exprWrap) exprWrap.style.display = 'none';
       if (notebookWrap) notebookWrap.style.display = 'none';
@@ -717,11 +755,9 @@
     if (observable !== 'expression' && observable !== 'notebook_var' && needed > 0) {
       indicesWrap.style.display = 'flex';
       applyBtn.style.display = 'inline-block';
-      cloneBtn.style.display = 'inline-block';
     } else if (observable !== 'expression' && observable !== 'notebook_var') {
       indicesWrap.style.display = 'none';
       applyBtn.style.display = 'none';
-      cloneBtn.style.display = 'none';
     }
 
     for (let i = 0; i < 4; i++) {
@@ -750,12 +786,239 @@
     }
   }
 
+  function syncPanelRowsWithState() {
+    const currentPanels = Array.isArray(state.panels) ? state.panels : [];
+    if (!currentPanels.length) {
+      panelRows = [];
+      return;
+    }
+
+    if (!Array.isArray(panelRows) || !panelRows.length) {
+      panelRows = [currentPanels.slice()];
+      return;
+    }
+
+    const currentSet = new Set(currentPanels);
+    const seen = new Set();
+    const syncedRows = [];
+
+    for (const row of panelRows) {
+      if (!Array.isArray(row)) continue;
+      const kept = [];
+      for (const panelRef of row) {
+        if (!currentSet.has(panelRef) || seen.has(panelRef)) continue;
+        kept.push(panelRef);
+        seen.add(panelRef);
+      }
+      if (kept.length) syncedRows.push(kept);
+    }
+
+    const missing = currentPanels.filter((panelRef) => !seen.has(panelRef));
+    if (!syncedRows.length) syncedRows.push([]);
+    if (missing.length) {
+      syncedRows[syncedRows.length - 1].push(...missing);
+    }
+
+    panelRows = syncedRows.filter((row) => row.length > 0);
+    if (!panelRows.length) {
+      panelRows = [currentPanels.slice()];
+    }
+
+    const flattened = panelRows.flat();
+    if (
+      flattened.length !== currentPanels.length
+      || flattened.some((panelRef, idx) => panelRef !== currentPanels[idx])
+    ) {
+      state.panels = flattened;
+    }
+  }
+
+  function clearPanelDragState() {
+    draggingPanelIndex = -1;
+    draggingPanelRef = null;
+    const dashboard = document.getElementById('dashboard');
+    if (!dashboard) return;
+    dashboard.classList.remove('drag-layout-active');
+    dashboard.querySelectorAll('.panel.dragging, .panel.drag-over').forEach((el) => {
+      el.classList.remove('dragging');
+      el.classList.remove('drag-over');
+    });
+    dashboard.querySelectorAll('.dashboard-row.drag-over, .dashboard-row-dropzone.drag-over').forEach((el) => {
+      el.classList.remove('drag-over');
+    });
+  }
+
+  function removePanelFromRows(panelRef) {
+    for (let rowIndex = 0; rowIndex < panelRows.length; rowIndex++) {
+      const row = panelRows[rowIndex];
+      const colIndex = row.indexOf(panelRef);
+      if (colIndex < 0) continue;
+      row.splice(colIndex, 1);
+      if (!row.length) panelRows.splice(rowIndex, 1);
+      return true;
+    }
+    return false;
+  }
+
+  function movePanelBeforeTarget(panelRef, targetRef) {
+    if (!panelRef || !targetRef || panelRef === targetRef) return false;
+    removePanelFromRows(panelRef);
+    for (const row of panelRows) {
+      const idx = row.indexOf(targetRef);
+      if (idx < 0) continue;
+      row.splice(idx, 0, panelRef);
+      return true;
+    }
+    if (!panelRows.length) panelRows = [[]];
+    panelRows[panelRows.length - 1].push(panelRef);
+    return true;
+  }
+
+  function movePanelToRowEnd(panelRef, rowIndex) {
+    if (!panelRef) return false;
+    removePanelFromRows(panelRef);
+    const targetRow = Math.max(0, Math.min(Number.parseInt(rowIndex, 10), panelRows.length - 1));
+    if (!Number.isFinite(targetRow)) return false;
+    if (!panelRows[targetRow]) panelRows[targetRow] = [];
+    panelRows[targetRow].push(panelRef);
+    return true;
+  }
+
+  function movePanelToNewRow(panelRef, rowInsertIndex) {
+    if (!panelRef) return false;
+    removePanelFromRows(panelRef);
+    const insertIndex = Math.max(0, Math.min(Number.parseInt(rowInsertIndex, 10), panelRows.length));
+    if (!Number.isFinite(insertIndex)) return false;
+    panelRows.splice(insertIndex, 0, [panelRef]);
+    return true;
+  }
+
+  function applyPanelMove(fromIndex, movedPanelRef, statusMode = 'move') {
+    syncPanelRowsWithState();
+    savePanelRowLayout(panelRows);
+    const toIndex = state.panels.indexOf(movedPanelRef);
+    clearPanelDragState();
+    rebuildPanels();
+    saveStateToStorage();
+    if (toIndex < 0) return;
+    if (statusMode === 'new-row') {
+      setGlobalStatus(`Moved panel ${fromIndex + 1} to new row (position ${toIndex + 1}).`);
+    } else {
+      setGlobalStatus(`Moved panel ${fromIndex + 1} to position ${toIndex + 1}.`);
+    }
+  }
+
+  function bindRowDropEvents(rowEl, rowIndex) {
+    rowEl.addEventListener('dragover', (event) => {
+      if (!draggingPanelRef) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      const dashboard = document.getElementById('dashboard');
+      if (dashboard) {
+        dashboard.querySelectorAll('.dashboard-row.drag-over').forEach((el) => el.classList.remove('drag-over'));
+      }
+      rowEl.classList.add('drag-over');
+    });
+
+    rowEl.addEventListener('drop', (event) => {
+      if (!draggingPanelRef) return;
+      if (event.target && event.target.closest && event.target.closest('.panel')) return;
+      event.preventDefault();
+      const fromIndex = draggingPanelIndex;
+      const movedPanelRef = draggingPanelRef;
+      if (!movePanelToRowEnd(movedPanelRef, rowIndex)) {
+        clearPanelDragState();
+        return;
+      }
+      applyPanelMove(fromIndex, movedPanelRef, 'move');
+    });
+  }
+
+  function buildRowDropzone(rowInsertIndex) {
+    const dropzone = document.createElement('div');
+    dropzone.className = 'dashboard-row-dropzone';
+    dropzone.textContent = 'Drop here to create a new row';
+
+    dropzone.addEventListener('dragover', (event) => {
+      if (!draggingPanelRef) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      const dashboard = document.getElementById('dashboard');
+      if (dashboard) {
+        dashboard.querySelectorAll('.dashboard-row-dropzone.drag-over').forEach((el) => el.classList.remove('drag-over'));
+      }
+      dropzone.classList.add('drag-over');
+    });
+
+    dropzone.addEventListener('drop', (event) => {
+      if (!draggingPanelRef) return;
+      event.preventDefault();
+      const fromIndex = draggingPanelIndex;
+      const movedPanelRef = draggingPanelRef;
+      if (!movePanelToNewRow(movedPanelRef, rowInsertIndex)) {
+        clearPanelDragState();
+        return;
+      }
+      applyPanelMove(fromIndex, movedPanelRef, 'new-row');
+    });
+
+    return dropzone;
+  }
+
+  function bindPanelDragEvents(panel, panelIndex) {
+    const dragHandle = panel.querySelector(`#drag-${panelIndex}`);
+    if (!dragHandle) return;
+    const panelRef = state.panels[panelIndex];
+
+    dragHandle.addEventListener('dragstart', (event) => {
+      draggingPanelIndex = panelIndex;
+      draggingPanelRef = panelRef;
+      panel.classList.add('dragging');
+      const dashboard = document.getElementById('dashboard');
+      dashboard?.classList.add('drag-layout-active');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(panelIndex));
+      }
+    });
+    dragHandle.addEventListener('dragend', () => {
+      clearPanelDragState();
+    });
+
+    panel.addEventListener('dragover', (event) => {
+      if (!draggingPanelRef || draggingPanelRef === panelRef) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      const dashboard = document.getElementById('dashboard');
+      if (dashboard) {
+        dashboard.querySelectorAll('.panel.drag-over').forEach((el) => el.classList.remove('drag-over'));
+      }
+      panel.classList.add('drag-over');
+    });
+
+    panel.addEventListener('drop', (event) => {
+      if (!draggingPanelRef || draggingPanelRef === panelRef) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const fromIndex = draggingPanelIndex;
+      const movedPanelRef = draggingPanelRef;
+      if (!movePanelBeforeTarget(movedPanelRef, panelRef)) {
+        clearPanelDragState();
+        return;
+      }
+      applyPanelMove(fromIndex, movedPanelRef, 'move');
+    });
+  }
+
   function buildPanel(panelIndex) {
     const panel = document.createElement('div');
     panel.className = 'panel';
     panel.innerHTML = `
     <div class="panel-head">
-      <div class="panel-title">Panel ${panelIndex + 1}</div>
+      <div class="panel-head-row">
+        <div class="panel-title">Panel ${panelIndex + 1}</div>
+        <button class="panel-drag-handle" id="drag-${panelIndex}" type="button" draggable="true" title="Drag to reorder" aria-label="Drag panel to reorder">Drag</button>
+      </div>
       <div class="panel-subtitle" id="panel-subtitle-${panelIndex}"></div>
       <div class="panel-controls">
         <select id="obs-${panelIndex}"></select>
@@ -774,7 +1037,7 @@
           <select id="notebook-var-${panelIndex}" class="notebook-var-select"></select>
         </div>
         <button class="btn" id="apply-${panelIndex}">Apply</button>
-        <button class="btn" id="clone-${panelIndex}">Apply to all panels</button>
+        <button class="btn" id="export-${panelIndex}">Export Data</button>
         <button class="btn danger" id="remove-${panelIndex}">Remove Panel</button>
       </div>
     </div>
@@ -833,6 +1096,23 @@
       saveStateToStorage();
     });
 
+    const exportBtn = panel.querySelector(`#export-${panelIndex}`);
+    exportBtn?.addEventListener('click', async () => {
+      if (exportBtn.disabled) return;
+      if (!plot || typeof plot.exportPanelData !== 'function') {
+        setGlobalStatus('Export is unavailable in current frontend build.', true);
+        return;
+      }
+      exportBtn.disabled = true;
+      try {
+        await plot.exportPanelData(panelIndex);
+      } catch {
+        // Error details are already handled inside plot.exportPanelData().
+      } finally {
+        exportBtn.disabled = false;
+      }
+    });
+
     exprInput?.addEventListener('input', () => {
       state.panels[panelIndex].expression = String(exprInput.value || '').trim();
       saveStateToStorage();
@@ -855,25 +1135,6 @@
       saveStateToStorage();
     });
 
-    panel.querySelector(`#clone-${panelIndex}`).addEventListener('click', () => {
-      const source = state.panels[panelIndex];
-      for (let i = 0; i < state.panels.length; i++) {
-        if (i === panelIndex) continue;
-        state.panels[i] = {
-          observable: source.observable,
-          indices: source.indices.slice(),
-          rawKey: String(source.rawKey || ''),
-          expression: String(source.expression || ''),
-          expressionLabel: String(source.expressionLabel || ''),
-          notebookVar: String(source.notebookVar || ''),
-          ensembleStatMode: String(source.ensembleStatMode || 'mean_ci95_bootstrap'),
-        };
-      }
-      rebuildPanels();
-      saveStateToStorage();
-      setGlobalStatus('Applied panel settings to all panels.');
-    });
-
     panel.querySelector(`#remove-${panelIndex}`).addEventListener('click', () => {
       if (state.panels.length <= MIN_PANELS) {
         setGlobalStatus('At least one panel must remain.', true);
@@ -885,22 +1146,38 @@
       setGlobalStatus(`Removed panel ${panelIndex + 1}.`);
     });
 
+    bindPanelDragEvents(panel, panelIndex);
     return panel;
   }
 
   function rebuildPanels() {
     const dashboard = document.getElementById('dashboard');
+    if (!dashboard) return;
+    clearPanelDragState();
+    syncPanelRowsWithState();
     dashboard.innerHTML = '';
 
-    for (let i = 0; i < state.panels.length; i++) {
-      dashboard.appendChild(buildPanel(i));
+    let panelIndex = 0;
+    for (let rowIndex = 0; rowIndex < panelRows.length; rowIndex++) {
+      dashboard.appendChild(buildRowDropzone(rowIndex));
+      const rowEl = document.createElement('div');
+      rowEl.className = 'dashboard-row';
+      bindRowDropEvents(rowEl, rowIndex);
+      const rowPanels = panelRows[rowIndex];
+      for (let col = 0; col < rowPanels.length; col++) {
+        rowEl.appendChild(buildPanel(panelIndex));
+        panelIndex += 1;
+      }
+      dashboard.appendChild(rowEl);
     }
+    dashboard.appendChild(buildRowDropzone(panelRows.length));
 
     for (let i = 0; i < state.panels.length; i++) {
       syncPanelControls(i);
     }
 
     updateRemoveButtonState();
+    savePanelRowLayout(panelRows);
     plot.renderAllPanels();
   }
 
@@ -985,10 +1262,6 @@
 
     const addBtn = document.getElementById('add-panel');
     addBtn.addEventListener('click', () => {
-      if (state.panels.length >= MAX_PANELS) {
-        setGlobalStatus(`Reached maximum panels (${MAX_PANELS}).`, true);
-        return;
-      }
       state.panels.push(normalizePanel(defaultPanelForIndex(state.panels.length), state.panels.length));
       rebuildPanels();
       saveStateToStorage();

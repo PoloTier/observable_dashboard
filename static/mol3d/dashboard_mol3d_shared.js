@@ -91,6 +91,11 @@
     atomSizeLabel: document.getElementById('atom-size-label'),
     bondRadiusSlider: document.getElementById('bond-radius-slider'),
     bondRadiusLabel: document.getElementById('bond-radius-label'),
+    atomStyleRangeInput: document.getElementById('atom-style-range-input'),
+    atomStyleModeSelect: document.getElementById('atom-style-mode-select'),
+    atomStyleAddBtn: document.getElementById('atom-style-add-btn'),
+    atomStyleClearBtn: document.getElementById('atom-style-clear-btn'),
+    atomStyleRulesEl: document.getElementById('atom-style-rules'),
     measureTypeBondBtn: document.getElementById('measure-type-bond-btn'),
     measureTypeAngleBtn: document.getElementById('measure-type-angle-btn'),
     measureTypeDihedralBtn: document.getElementById('measure-type-dihedral-btn'),
@@ -149,6 +154,8 @@
     playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
     atomSizeScale: constants.RENDER_SCALE_DEFAULT,
     bondRadiusScale: constants.RENDER_SCALE_DEFAULT,
+    atomRenderRules: [],
+    atomRenderRuleNextId: 1,
     isGifExporting: false,
     gifExportCancelRequested: false,
     gifExportTask: null,
@@ -709,6 +716,230 @@
     }
   }
 
+  const ATOM_RENDER_MODES = Object.freeze(['sphere', 'stick', 'line', 'cartoon']);
+  const ATOM_RENDER_RULE_MAX_SPAN = 20000;
+
+  function getCurrentAtomCount() {
+    const frame0 = Array.isArray(state.currentCoords) ? state.currentCoords[0] : null;
+    return Array.isArray(frame0) ? frame0.length : 0;
+  }
+
+  function getSupportedAtomRenderModes() {
+    return ATOM_RENDER_MODES.slice();
+  }
+
+  function normalizeAtomRenderMode(rawMode) {
+    const mode = String(rawMode || '').trim().toLowerCase();
+    return ATOM_RENDER_MODES.includes(mode) ? mode : null;
+  }
+
+  function parseAtomIndexRuleSpec(rawSpec, atomCount = null) {
+    const text = String(rawSpec || '').trim();
+    if (!text) {
+      return { indices: [], error: 'Please enter atom indices/ranges (0-based).' };
+    }
+
+    const indexSet = new Set();
+    const segments = text.split(',');
+    for (const segmentRaw of segments) {
+      const segment = segmentRaw.trim();
+      if (!segment) {
+        return { indices: [], error: 'Invalid atom index rule: empty segment.' };
+      }
+
+      if (/^\d+$/.test(segment)) {
+        indexSet.add(Number.parseInt(segment, 10));
+        continue;
+      }
+
+      const rangeMatch = segment.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (rangeMatch) {
+        let start = Number.parseInt(rangeMatch[1], 10);
+        let end = Number.parseInt(rangeMatch[2], 10);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          return { indices: [], error: `Invalid atom index segment '${segment}'.` };
+        }
+        if (end < start) {
+          const tmp = start;
+          start = end;
+          end = tmp;
+        }
+        if (end - start > ATOM_RENDER_RULE_MAX_SPAN) {
+          return { indices: [], error: `Atom range '${segment}' is too large.` };
+        }
+        for (let idx = start; idx <= end; idx++) {
+          indexSet.add(idx);
+        }
+        continue;
+      }
+
+      const openEndedMatch = segment.match(/^(\d+)\s*-\s*$/);
+      if (openEndedMatch) {
+        const start = Number.parseInt(openEndedMatch[1], 10);
+        if (!Number.isFinite(start)) {
+          return { indices: [], error: `Invalid atom index segment '${segment}'.` };
+        }
+        const resolvedAtomCount = Number.parseInt(String(atomCount), 10);
+        if (!Number.isFinite(resolvedAtomCount) || resolvedAtomCount <= 0) {
+          return { indices: [], error: `Segment '${segment}' requires a loaded trajectory.` };
+        }
+        const end = resolvedAtomCount - 1;
+        if (start > end) {
+          return { indices: [], error: `Atom index ${start} is out of range. Valid range: 0-${end}.` };
+        }
+        if (end - start > ATOM_RENDER_RULE_MAX_SPAN) {
+          return { indices: [], error: `Atom range '${segment}' is too large.` };
+        }
+        for (let idx = start; idx <= end; idx++) {
+          indexSet.add(idx);
+        }
+        continue;
+      }
+
+      return { indices: [], error: `Invalid atom index segment '${segment}'. Use N, A-B, or A-.` };
+    }
+
+    const indices = Array.from(indexSet).sort((a, b) => a - b);
+    if (!indices.length) {
+      return { indices: [], error: 'No valid atom indices were found in the rule.' };
+    }
+    return { indices, error: '' };
+  }
+
+  function formatAtomIndexRuleSpec(indices) {
+    if (!Array.isArray(indices) || !indices.length) return '';
+
+    const sorted = Array.from(new Set(indices
+      .map((value) => Number.parseInt(String(value), 10))
+      .filter((value) => Number.isFinite(value) && value >= 0)))
+      .sort((a, b) => a - b);
+    if (!sorted.length) return '';
+
+    const parts = [];
+    let start = sorted[0];
+    let prev = sorted[0];
+    for (let idx = 1; idx < sorted.length; idx++) {
+      const value = sorted[idx];
+      if (value === prev + 1) {
+        prev = value;
+        continue;
+      }
+      parts.push(start === prev ? String(start) : `${start}-${prev}`);
+      start = value;
+      prev = value;
+    }
+    parts.push(start === prev ? String(start) : `${start}-${prev}`);
+    return parts.join(', ');
+  }
+
+  function renderAtomRenderRulesUi() {
+    if (!dom.atomStyleRulesEl) return;
+
+    const rules = Array.isArray(state.atomRenderRules) ? state.atomRenderRules : [];
+    dom.atomStyleRulesEl.innerHTML = '';
+    if (!rules.length) {
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'atom-style-rule-empty';
+      emptyEl.textContent = 'No per-atom style rules. Using default style.';
+      dom.atomStyleRulesEl.appendChild(emptyEl);
+      if (dom.atomStyleClearBtn) dom.atomStyleClearBtn.disabled = true;
+      return;
+    }
+
+    for (const rule of rules) {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'atom-style-rule-row';
+      rowEl.dataset.atomStyleRuleId = String(rule.id);
+
+      const modeEl = document.createElement('span');
+      modeEl.className = 'atom-style-rule-mode';
+      modeEl.textContent = String(rule.mode || '');
+      rowEl.appendChild(modeEl);
+
+      const specEl = document.createElement('span');
+      specEl.className = 'atom-style-rule-spec';
+      specEl.textContent = String(rule.rawSpec || '');
+      rowEl.appendChild(specEl);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'atom-style-rule-remove-btn';
+      removeBtn.dataset.atomStyleRuleId = String(rule.id);
+      removeBtn.textContent = 'Remove';
+      rowEl.appendChild(removeBtn);
+
+      dom.atomStyleRulesEl.appendChild(rowEl);
+    }
+
+    if (dom.atomStyleClearBtn) dom.atomStyleClearBtn.disabled = false;
+  }
+
+  function addAtomRenderRule(rawSpec, rawMode) {
+    const atomCount = getCurrentAtomCount();
+    if (atomCount <= 0) {
+      setStatus('Load a trajectory before adding atom-style rules.', true);
+      return null;
+    }
+
+    const mode = normalizeAtomRenderMode(rawMode);
+    if (!mode) {
+      setStatus('Invalid render mode. Supported: sphere, stick, line, cartoon.', true);
+      return null;
+    }
+
+    const parsed = parseAtomIndexRuleSpec(rawSpec, atomCount);
+    if (parsed.error) {
+      setStatus(parsed.error, true);
+      return null;
+    }
+
+    const outOfRange = parsed.indices.find((index) => index < 0 || index >= atomCount);
+    if (Number.isFinite(outOfRange)) {
+      setStatus(`Atom index ${outOfRange} is out of range. Valid range: 0-${atomCount - 1}.`, true);
+      return null;
+    }
+
+    if (!Array.isArray(state.atomRenderRules)) {
+      state.atomRenderRules = [];
+    }
+    const nextId = Number.parseInt(String(state.atomRenderRuleNextId), 10);
+    const ruleId = Number.isFinite(nextId) && nextId > 0 ? nextId : 1;
+    state.atomRenderRuleNextId = ruleId + 1;
+
+    const rule = {
+      id: ruleId,
+      rawSpec: formatAtomIndexRuleSpec(parsed.indices),
+      indices: parsed.indices.slice(),
+      mode,
+    };
+    state.atomRenderRules.push(rule);
+    renderAtomRenderRulesUi();
+    return rule;
+  }
+
+  function removeAtomRenderRule(rawRuleId) {
+    if (!Array.isArray(state.atomRenderRules) || !state.atomRenderRules.length) return false;
+    const ruleId = Number.parseInt(String(rawRuleId), 10);
+    if (!Number.isFinite(ruleId)) return false;
+
+    const idx = state.atomRenderRules.findIndex((rule) => Number.parseInt(String(rule?.id), 10) === ruleId);
+    if (idx < 0) return false;
+    state.atomRenderRules.splice(idx, 1);
+    renderAtomRenderRulesUi();
+    return true;
+  }
+
+  function clearAtomRenderRules() {
+    if (!Array.isArray(state.atomRenderRules) || !state.atomRenderRules.length) {
+      renderAtomRenderRulesUi();
+      return 0;
+    }
+    const cleared = state.atomRenderRules.length;
+    state.atomRenderRules = [];
+    renderAtomRenderRulesUi();
+    return cleared;
+  }
+
   function sanitizeFilenamePart(text) {
     return utils.sanitizeFilenamePart(text);
   }
@@ -735,6 +966,7 @@
   setDeRangeLabel('|dE|: n/a');
   setDeNacRangeLabel('|dE*NAC|: n/a');
   setNacControlsEnabled(false);
+  renderAtomRenderRulesUi();
 
   root.shared = {
     bootstrap,
@@ -796,6 +1028,15 @@
     setDeRangeLabel,
     setDeNacRangeLabel,
     setNacControlsEnabled,
+    getCurrentAtomCount,
+    getSupportedAtomRenderModes,
+    normalizeAtomRenderMode,
+    parseAtomIndexRuleSpec,
+    formatAtomIndexRuleSpec,
+    renderAtomRenderRulesUi,
+    addAtomRenderRule,
+    removeAtomRenderRule,
+    clearAtomRenderRules,
     sanitizeFilenamePart,
   };
 })();

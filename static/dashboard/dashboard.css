@@ -14,9 +14,11 @@ body {
   color: var(--text);
 }
 .page {
-  max-width: 1800px;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
-  padding: 16px;
+  box-sizing: border-box;
+  padding: 16px clamp(12px, 2vw, 24px);
 }
 .header {
   background: var(--panel);
@@ -306,9 +308,46 @@ body {
   min-width: 70px;
 }
 .dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dashboard-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
+  align-items: start;
+}
+.dashboard-row.drag-over {
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px rgba(127, 167, 222, 0.35);
+}
+.dashboard-row-dropzone {
+  min-height: 6px;
+  border: 1px dashed transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: transparent;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+.dashboard.drag-layout-active .dashboard-row-dropzone {
+  min-height: 26px;
+  border-color: #bfd0ea;
+  background: #f8fbff;
+  color: #5b6f8f;
+  opacity: 1;
+  pointer-events: auto;
+}
+.dashboard-row-dropzone.drag-over {
+  border-color: #6f9ad7;
+  background: #e9f1ff;
+  color: #355f95;
 }
 .panel {
   background: var(--panel);
@@ -324,10 +363,17 @@ body {
   padding: 10px 12px;
   background: #fafbfd;
 }
+.panel-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
 .panel-title {
   font-size: 14px;
   font-weight: 600;
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 .panel-subtitle {
   display: none;
@@ -337,6 +383,31 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.panel-drag-handle {
+  border: 1px dashed #b8c8df;
+  background: #fff;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #475569;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.panel-drag-handle:hover {
+  border-color: #93afd8;
+  background: #f4f8ff;
+}
+.panel-drag-handle:active {
+  cursor: grabbing;
+}
+.panel.dragging {
+  opacity: 0.62;
+}
+.panel.drag-over {
+  border-color: #7fa7de;
+  box-shadow: 0 0 0 2px rgba(127, 167, 222, 0.35);
 }
 .panel-controls {
   display: flex;
@@ -427,9 +498,4 @@ body {
 }
 .status.error {
   color: var(--danger);
-}
-@media (max-width: 1200px) {
-  .dashboard {
-    grid-template-columns: 1fr;
-  }
 }

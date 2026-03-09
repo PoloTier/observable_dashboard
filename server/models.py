@@ -148,6 +148,21 @@ class ExpressionSeriesResponse(BaseModel):
     cached: bool
 
 
+class ExpressionEnsembleRequest(BaseModel):
+    expression: str = Field(..., min_length=1)
+    stat_mode: EnsembleStatMode
+
+
+class ExpressionEnsembleResponse(BaseModel):
+    expression: str
+    series_kind: Literal["scalar", "matrix"]
+    n_components: int | None = None
+    stat_mode: EnsembleStatMode
+    component_series: list[EnsembleComponentSeries]
+    n_trajectories: int
+    cached: bool
+
+
 class ExpressionDatasetRequest(BaseModel):
     expression: str = Field(..., min_length=1)
 

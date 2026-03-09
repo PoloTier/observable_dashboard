@@ -156,6 +156,286 @@
     return values;
   }
 
+  function sanitizeFilenamePart(text, fallback = 'panel') {
+    const raw = String(text || '').trim().toLowerCase();
+    const cleaned = raw
+      .replace(/[^a-z0-9._-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!cleaned) return fallback;
+    return cleaned.slice(0, 64);
+  }
+
+  function toFiniteOrNaN(rawValue) {
+    if (rawValue == null) return NaN;
+    const number = Number(rawValue);
+    return Number.isFinite(number) ? number : NaN;
+  }
+
+  function numberToken(value) {
+    if (!Number.isFinite(value)) return 'nan';
+    if (Object.is(value, -0)) return '0';
+    return String(value);
+  }
+
+  function deduceMatrixComponentCount(seriesRecord) {
+    const preferred = Number(seriesRecord?.n_components);
+    if (Number.isFinite(preferred) && preferred > 0) return Math.trunc(preferred);
+    const rows = Array.isArray(seriesRecord?.values) ? seriesRecord.values : [];
+    let maxComponents = 0;
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      if (row.length > maxComponents) maxComponents = row.length;
+    }
+    return maxComponents;
+  }
+
+  async function getBuiltinSeriesRecord(trajId, observable, indices) {
+    await dataLoader.ensureSeries(trajId, observable, indices);
+    const record = dataLoader.getSeries(trajId, observable, indices);
+    if (!record) {
+      throw new Error(`No series data for observable '${observable}' on traj '${trajId}'.`);
+    }
+    const seriesKind = record.series_kind === 'matrix' ? 'matrix' : 'scalar';
+    if (seriesKind === 'matrix') {
+      return {
+        series_kind: 'matrix',
+        time: Array.isArray(record.time) ? record.time : [],
+        values: Array.isArray(record.values) ? record.values : [],
+        n_components: Number.isFinite(Number(record.n_components)) ? Number(record.n_components) : 0,
+      };
+    }
+    return {
+      series_kind: 'scalar',
+      time: Array.isArray(record.time) ? record.time : [],
+      value: Array.isArray(record.value) ? record.value : [],
+      n_components: 1,
+    };
+  }
+
+  async function getExpressionExportSeriesRecord(trajId, expressionText) {
+    const record = await getExpressionSeriesRecord(trajId, expressionText, true);
+    if (!record) {
+      throw new Error(`No expression data for traj '${trajId}'.`);
+    }
+    if (record.series_kind === 'matrix') {
+      return {
+        series_kind: 'matrix',
+        time: Array.isArray(record.time) ? record.time : [],
+        values: Array.isArray(record.values) ? record.values : [],
+        n_components: Number.isFinite(Number(record.n_components)) ? Number(record.n_components) : 0,
+      };
+    }
+    return {
+      series_kind: 'scalar',
+      time: Array.isArray(record.time) ? record.time : [],
+      value: Array.isArray(record.value) ? record.value : [],
+      n_components: 1,
+    };
+  }
+
+  async function getExportSeriesRecordForTraj({ trajId, observable, indices, rawKey, expressionText }) {
+    if (observable === 'raw_key') {
+      const record = await getRawKeySeriesRecord(trajId, rawKey, true);
+      if (!record) {
+        throw new Error(`No raw key data for '${rawKey}' on traj '${trajId}'.`);
+      }
+      return record;
+    }
+    if (observable === 'expression') {
+      return getExpressionExportSeriesRecord(trajId, expressionText);
+    }
+    if (observable === 'notebook_var') {
+      throw new Error('Notebook export is unavailable.');
+    }
+    return getBuiltinSeriesRecord(trajId, observable, indices);
+  }
+
+  function triggerTextDownload(fileName, textContent) {
+    const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
+  async function buildPanelExportPayload(panelIndex) {
+    const panelState = state.panels[panelIndex];
+    if (!panelState) {
+      throw new Error(`Panel ${panelIndex + 1} does not exist.`);
+    }
+
+    const panelObservable = String(panelState.observable || '');
+    const observable = canonicalObservable(panelObservable);
+    const rawAlias = rawAliasFromObservable(panelObservable);
+    const needed = requiredIndexCount(panelObservable);
+    let indices = [];
+
+    if (needed > 0) {
+      const parsed = parsePanelIndices(panelIndex);
+      if (!parsed) {
+        throw new Error('Indices must be integers.');
+      }
+      indices = parsed;
+      panelState.indices = parsed.slice();
+    } else {
+      panelState.indices = [];
+    }
+
+    const rawKey = observable === 'raw_key' ? resolveRawKeyForPanel(panelState, state.rawKeyAliases) : '';
+    const rawName = String(rawAlias || rawKey || 'raw_key').trim();
+    const expressionText = observable === 'expression' ? String(panelState.expression || '').trim() : '';
+
+    if (observable === 'raw_key' && !rawKey) {
+      throw new Error('Raw key is empty. Set it from PKL Key Inspector first.');
+    }
+    if (observable === 'expression' && !expressionText) {
+      throw new Error('Expression is empty.');
+    }
+
+    const orderedTrajIds = trajIds.slice();
+    if (!orderedTrajIds.length) {
+      throw new Error('No trajectory available for export.');
+    }
+
+    const seriesByTraj = [];
+    for (const trajId of orderedTrajIds) {
+      const record = await getExportSeriesRecordForTraj({
+        trajId,
+        observable,
+        indices,
+        rawKey,
+        expressionText,
+      });
+      seriesByTraj.push(record);
+    }
+
+    const componentCounts = seriesByTraj.map((record) => {
+      if (record?.series_kind !== 'matrix') return 1;
+      return deduceMatrixComponentCount(record);
+    });
+
+    const timeSet = new Set();
+    for (const record of seriesByTraj) {
+      const timeValues = Array.isArray(record?.time) ? record.time : [];
+      for (const rawTime of timeValues) {
+        const t = Number(rawTime);
+        if (!Number.isFinite(t)) continue;
+        timeSet.add(t);
+      }
+    }
+    const sortedTimes = Array.from(timeSet).sort((a, b) => a - b);
+    if (!sortedTimes.length) {
+      throw new Error('No data points available for export.');
+    }
+
+    const scalarMaps = [];
+    const matrixMaps = [];
+    for (const record of seriesByTraj) {
+      const timeValues = Array.isArray(record?.time) ? record.time : [];
+      if (record?.series_kind === 'matrix') {
+        const values = Array.isArray(record?.values) ? record.values : [];
+        const map = new Map();
+        const n = Math.min(timeValues.length, values.length);
+        for (let i = 0; i < n; i++) {
+          const t = Number(timeValues[i]);
+          if (!Number.isFinite(t)) continue;
+          const row = Array.isArray(values[i]) ? values[i] : [];
+          map.set(t, row.map((item) => toFiniteOrNaN(item)));
+        }
+        scalarMaps.push(null);
+        matrixMaps.push(map);
+      } else {
+        const values = Array.isArray(record?.value) ? record.value : [];
+        const map = new Map();
+        const n = Math.min(timeValues.length, values.length);
+        for (let i = 0; i < n; i++) {
+          const t = Number(timeValues[i]);
+          if (!Number.isFinite(t)) continue;
+          map.set(t, toFiniteOrNaN(values[i]));
+        }
+        scalarMaps.push(map);
+        matrixMaps.push(null);
+      }
+    }
+
+    const header = ['time'];
+    for (let trajIndex = 0; trajIndex < orderedTrajIds.length; trajIndex++) {
+      const componentCount = Math.max(0, Number(componentCounts[trajIndex]) || 0);
+      for (let component = 0; component < componentCount; component++) {
+        header.push(`${trajIndex}-${component}`);
+      }
+    }
+
+    const lines = [header.join(' ')];
+    for (const t of sortedTimes) {
+      const row = [numberToken(t)];
+      for (let trajIndex = 0; trajIndex < orderedTrajIds.length; trajIndex++) {
+        const componentCount = Math.max(0, Number(componentCounts[trajIndex]) || 0);
+        if (!componentCount) continue;
+        const record = seriesByTraj[trajIndex];
+        if (record?.series_kind === 'matrix') {
+          const valueRow = matrixMaps[trajIndex]?.get(t) || null;
+          for (let component = 0; component < componentCount; component++) {
+            const value = Array.isArray(valueRow) && component < valueRow.length
+              ? toFiniteOrNaN(valueRow[component])
+              : NaN;
+            row.push(numberToken(value));
+          }
+        } else {
+          const value = scalarMaps[trajIndex]?.get(t);
+          row.push(numberToken(toFiniteOrNaN(value)));
+          for (let component = 1; component < componentCount; component++) {
+            row.push('nan');
+          }
+        }
+      }
+      lines.push(row.join(' '));
+    }
+
+    const namePart = (() => {
+      if (observable === 'expression') {
+        const label = String(panelState.expressionLabel || '').trim();
+        return sanitizeFilenamePart(label || expressionText || 'expression', 'expression');
+      }
+      if (observable === 'raw_key') {
+        return sanitizeFilenamePart(rawName || 'raw_key', 'raw_key');
+      }
+      const withIndices = needed > 0 ? `${observable}_${indices.join('-')}` : observable;
+      return sanitizeFilenamePart(withIndices || 'panel', 'panel');
+    })();
+
+    return {
+      fileName: `${namePart}_all_traj.txt`,
+      textContent: `${lines.join('\n')}\n`,
+      rowCount: sortedTimes.length,
+      columnCount: header.length,
+    };
+  }
+
+  async function exportPanelData(panelIndex) {
+    panelMessage(panelIndex, '');
+    setGlobalStatus(`Exporting panel ${panelIndex + 1} data...`);
+    try {
+      const payload = await buildPanelExportPayload(panelIndex);
+      triggerTextDownload(payload.fileName, payload.textContent);
+      setGlobalStatus(
+        `Exported panel ${panelIndex + 1}: ${payload.fileName} (${payload.rowCount} rows, ${payload.columnCount} cols).`
+      );
+      return payload;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      panelMessage(panelIndex, detail);
+      setGlobalStatus(`Export failed (Panel ${panelIndex + 1}): ${detail}`, true);
+      throw error;
+    }
+  }
+
   function panelMessage(panelIndex, text) {
     const el = document.getElementById(`msg-${panelIndex}`);
     if (el) el.textContent = text || '';
@@ -259,23 +539,12 @@
     };
   }
 
-  async function getExpressionDatasetRecord(expression, allowFetch) {
+  async function getExpressionEnsembleRecord(expression, statMode, allowFetch) {
     if (allowFetch) {
-      await dataLoader.ensureExpressionDataset(expression);
+      await dataLoader.ensureExpressionEnsemble(expression, statMode);
     }
-    const record = dataLoader.getExpressionDataset(expression);
-    if (!record) return null;
-    const seriesKind = record.series_kind === 'matrix' ? 'matrix' : 'scalar';
-    return {
-      scope: String(record.scope || 'dataset'),
-      series_kind: seriesKind,
-      expression: String(record.expression || expression),
-      time: Array.isArray(record.time) ? record.time : [],
-      value: seriesKind === 'scalar' && Array.isArray(record.value) ? record.value : [],
-      values: seriesKind === 'matrix' && Array.isArray(record.values) ? record.values : [],
-      n_components: Number.isFinite(Number(record.n_components)) ? Number(record.n_components) : 0,
-      sample_count: Array.isArray(record.sample_count) ? record.sample_count : null,
-    };
+    const record = dataLoader.getExpressionEnsemble(expression, statMode);
+    return record || null;
   }
 
   function notebookSessionId() {
@@ -762,55 +1031,116 @@
 
         const traceNameBase = expressionLabel || 'expression';
         if (state.selectedTraj === 'all') {
-          const datasetRecord = await getExpressionDatasetRecord(expressionText, true);
-          if (!datasetRecord) {
-            panelMessage(panelIndex, 'No dataset expression result.');
-            purgePlot(plotId);
-            return;
+          const drawTraces = state.showAllTraces || !state.showEnsemble;
+          const expressionScalarSeries = [];
+          const expressionMatrixSeries = [];
+          let expectedKind = '';
+          let ensembleRecord = null;
+
+          if (drawTraces) {
+            let done = 0;
+            const total = selectedIds.length;
+            setGlobalStatus(`Computing All (Panel ${panelIndex + 1}): 0/${total}`);
+
+            for (const trajId of selectedIds) {
+              const seriesRecord = await getExpressionSeriesRecord(trajId, expressionText, true);
+              done += 1;
+              setGlobalStatus(`Computing All (Panel ${panelIndex + 1}): ${done}/${total}`);
+              if (!seriesRecord) continue;
+              if (!expectedKind) {
+                expectedKind = seriesRecord.series_kind;
+              } else if (seriesRecord.series_kind !== expectedKind) {
+                throw new Error(
+                  (
+                    `Expression '${expressionText}' has mixed series kinds across trajectories `
+                    + '(scalar and matrix), which is not supported in All mode.'
+                  )
+                );
+              }
+              if (seriesRecord.series_kind === 'matrix') {
+                expressionMatrixSeries.push({ traj_id: trajId, time: seriesRecord.time, values: seriesRecord.values });
+              } else {
+                expressionScalarSeries.push({ traj_id: trajId, time: seriesRecord.time, value: seriesRecord.value });
+              }
+            }
+            setGlobalStatus(`All auto compute complete (Panel ${panelIndex + 1}): ${done}/${total}`);
           }
-          if (datasetRecord.series_kind === 'matrix') {
-            const firstRow = Array.isArray(datasetRecord.values?.[0]) ? datasetRecord.values[0] : [];
-            const nComponents = Number(datasetRecord.n_components) > 0
-              ? Number(datasetRecord.n_components)
-              : firstRow.length;
-            if (!nComponents) {
-              panelMessage(panelIndex, 'No expression matrix components available.');
+
+          if (state.showEnsemble) {
+            ensembleRecord = await getExpressionEnsembleRecord(expressionText, panelStatMode, true);
+            const componentSeries = Array.isArray(ensembleRecord?.component_series)
+              ? ensembleRecord.component_series
+              : [];
+            if (!componentSeries.length) {
+              panelMessage(panelIndex, `No expression ensemble data for '${expressionText}'.`);
               purgePlot(plotId);
               return;
             }
-            for (let component = 0; component < nComponents; component++) {
-              const n = Math.min(datasetRecord.time.length, datasetRecord.values.length);
-              const x = [];
-              const y = [];
-              const counts = [];
-              for (let i = 0; i < n; i++) {
-                if (!Array.isArray(datasetRecord.values[i]) || datasetRecord.values[i].length <= component) continue;
-                x.push(datasetRecord.time[i]);
-                y.push(datasetRecord.values[i][component]);
-                counts.push(Array.isArray(datasetRecord.sample_count) ? datasetRecord.sample_count[i] : null);
+            const ensembleKind = ensembleRecord?.series_kind === 'matrix' ? 'matrix' : 'scalar';
+            if (expectedKind && ensembleKind !== expectedKind) {
+              throw new Error(
+                (
+                  `Expression '${expressionText}' has inconsistent series kind between traces and ensemble `
+                  + '(scalar and matrix), which is unsupported.'
+                )
+              );
+            }
+            if (!expectedKind) {
+              expectedKind = ensembleKind;
+            }
+          }
+
+          if (drawTraces) {
+            if (!expectedKind) {
+              panelMessage(panelIndex, `No expression data found for '${expressionText}'.`);
+              purgePlot(plotId);
+              return;
+            }
+            if (expectedKind === 'matrix') {
+              if (!expressionMatrixSeries.length && !state.showEnsemble) {
+                panelMessage(panelIndex, `No expression matrix data found for '${expressionText}'.`);
+                purgePlot(plotId);
+                return;
               }
-              if (!x.length) continue;
-              figData.push({
-                x: x,
-                y: y,
-                customdata: counts,
-                type: 'scatter',
-                mode: 'lines',
-                line: { color: stateColor(component), width: 2 },
-                name: `${traceNameBase} component ${component}`,
-                showlegend: true,
-                hovertemplate: 't=%{x:.4f}<br>y=%{y:.6f}<br>n=%{customdata}<extra></extra>'
-              });
+              addAllModeRawKeyMatrix(
+                figData,
+                expressionMatrixSeries,
+                traceNameBase,
+                null,
+                ensembleRecord,
+                panelStatMode
+              );
+              if (!figData.length) {
+                panelMessage(panelIndex, `No expression components available for '${expressionText}'.`);
+                purgePlot(plotId);
+                return;
+              }
+            } else {
+              if (!expressionScalarSeries.length && !state.showEnsemble) {
+                panelMessage(panelIndex, `No expression data found for '${expressionText}'.`);
+                purgePlot(plotId);
+                return;
+              }
+              addAllModeScalar(figData, expressionScalarSeries, traceNameBase, '#1f77b4', ensembleRecord, panelStatMode);
             }
           } else {
-            addExpressionScalarTrace(
-              figData,
-              `${traceNameBase} dataset`,
-              datasetRecord.time,
-              datasetRecord.value,
-              datasetRecord.sample_count,
-              '#1f77b4'
-            );
+            const componentSeries = Array.isArray(ensembleRecord?.component_series)
+              ? ensembleRecord.component_series
+              : [];
+            if (!componentSeries.length) {
+              panelMessage(panelIndex, `No expression ensemble data for '${expressionText}'.`);
+              purgePlot(plotId);
+              return;
+            }
+            if (componentSeries.length === 1) {
+              addAllModeScalar(figData, [], traceNameBase, '#1f77b4', ensembleRecord, panelStatMode);
+            } else {
+              const labels = componentSeries.map((series, idx) => {
+                const text = String(series?.label || '').trim();
+                return text || `component ${idx}`;
+              });
+              addAllModeRawKeyMatrix(figData, [], traceNameBase, labels, ensembleRecord, panelStatMode);
+            }
           }
         } else {
           const trajId = selectedIds[0];
@@ -1578,6 +1908,7 @@
   root.plot = {
     renderPanel,
     renderAllPanels,
+    exportPanelData,
     bindHoverSyncHandlers,
   };
 })();

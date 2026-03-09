@@ -262,10 +262,6 @@
   }
 
   function addPanelForVariable(variableName) {
-    if (shared.state.panels.length >= shared.MAX_PANELS) {
-      shared.setGlobalStatus(`Reached maximum panels (${shared.MAX_PANELS}).`, true);
-      return;
-    }
     shared.state.panels.push(
       shared.normalizePanel(
         {

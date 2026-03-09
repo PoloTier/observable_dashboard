@@ -61,15 +61,10 @@
 
   const STORAGE_KEY = 'traj_dashboard_state_v1';
   const MIN_PANELS = 1;
-  const MAX_PANELS = Math.max(1, Number(defaults?.ui?.max_panels || 8));
-  const DEFAULT_PANEL_COUNT = Math.min(
-    MAX_PANELS,
-    Math.max(MIN_PANELS, Number(defaults?.ui?.default_panel_count || 4))
-  );
+  const DEFAULT_PANEL_COUNT = Math.max(MIN_PANELS, Number(defaults?.ui?.default_panel_count || 4));
   const RAW_ALIAS_PREFIX = 'raw_alias::';
   const observableOptions = [
-    'bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key', 'expression',
-    'notebook_var'
+    'bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key', 'expression'
   ];
   const ensembleStatModes = ['mean_ci95_bootstrap', 'median_iqr'];
 
@@ -140,7 +135,6 @@
     if (canonical === 'dihedral') return 4;
     if (canonical === 'de_nac') return 2;
     if (canonical === 'expression') return 0;
-    if (canonical === 'notebook_var') return 0;
     return 0;
   }
 
@@ -173,7 +167,6 @@
       rawKey: '',
       expression: '',
       expressionLabel: '',
-      notebookVar: '',
       ensembleStatMode: ensembleStatModes.includes(modeCandidate) ? modeCandidate : 'mean_ci95_bootstrap',
     };
 
@@ -187,11 +180,6 @@
       const expressionLabelCandidate = panel?.expressionLabel ?? fallback?.expressionLabel ?? '';
       out.expression = String(expressionCandidate || '').trim();
       out.expressionLabel = String(expressionLabelCandidate || '').trim();
-    }
-
-    if (out.observable === 'notebook_var') {
-      const notebookVarCandidate = panel?.notebookVar ?? fallback?.notebookVar ?? '';
-      out.notebookVar = String(notebookVarCandidate || '').trim();
     }
 
     const needed = requiredIndexCount(out.observable);
@@ -269,7 +257,7 @@
       if (typeof parsed.showAllTraces === 'boolean') baseState.showAllTraces = parsed.showAllTraces;
 
       if (Array.isArray(parsed.panels)) {
-        const panelCount = Math.min(MAX_PANELS, Math.max(MIN_PANELS, parsed.panels.length));
+        const panelCount = Math.max(MIN_PANELS, parsed.panels.length);
         const restored = [];
         for (let i = 0; i < panelCount; i++) {
           restored.push(normalizePanel(parsed.panels[i] || {}, i));
@@ -312,7 +300,6 @@
     apiBase,
     STORAGE_KEY,
     MIN_PANELS,
-    MAX_PANELS,
     DEFAULT_PANEL_COUNT,
     RAW_ALIAS_PREFIX,
     observableOptions,

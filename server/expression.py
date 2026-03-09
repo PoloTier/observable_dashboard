@@ -12,15 +12,15 @@ from .dataset_store import DatasetStore
 InternalScope = Literal["trajectory", "dataset", "literal"]
 PublicScope = Literal["trajectory", "dataset"]
 
-DEPRECATED_FUNCTIONS = {
-    "mean": "cmean",
-    "sum": "csum",
+REMOVED_FUNCTION_HINTS: dict[str, str] = {
+    "cmean": "Cross-trajectory operations are disabled; use /expression-series with a traj_id.",
+    "csum": "Cross-trajectory operations are disabled; use /expression-series with a traj_id.",
+    "mean": "Use reduce{X,[...]} for within-trajectory axis reductions.",
+    "sum": "Use reduce{X,[...]} for within-trajectory axis reductions.",
 }
 
-ERR_SCOPE_MISMATCH = "Function '{func}' expects trajectory scope, but received {actual}."
 ERR_FUNC_ARITY = "Function '{func}' expects {expected} args, got {actual}."
 ERR_UNSUPPORTED_FUNC = "Unsupported function '{func}'. Supported functions: {supported}."
-ERR_DEPRECATED_FUNC = "Function '{old}' is not supported. Please use '{new}'."
 ERR_COMPLEX_UNSUPPORTED = "Function '{func}' does not support complex-valued input; wrap with tabs{{...}} first."
 
 
@@ -123,31 +123,6 @@ def _safe_inverse(data: np.ndarray) -> np.ndarray:
     out = np.asarray(out, dtype=float)
     out[~np.isfinite(out)] = np.nan
     return out
-
-
-def _safe_csum(data: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
-    sums = np.nansum(data, axis=axis)
-    sums = np.asarray(sums, dtype=float)
-    all_nan_mask = np.all(np.isnan(data), axis=axis)
-    if sums.ndim == 0:
-        if bool(all_nan_mask):
-            return np.asarray(np.nan, dtype=float), np.sum(~np.isnan(data), axis=axis).astype(int)
-        return sums, np.sum(~np.isnan(data), axis=axis).astype(int)
-    sums[np.asarray(all_nan_mask, dtype=bool)] = np.nan
-    return sums, np.sum(~np.isnan(data), axis=axis).astype(int)
-
-
-def _safe_cmean(data: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
-    sums = np.nansum(data, axis=axis)
-    counts = np.sum(~np.isnan(data), axis=axis).astype(int)
-    out = np.asarray(sums, dtype=float)
-    if out.ndim == 0:
-        return (np.asarray(np.nan, dtype=float), counts) if int(counts) <= 0 else (out / float(counts), counts)
-    out = np.asarray(out, dtype=float)
-    valid = counts > 0
-    out[~valid] = np.nan
-    out[valid] = out[valid] / counts[valid]
-    return out, counts
 
 
 def _safe_nansum_over_axes(data: np.ndarray, axes: tuple[int, ...]) -> np.ndarray:
@@ -278,78 +253,6 @@ class ElementwiseOp(BaseOp):
         )
 
 
-class CrossReduceOp(BaseOp):
-    def __init__(
-        self,
-        name: str,
-        reducer: Callable[[np.ndarray, int], tuple[np.ndarray, np.ndarray]],
-    ) -> None:
-        super().__init__(name=name, arity=1)
-        self._reducer = reducer
-
-    def __call__(self, evaluator: "_Evaluator", args: list[_ExprNode], traj_id: str | None) -> _ExprValue:
-        if not evaluator.traj_ids_str:
-            raise ExpressionEvaluationError(f"Function '{self.name}' requires at least one trajectory.")
-
-        child_node = args[0]
-        stacked_values: list[np.ndarray] = []
-
-        ref_shape: tuple[int, ...] | None = None
-        ref_has_time: bool | None = None
-        ref_time: np.ndarray | None = None
-
-        for tid in evaluator.traj_ids_str:
-            current = evaluator.visit(child_node, tid)
-            if current.scope != "trajectory":
-                raise ExpressionEvaluationError(
-                    ERR_SCOPE_MISMATCH.format(func=self.name, actual=_public_scope(current.scope))
-                )
-
-            current_data_raw = np.asarray(current.data)
-            if np.iscomplexobj(current_data_raw):
-                raise ExpressionEvaluationError(ERR_COMPLEX_UNSUPPORTED.format(func=self.name))
-            current_data = np.asarray(current_data_raw, dtype=float)
-
-            if ref_shape is None:
-                ref_shape = tuple(current_data.shape)
-                ref_has_time = bool(current.has_time)
-                if current.has_time:
-                    if current.time is None:
-                        raise ExpressionEvaluationError(
-                            f"Function '{self.name}' encountered missing time metadata."
-                        )
-                    ref_time = np.asarray(current.time, dtype=float).reshape(-1)
-            else:
-                if tuple(current_data.shape) != tuple(ref_shape):
-                    raise ExpressionEvaluationError(
-                        (
-                            f"Function '{self.name}' requires matching shapes across trajectories: "
-                            f"expected {ref_shape}, got {current_data.shape} for traj '{tid}'."
-                        )
-                    )
-                if bool(current.has_time) != bool(ref_has_time):
-                    raise ExpressionEvaluationError(
-                        f"Function '{self.name}' got mixed timed and timeless inputs across trajectories."
-                    )
-
-            stacked_values.append(current_data)
-
-        big_matrix = np.stack(stacked_values, axis=0)
-        reduced, counts = self._reducer(big_matrix, 0)
-
-        sample_count: np.ndarray | None = None
-        if bool(ref_has_time) and np.asarray(reduced).ndim == 1:
-            sample_count = np.asarray(counts, dtype=int).reshape(-1)
-
-        return _ExprValue(
-            data=np.asarray(reduced, dtype=float),
-            scope="dataset",
-            has_time=bool(ref_has_time),
-            time=None if not bool(ref_has_time) else np.asarray(ref_time, dtype=float),
-            sample_count=sample_count,
-        )
-
-
 class TabsOp(BaseOp):
     def __init__(self) -> None:
         super().__init__(name="tabs", arity=1)
@@ -407,14 +310,6 @@ class ReduceByAxesOp(BaseOp):
         )
 
 
-def _reduce_cmean(data: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
-    return _safe_cmean(data, axis=axis)
-
-
-def _reduce_csum(data: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
-    return _safe_csum(data, axis=axis)
-
-
 OPERATORS: dict[str, BaseOp] = {
     "tadd": ElementwiseOp("tadd", np.add, arity=2),
     "tminus": ElementwiseOp("tminus", np.subtract, arity=2),
@@ -424,8 +319,6 @@ OPERATORS: dict[str, BaseOp] = {
     "tinv": ElementwiseOp("tinv", _safe_inverse, arity=1, sanitize_non_finite=True),
     "tabs": TabsOp(),
     "reduce": ReduceByAxesOp(),
-    "cmean": CrossReduceOp("cmean", _reduce_cmean),
-    "csum": CrossReduceOp("csum", _reduce_csum),
 }
 
 
@@ -532,10 +425,10 @@ class _Parser:
         if token.kind == "KEY":
             next_token = self.tokens[self.idx + 1] if self.idx + 1 < len(self.tokens) else None
             if next_token is not None and next_token.kind == "LBRACE":
-                replacement = DEPRECATED_FUNCTIONS.get(token.text)
-                if replacement is not None:
+                hint = REMOVED_FUNCTION_HINTS.get(token.text)
+                if hint is not None:
                     raise ExpressionEvaluationError(
-                        ERR_DEPRECATED_FUNC.format(old=token.text, new=replacement)
+                        f"Function '{token.text}' is not supported. {hint}"
                     )
                 raise ExpressionEvaluationError(
                     ERR_UNSUPPORTED_FUNC.format(
@@ -594,7 +487,6 @@ class _Parser:
 class _Evaluator:
     def __init__(self, store: DatasetStore) -> None:
         self.store = store
-        self.traj_ids_str = [str(v) for v in store.traj_ids]
 
     def evaluate(self, node: _ExprNode, traj_id: str | None) -> _ExprValue:
         return self.visit(node, traj_id)
@@ -622,7 +514,7 @@ class _Evaluator:
     def _visit_key(self, key: str, traj_id: str | None) -> _ExprValue:
         if traj_id is None:
             raise ExpressionEvaluationError(
-                f"Raw key '{key}' requires trajectory context; use /expression-series or wrap it with cmean/csum."
+                f"Raw key '{key}' requires trajectory context; use /expression-series with a traj_id."
             )
 
         payload = self.store.build_raw_key_expression_value(traj_id, key)
@@ -649,10 +541,10 @@ class _Evaluator:
     def _visit_call(self, func_name: str, args: list[_ExprNode], traj_id: str | None) -> _ExprValue:
         op = OPERATORS.get(func_name)
         if op is None:
-            replacement = DEPRECATED_FUNCTIONS.get(func_name)
-            if replacement is not None:
+            hint = REMOVED_FUNCTION_HINTS.get(func_name)
+            if hint is not None:
                 raise ExpressionEvaluationError(
-                    ERR_DEPRECATED_FUNC.format(old=func_name, new=replacement)
+                    f"Function '{func_name}' is not supported. {hint}"
                 )
             raise ExpressionEvaluationError(
                 ERR_UNSUPPORTED_FUNC.format(func=func_name, supported=_supported_functions_text())

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from typing import Callable
 
 import numpy as np
-from fastapi.testclient import TestClient
+import pytest
+from fastapi import HTTPException
 
 # Keep tests runnable from repository root without requiring editable install.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -14,6 +16,13 @@ if str(REPO_ROOT) not in sys.path:
 from tools.observable_dashboard.server.app import create_app
 from tools.observable_dashboard.server.cache import SeriesLRUCache
 from tools.observable_dashboard.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
+from tools.observable_dashboard.server.models import (
+    ExpressionEnsembleRequest,
+    ExpressionEnsembleResponse,
+    ExpressionDatasetRequest,
+    ExpressionSeriesRequest,
+    ExpressionSeriesResponse,
+)
 
 
 def _build_traj(traj_id: str, time_values: list[float]) -> TrajectoryRecord:
@@ -89,115 +98,196 @@ def _build_store() -> DatasetStore:
     )
 
 
-def _make_client() -> TestClient:
+def _make_endpoints() -> tuple[Callable[..., object], Callable[..., object], Callable[..., object]]:
     store = _build_store()
     app = create_app(store=store, cache=SeriesLRUCache(max_entries=128))
-    return TestClient(app)
+    series_ep = None
+    ensemble_ep = None
+    dataset_ep = None
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        methods = set(getattr(route, "methods", set()) or set())
+        if path == "/api/expression-series" and "POST" in methods:
+            series_ep = route.endpoint
+        if path == "/api/expression-ensemble" and "POST" in methods:
+            ensemble_ep = route.endpoint
+        if path == "/api/expression-dataset" and "POST" in methods:
+            dataset_ep = route.endpoint
+    assert callable(series_ep)
+    assert callable(ensemble_ep)
+    assert callable(dataset_ep)
+    return series_ep, ensemble_ep, dataset_ep
 
 
-def test_expression_dataset_returns_sample_count_and_n_trajectories() -> None:
-    client = _make_client()
-    response = client.post(
-        "/api/expression-dataset",
-        json={"expression": "cmean{_.0.record.A}"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["scope"] == "dataset"
-    assert payload["series_kind"] == "scalar"
-    assert payload["n_trajectories"] == 2
-    assert payload["sample_count"] == [2, 0, 2]
-    assert payload["cached"] is False
-    values = np.asarray(payload["value"], dtype=float)
-    np.testing.assert_allclose(values, np.asarray([1.5, np.nan, 4.5], dtype=float), equal_nan=True)
-
-    # Cache should be hit on repeated request.
-    response_cached = client.post(
-        "/api/expression-dataset",
-        json={"expression": "cmean{_.0.record.A}"},
-    )
-    assert response_cached.status_code == 200
-    assert response_cached.json()["cached"] is True
+def test_expression_dataset_is_disabled() -> None:
+    _, _, dataset_ep = _make_endpoints()
+    with pytest.raises(HTTPException) as exc_info:
+        dataset_ep(ExpressionDatasetRequest(expression="tadd{_.0.record.A,-5}"))
+    assert exc_info.value.status_code == 422
+    assert "single-trajectory mode" in str(exc_info.value.detail)
 
 
-def test_expression_dataset_rejects_nested_cross_reduction() -> None:
-    client = _make_client()
-    response = client.post(
-        "/api/expression-dataset",
-        json={"expression": "cmean{cmean{_.0.record.A}}"},
-    )
-    assert response.status_code == 422
-    detail = str(response.json().get("detail", ""))
-    assert "expects trajectory scope" in detail
+def test_expression_series_rejects_cross_trajectory_ops() -> None:
+    series_ep, _, _ = _make_endpoints()
+    with pytest.raises(HTTPException) as exc_info:
+        series_ep(ExpressionSeriesRequest(traj_id="0", expression="cmean{_.0.record.A}"))
+    assert exc_info.value.status_code == 422
+    assert "Function 'cmean' is not supported" in str(exc_info.value.detail)
 
 
 def test_expression_series_supports_literals_and_cache() -> None:
-    client = _make_client()
-    response = client.post(
-        "/api/expression-series",
-        json={"traj_id": "0", "expression": "tadd{_.0.record.A,-5}"},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["scope"] == "trajectory"
-    assert payload["series_kind"] == "scalar"
-    assert payload["cached"] is False
+    series_ep, _, _ = _make_endpoints()
+    payload = series_ep(ExpressionSeriesRequest(traj_id="0", expression="tadd{_.0.record.A,-5}"))
+    assert isinstance(payload, ExpressionSeriesResponse)
+    assert payload.scope == "trajectory"
+    assert payload.series_kind == "scalar"
+    assert payload.cached is False
     np.testing.assert_allclose(
-        np.asarray(payload["value"], dtype=float),
+        np.asarray(payload.value, dtype=float),
         np.asarray([-4.0, np.nan, -2.0], dtype=float),
         equal_nan=True,
     )
 
-    response_cached = client.post(
-        "/api/expression-series",
-        json={"traj_id": "0", "expression": "tadd{_.0.record.A,-5}"},
+    payload_cached = series_ep(
+        ExpressionSeriesRequest(traj_id="0", expression="tadd{_.0.record.A,-5}")
     )
-    assert response_cached.status_code == 200
-    assert response_cached.json()["cached"] is True
+    assert isinstance(payload_cached, ExpressionSeriesResponse)
+    assert payload_cached.cached is True
 
 
 def test_expression_series_reduce_tabs_complex_matrix() -> None:
-    client = _make_client()
-    response = client.post(
-        "/api/expression-series",
-        json={"traj_id": "0", "expression": "reduce{tabs{_.0.record.CM},[-1]}"},
+    series_ep, _, _ = _make_endpoints()
+    payload = series_ep(
+        ExpressionSeriesRequest(traj_id="0", expression="reduce{tabs{_.0.record.CM},[-1]}")
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["scope"] == "trajectory"
-    assert payload["series_kind"] == "scalar"
-    assert payload["cached"] is False
+    assert isinstance(payload, ExpressionSeriesResponse)
+    assert payload.scope == "trajectory"
+    assert payload.series_kind == "scalar"
+    assert payload.cached is False
     np.testing.assert_allclose(
-        np.asarray(payload["value"], dtype=float),
+        np.asarray(payload.value, dtype=float),
         np.asarray([np.sqrt(2.0) + 2.0, np.nan, 23.0], dtype=float),
         equal_nan=True,
     )
 
-    response_cached = client.post(
-        "/api/expression-series",
-        json={"traj_id": "0", "expression": "reduce{tabs{_.0.record.CM},[-1]}"},
+    payload_cached = series_ep(
+        ExpressionSeriesRequest(traj_id="0", expression="reduce{tabs{_.0.record.CM},[-1]}")
     )
-    assert response_cached.status_code == 200
-    assert response_cached.json()["cached"] is True
+    assert isinstance(payload_cached, ExpressionSeriesResponse)
+    assert payload_cached.cached is True
 
 
 def test_expression_series_reduce_rejects_timed_axis0() -> None:
-    client = _make_client()
-    response = client.post(
-        "/api/expression-series",
-        json={"traj_id": "0", "expression": "reduce{_.0.record.M,[0]}"},
-    )
-    assert response.status_code == 422
-    detail = str(response.json().get("detail", ""))
-    assert "cannot reduce over time axis 0" in detail
+    series_ep, _, _ = _make_endpoints()
+    with pytest.raises(HTTPException) as exc_info:
+        series_ep(ExpressionSeriesRequest(traj_id="0", expression="reduce{_.0.record.M,[0]}"))
+    assert exc_info.value.status_code == 422
+    assert "cannot reduce over time axis 0" in str(exc_info.value.detail)
 
 
 def test_expression_series_rejects_complex_without_tabs() -> None:
-    client = _make_client()
-    response = client.post(
-        "/api/expression-series",
-        json={"traj_id": "0", "expression": "tadd{_.0.record.CM,1}"},
+    series_ep, _, _ = _make_endpoints()
+    with pytest.raises(HTTPException) as exc_info:
+        series_ep(ExpressionSeriesRequest(traj_id="0", expression="tadd{_.0.record.CM,1}"))
+    assert exc_info.value.status_code == 422
+    assert "wrap with tabs" in str(exc_info.value.detail)
+
+
+def test_expression_ensemble_scalar_supports_cache() -> None:
+    _, ensemble_ep, _ = _make_endpoints()
+    payload = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tadd{_.0.record.A,-5}",
+            stat_mode="mean_ci95_bootstrap",
+        )
     )
-    assert response.status_code == 422
-    detail = str(response.json().get("detail", ""))
-    assert "wrap with tabs" in detail
+    assert isinstance(payload, ExpressionEnsembleResponse)
+    assert payload.expression == "tadd{_.0.record.A,-5}"
+    assert payload.series_kind == "scalar"
+    assert payload.n_components is None
+    assert payload.cached is False
+    assert payload.n_trajectories == 2
+    assert len(payload.component_series) == 1
+    component = payload.component_series[0]
+    np.testing.assert_allclose(
+        np.asarray(component.time, dtype=float),
+        np.asarray([0.0, 2.0], dtype=float),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(component.center, dtype=float),
+        np.asarray([-3.5, -0.5], dtype=float),
+        atol=1e-12,
+    )
+    assert component.sample_count == [2, 2]
+    assert len(component.low) == len(component.center) == len(component.high) == 2
+    for low, center, high in zip(component.low, component.center, component.high):
+        assert float(low) <= float(center) <= float(high)
+
+    payload_cached = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tadd{_.0.record.A,-5}",
+            stat_mode="mean_ci95_bootstrap",
+        )
+    )
+    assert isinstance(payload_cached, ExpressionEnsembleResponse)
+    assert payload_cached.cached is True
+
+
+def test_expression_ensemble_matrix_supports_median_iqr() -> None:
+    _, ensemble_ep, _ = _make_endpoints()
+    payload = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tabs{_.0.record.CM}",
+            stat_mode="median_iqr",
+        )
+    )
+    assert isinstance(payload, ExpressionEnsembleResponse)
+    assert payload.expression == "tabs{_.0.record.CM}"
+    assert payload.series_kind == "matrix"
+    assert payload.n_components == 2
+    assert payload.n_trajectories == 2
+    assert payload.cached is False
+    assert len(payload.component_series) == 2
+
+    comp0 = payload.component_series[0]
+    comp1 = payload.component_series[1]
+    np.testing.assert_allclose(
+        np.asarray(comp0.time, dtype=float),
+        np.asarray([0.0, 2.0], dtype=float),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(comp0.center, dtype=float),
+        np.asarray([2.1213203435596424, 10.0], dtype=float),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(comp1.center, dtype=float),
+        np.asarray([1.5, 19.0], dtype=float),
+        atol=1e-12,
+    )
+    assert comp0.sample_count == [2, 2]
+    assert comp1.sample_count == [2, 2]
+
+    payload_cached = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tabs{_.0.record.CM}",
+            stat_mode="median_iqr",
+        )
+    )
+    assert isinstance(payload_cached, ExpressionEnsembleResponse)
+    assert payload_cached.cached is True
+
+
+def test_expression_ensemble_rejects_cross_trajectory_ops() -> None:
+    _, ensemble_ep, _ = _make_endpoints()
+    with pytest.raises(HTTPException) as exc_info:
+        ensemble_ep(
+            ExpressionEnsembleRequest(
+                expression="cmean{_.0.record.A}",
+                stat_mode="mean_ci95_bootstrap",
+            )
+        )
+    assert exc_info.value.status_code == 422
+    assert "Function 'cmean' is not supported" in str(exc_info.value.detail)

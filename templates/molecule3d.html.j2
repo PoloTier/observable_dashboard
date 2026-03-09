@@ -23,9 +23,11 @@
       color: var(--text);
     }
     .page {
-      max-width: 1080px;
-      margin: 0 auto;
+      width: 100%;
+      max-width: none;
+      margin: 0;
       padding: 16px;
+      box-sizing: border-box;
     }
     .header,
     .viewer-card {
@@ -137,6 +139,101 @@
       text-align: right;
       white-space: nowrap;
     }
+    .atom-style-controls {
+      width: 100%;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px dashed #d9dee7;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    #atom-style-range-input {
+      min-width: 220px;
+      flex: 1 1 280px;
+    }
+    #atom-style-mode-select {
+      min-width: 110px;
+    }
+    #atom-style-add-btn {
+      border: 1px solid #b7c8ea;
+      color: #0b5ed7;
+      background: #eef5ff;
+      font-weight: 600;
+      line-height: 1.1;
+      padding: 4px 8px;
+    }
+    #atom-style-add-btn:hover:not(:disabled) {
+      background: #dceaff;
+    }
+    #atom-style-clear-btn {
+      border: 1px solid #efc5c1;
+      color: #b42318;
+      background: #fff7f6;
+      line-height: 1.1;
+      padding: 4px 8px;
+    }
+    #atom-style-clear-btn:hover:not(:disabled) {
+      background: #ffe9e7;
+    }
+    #atom-style-rules-hint {
+      width: 100%;
+      color: #64748b;
+    }
+    .atom-style-rules {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .atom-style-rule-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #d8dee8;
+      border-left: 4px solid #0b5ed7;
+      border-radius: 8px;
+      background: #fff;
+      padding: 4px 6px;
+    }
+    .atom-style-rule-mode {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #c7d6ef;
+      border-radius: 999px;
+      background: #eef5ff;
+      color: #0b5ed7;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      padding: 3px 7px;
+      white-space: nowrap;
+    }
+    .atom-style-rule-spec {
+      flex: 1 1 auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      color: #334155;
+      overflow-wrap: anywhere;
+    }
+    .atom-style-rule-remove-btn {
+      border: 1px solid #efc5c1;
+      color: #b42318;
+      background: #fff7f6;
+      line-height: 1.1;
+      padding: 3px 8px;
+    }
+    .atom-style-rule-remove-btn:hover:not(:disabled) {
+      background: #ffe9e7;
+    }
+    .atom-style-rule-empty {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 4px 2px;
+    }
     .de-pair-rows {
       display: flex;
       flex-direction: column;
@@ -245,20 +342,23 @@
     }
     .viewer-card {
       padding: 12px;
-      max-width: 960px;
-      margin: 0 auto;
+      max-width: none;
+      margin: 0;
       overflow: hidden;
     }
     #viewer {
       width: 100%;
+      min-width: 320px;
+      max-width: 100%;
       height: clamp(280px, 46vh, 460px);
       min-height: 280px;
-      max-height: 460px;
+      max-height: 85vh;
       border: 1px solid #d9dee7;
       border-radius: 10px;
       position: relative;
       display: block;
       overflow: hidden;
+      resize: both;
       contain: layout paint;
       isolation: isolate;
       background: #fff;
@@ -509,6 +609,35 @@
             <label for="bond-radius-slider">Bond Radius</label>
             <input id="bond-radius-slider" type="range" min="0.2" max="3.0" step="0.1" value="1" />
             <span id="bond-radius-label">1.0x</span>
+
+            <div class="atom-style-controls">
+              <label for="atom-style-range-input">Atom Indices (0-based)</label>
+              <input
+                id="atom-style-range-input"
+                type="text"
+                placeholder="e.g. 0-14, 20, 25-"
+                autocomplete="off"
+                spellcheck="false"
+              />
+
+              <label for="atom-style-mode-select">Mode</label>
+              <select id="atom-style-mode-select">
+                <option value="sphere">Sphere</option>
+                <option value="stick">Stick</option>
+                <option value="line">Line</option>
+                <option value="cartoon">Cartoon</option>
+              </select>
+
+              <button id="atom-style-add-btn" type="button">Add Rule</button>
+              <button id="atom-style-clear-btn" type="button">Clear Rules</button>
+
+              <span id="atom-style-rules-hint" class="bond-selection-info">
+                Rule format: 0-based N, A-B, or A- (to last atom); later rules override earlier ones.
+              </span>
+              <div id="atom-style-rules" class="atom-style-rules">
+                <div class="atom-style-rule-empty">No per-atom style rules. Using default style.</div>
+              </div>
+            </div>
           </div>
         </details>
 

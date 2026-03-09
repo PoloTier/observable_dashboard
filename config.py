@@ -80,12 +80,9 @@ def load_config(config_path: Path) -> Dict[str, Any]:
 
     ui_cfg_raw = user_cfg.get("ui", {}) if isinstance(user_cfg.get("ui"), dict) else {}
     default_panel_count = int(ui_cfg_raw.get("default_panel_count", 4))
-    max_panels = int(ui_cfg_raw.get("max_panels", 8))
 
     if default_panel_count < 1:
         raise ValueError("ui.default_panel_count must be >= 1")
-    if max_panels < default_panel_count:
-        raise ValueError("ui.max_panels must be >= ui.default_panel_count")
 
     raw_panels = user_cfg.get("panels") if isinstance(user_cfg.get("panels"), list) else []
     normalized_panels: List[Dict[str, Any]] = []
@@ -100,9 +97,6 @@ def load_config(config_path: Path) -> Dict[str, Any]:
     while len(normalized_panels) < default_panel_count:
         normalized_panels.append(fallback_panel_for_index(len(normalized_panels)))
 
-    if len(normalized_panels) > max_panels:
-        normalized_panels = normalized_panels[:max_panels]
-
     plot_cfg_raw = user_cfg.get("plot", {}) if isinstance(user_cfg.get("plot"), dict) else {}
     show_ensemble = bool(plot_cfg_raw.get("show_ensemble_by_default", True))
     show_all_traces = bool(plot_cfg_raw.get("show_all_traces_in_all_mode", False))
@@ -116,7 +110,6 @@ def load_config(config_path: Path) -> Dict[str, Any]:
         "panels": normalized_panels,
         "ui": {
             "default_panel_count": default_panel_count,
-            "max_panels": max_panels,
         },
         "plot": {
             "show_ensemble_by_default": show_ensemble,

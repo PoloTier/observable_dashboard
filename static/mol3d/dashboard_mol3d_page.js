@@ -10,6 +10,7 @@
   }
 
   const { dom, trajIds, state } = shared;
+  let viewerResizeObserver = null;
 
   function bind(el, event, handler) {
     if (el) el.addEventListener(event, handler);
@@ -72,6 +73,60 @@
       shared.dispatch(shared.actions.setBondRadiusScale(dom.bondRadiusSlider?.value));
       if (!state.currentTrajId || !state.xyzFrames.length) return;
       viewer.renderFrame(state.currentFrame);
+    });
+  }
+
+  function rerenderCurrentFrameIfReady() {
+    if (!state.currentTrajId || !state.xyzFrames.length) return;
+    viewer.renderFrame(state.currentFrame);
+  }
+
+  function addAtomStyleRuleFromInputs() {
+    const rawSpec = dom.atomStyleRangeInput ? dom.atomStyleRangeInput.value : '';
+    const rawMode = dom.atomStyleModeSelect ? dom.atomStyleModeSelect.value : '';
+    const rule = shared.addAtomRenderRule(rawSpec, rawMode);
+    if (!rule) return;
+    if (dom.atomStyleRangeInput) dom.atomStyleRangeInput.value = '';
+    shared.setStatus(`Added atom-style rule ${rule.rawSpec} -> ${rule.mode}.`);
+    rerenderCurrentFrameIfReady();
+  }
+
+  function bindRenderStyleRuleControls() {
+    if (dom.atomStyleModeSelect && !dom.atomStyleModeSelect.value) {
+      dom.atomStyleModeSelect.value = 'sphere';
+    }
+
+    bind(dom.atomStyleAddBtn, 'click', () => {
+      addAtomStyleRuleFromInputs();
+    });
+
+    bind(dom.atomStyleRangeInput, 'keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      addAtomStyleRuleFromInputs();
+    });
+
+    bind(dom.atomStyleClearBtn, 'click', () => {
+      const cleared = shared.clearAtomRenderRules();
+      if (cleared <= 0) {
+        shared.setStatus('No atom-style rules to clear.');
+        return;
+      }
+      shared.setStatus(`Cleared ${cleared} atom-style rule${cleared === 1 ? '' : 's'}.`);
+      rerenderCurrentFrameIfReady();
+    });
+
+    bind(dom.atomStyleRulesEl, 'click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const removeBtn = target.closest('.atom-style-rule-remove-btn');
+      if (!removeBtn) return;
+      const ruleId = removeBtn.getAttribute('data-atom-style-rule-id');
+      if (ruleId === null) return;
+      const removed = shared.removeAtomRenderRule(ruleId);
+      if (!removed) return;
+      shared.setStatus('Removed atom-style rule.');
+      rerenderCurrentFrameIfReady();
     });
   }
 
@@ -192,8 +247,42 @@
     window.addEventListener('beforeunload', () => {
       io.cancelGifExport(false);
       viewer.stopPlayback();
+      if (viewerResizeObserver) {
+        viewerResizeObserver.disconnect();
+        viewerResizeObserver = null;
+      }
       window.removeEventListener('resize', viewer.resizeViewer);
     });
+  }
+
+  function bindViewerResizeObserver() {
+    if (!dom.viewerEl || typeof ResizeObserver !== 'function') return;
+
+    let rafPending = false;
+    let lastWidth = -1;
+    let lastHeight = -1;
+
+    viewerResizeObserver = new ResizeObserver((entries) => {
+      if (!state.viewer || !entries.length) return;
+
+      const entry = entries[entries.length - 1];
+      const width = Math.round(entry.contentRect.width);
+      const height = Math.round(entry.contentRect.height);
+      if (width === lastWidth && height === lastHeight) return;
+
+      lastWidth = width;
+      lastHeight = height;
+      if (rafPending) return;
+
+      rafPending = true;
+      window.requestAnimationFrame(() => {
+        rafPending = false;
+        if (!state.viewer) return;
+        viewer.resizeViewer();
+      });
+    });
+
+    viewerResizeObserver.observe(dom.viewerEl);
   }
 
   function init() {
@@ -213,10 +302,12 @@
     viewer.setPlaybackRate(state.playbackRate);
     viewer.setPlaybackStride(state.playbackStride);
     window.addEventListener('resize', viewer.resizeViewer);
+    bindViewerResizeObserver();
 
     populateTrajectoryOptions();
     bindTrajectoryControls();
     bindPlaybackControls();
+    bindRenderStyleRuleControls();
     bindMeasurementControls();
     bindExportControls();
     bindNacControls();

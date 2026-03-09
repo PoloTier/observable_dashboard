@@ -70,6 +70,14 @@
     return `expr_series::${normalizeTrajId(trajId)}::${normalizeExpression(expression)}`;
   }
 
+  function makeExpressionEnsembleKey(expression, statMode) {
+    return [
+      'expr_ensemble',
+      normalizeExpression(expression),
+      normalizeEnsembleStatMode(statMode),
+    ].join('::');
+  }
+
   function makeExpressionDatasetKey(expression) {
     return `expr_dataset::${normalizeExpression(expression)}`;
   }
@@ -203,6 +211,31 @@
     }
 
     return out;
+  }
+
+  function normalizeExpressionEnsemblePayload(expression, statMode, payload) {
+    const normalizedExpression = normalizeExpression(expression);
+    const normalizedMode = normalizeEnsembleStatMode(statMode);
+    const seriesKind = payload?.series_kind === 'matrix' ? 'matrix' : 'scalar';
+    const componentSeriesRaw = Array.isArray(payload?.component_series) ? payload.component_series : [];
+    const componentSeries = componentSeriesRaw.map((series, idx) => ({
+      component: Number.isFinite(Number(series?.component)) ? Number(series.component) : idx,
+      label: typeof series?.label === 'string' ? series.label : null,
+      time: Array.isArray(series?.time) ? series.time : [],
+      low: Array.isArray(series?.low) ? series.low : [],
+      center: Array.isArray(series?.center) ? series.center : [],
+      high: Array.isArray(series?.high) ? series.high : [],
+      sample_count: Array.isArray(series?.sample_count) ? series.sample_count : [],
+    }));
+    return {
+      expression: normalizedExpression,
+      series_kind: seriesKind,
+      n_components: Number.isFinite(Number(payload?.n_components)) ? Number(payload.n_components) : null,
+      stat_mode: normalizedMode,
+      component_series: componentSeries,
+      n_trajectories: Number.isFinite(Number(payload?.n_trajectories)) ? Number(payload.n_trajectories) : 0,
+      cached: !!payload?.cached,
+    };
   }
 
   function normalizeNotebookSeriesPayload(sessionId, variable, trajId, payload) {
@@ -397,6 +430,35 @@
 
     const payload = await response.json();
     return normalizeExpressionPayload(normalizedTraj, normalizedExpression, payload);
+  }
+
+  async function fetchExpressionEnsemble(expression, statMode) {
+    const normalizedExpression = normalizeExpression(expression);
+    const normalizedMode = normalizeEnsembleStatMode(statMode);
+    const response = await fetch(`${apiBase}/expression-ensemble`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expression: normalizedExpression,
+        stat_mode: normalizedMode,
+      }),
+    });
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err && typeof err.detail === 'string' && err.detail.trim()) {
+          detail = err.detail;
+        }
+      } catch {
+        // ignore parse error and keep generic detail
+      }
+      throw new Error(`Expression ensemble request failed: ${detail}`);
+    }
+
+    const payload = await response.json();
+    return normalizeExpressionEnsemblePayload(normalizedExpression, normalizedMode, payload);
   }
 
   async function fetchExpressionDataset(expression) {
@@ -856,6 +918,27 @@
     await pending;
   }
 
+  async function ensureExpressionEnsemble(expression, statMode) {
+    const key = makeExpressionEnsembleKey(expression, statMode);
+    if (cache.has(key)) return;
+
+    if (inflight.has(key)) {
+      await inflight.get(key);
+      return;
+    }
+
+    const pending = fetchExpressionEnsemble(expression, statMode)
+      .then((series) => {
+        cache.set(key, series);
+      })
+      .finally(() => {
+        inflight.delete(key);
+      });
+
+    inflight.set(key, pending);
+    await pending;
+  }
+
   async function ensureExpressionDataset(expression) {
     const key = makeExpressionDatasetKey(expression);
     if (cache.has(key)) return;
@@ -955,6 +1038,11 @@
     return cache.get(key) || null;
   }
 
+  function getExpressionEnsemble(expression, statMode) {
+    const key = makeExpressionEnsembleKey(expression, statMode);
+    return cache.get(key) || null;
+  }
+
   function getExpressionDataset(expression) {
     const key = makeExpressionDatasetKey(expression);
     return cache.get(key) || null;
@@ -1047,6 +1135,8 @@
     getEnsembleSeries,
     ensureExpressionSeries,
     getExpressionSeries,
+    ensureExpressionEnsemble,
+    getExpressionEnsemble,
     ensureExpressionDataset,
     getExpressionDataset,
     createNotebookSession,
@@ -1064,6 +1154,7 @@
     makeRawKeySeriesKey,
     makeEnsembleSeriesKey,
     makeExpressionSeriesKey,
+    makeExpressionEnsembleKey,
     makeExpressionDatasetKey,
     makeNotebookSeriesKey,
     makeNotebookEnsembleKey,

@@ -252,7 +252,6 @@ python tools/observable_dashboard/scripts/check_static_layout.py
   - `show_all_traces_in_all_mode`
 - `ui`：
   - `default_panel_count`
-  - `max_panels`
 
 ### 3) bootstrap/meta 关键项
 

@@ -188,6 +188,80 @@
     state.viewer.removeAllModels();
   }
 
+  function buildDefaultRenderStyle(atomScale, bondRadius) {
+    return {
+      stick: { radius: bondRadius, colorscheme: 'Jmol' },
+      sphere: { scale: atomScale, colorscheme: 'Jmol' },
+    };
+  }
+
+  function buildPerAtomRenderStyle(mode, atomScale, bondRadius) {
+    if (mode === 'sphere') {
+      return { sphere: { scale: atomScale, colorscheme: 'Jmol' } };
+    }
+    if (mode === 'stick') {
+      return { stick: { radius: bondRadius, colorscheme: 'Jmol' } };
+    }
+    if (mode === 'line') {
+      return { line: { linewidth: 1.2, colorscheme: 'Jmol' } };
+    }
+    if (mode === 'cartoon') {
+      return { cartoon: {} };
+    }
+    return null;
+  }
+
+  function resolveModelAtomCount(model) {
+    const frame = Array.isArray(state.currentCoords) ? state.currentCoords[state.currentFrame] : null;
+    if (Array.isArray(frame) && frame.length) return frame.length;
+
+    if (!model || typeof model.selectedAtoms !== 'function') return 0;
+    const atoms = model.selectedAtoms({});
+    return Array.isArray(atoms) ? atoms.length : 0;
+  }
+
+  function sanitizeRuleIndices(rawIndices, atomCount) {
+    if (!Array.isArray(rawIndices) || atomCount <= 0) return [];
+
+    const seen = new Set();
+    const out = [];
+    for (const rawIndex of rawIndices) {
+      const idx = Number.parseInt(String(rawIndex), 10);
+      if (!Number.isFinite(idx) || idx < 0 || idx >= atomCount) continue;
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      out.push(idx);
+    }
+    out.sort((a, b) => a - b);
+    return out;
+  }
+
+  function applyRenderStyles(model, atomScale, bondRadius) {
+    if (!state.viewer || !model) return;
+
+    state.viewer.setStyle({}, buildDefaultRenderStyle(atomScale, bondRadius));
+
+    const rules = Array.isArray(state.atomRenderRules) ? state.atomRenderRules : [];
+    if (!rules.length) return;
+
+    const atomCount = resolveModelAtomCount(model);
+    if (atomCount <= 0) return;
+
+    for (const rule of rules) {
+      const mode = typeof shared.normalizeAtomRenderMode === 'function'
+        ? shared.normalizeAtomRenderMode(rule?.mode)
+        : null;
+      if (!mode) continue;
+
+      const indices = sanitizeRuleIndices(rule?.indices, atomCount);
+      if (!indices.length) continue;
+
+      const style = buildPerAtomRenderStyle(mode, atomScale, bondRadius);
+      if (!style) continue;
+      state.viewer.setStyle({ index: indices }, style);
+    }
+  }
+
   // --- Playback lifecycle -----------------------------------------------------
   function stopPlayback() {
     if (state.timer) {
@@ -238,10 +312,7 @@
     state.currentModel = model;
     const bondRadius = constants.MODEL_STICK_RADIUS_BASE * shared.clampBondRadiusScale(state.bondRadiusScale);
     const atomScale = constants.MODEL_SPHERE_SCALE_BASE * shared.clampAtomSizeScale(state.atomSizeScale);
-    state.viewer.setStyle({}, {
-      stick: { radius: bondRadius, colorscheme: 'Jmol' },
-      sphere: { scale: atomScale, colorscheme: 'Jmol' }
-    });
+    applyRenderStyles(model, atomScale, bondRadius);
     bindAtomClickHandler();
     addAtomIndexLabels(model);
     renderMeasurementOverlayForFrame();
