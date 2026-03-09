@@ -230,7 +230,16 @@ def check_renderer_api_surface() -> None:
 
 
 def check_app_routes() -> None:
-    from fastapi.testclient import TestClient
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from tools.observable_dashboard.server.models import (
+        EnsembleSeriesRequest,
+        InspectKeysRequest,
+        RawKeyAliasUpsertRequest,
+        RawKeySeriesRequest,
+        SeriesRequest,
+    )
 
     class _FakeTraj:
         def __init__(self) -> None:
@@ -558,343 +567,303 @@ def check_app_routes() -> None:
         reload_state["version"] += 1
         return _FakeStore(version=reload_state["version"])
 
+    def _find_endpoint(app_obj: object, path: str, method: str):
+        expected_method = str(method).upper()
+        for route in getattr(app_obj, "routes", []):
+            route_path = str(getattr(route, "path", ""))
+            methods = {str(v).upper() for v in (getattr(route, "methods", set()) or set())}
+            if route_path == path and expected_method in methods:
+                return route.endpoint
+        raise CheckFailure(f"Route endpoint not found: {expected_method} {path}")
+
+    def _expect_http_status(expected_status: int, fn, message: str) -> None:
+        try:
+            fn()
+        except HTTPException as exc:
+            _assert(int(exc.status_code) == int(expected_status), f"{message}: got HTTP {exc.status_code}")
+            return
+        raise CheckFailure(f"{message}: expected HTTP {expected_status}")
+
     app = create_app(
         _FakeStore(version=0),
         SeriesLRUCache(max_entries=16),
         mol3d_cache=SeriesLRUCache(max_entries=8),
         reload_store=_reload_store,
     )
-    client = TestClient(app)
 
-    index = client.get("/")
-    _assert(index.status_code == 200, "GET / should return 200")
-    _assert('id="bootstrap-json"' in index.text, "GET / missing bootstrap-json")
-    _assert('id="payload-json"' not in index.text, "GET / should not include payload-json")
+    index_ep = _find_endpoint(app, "/", "GET")
+    mol_page_ep = _find_endpoint(app, "/molecule3d.html", "GET")
+    bootstrap_ep = _find_endpoint(app, "/api/bootstrap", "GET")
+    raw_alias_list_ep = _find_endpoint(app, "/api/raw-key-aliases", "GET")
+    raw_alias_upsert_ep = _find_endpoint(app, "/api/raw-key-aliases", "POST")
+    inspect_ep = _find_endpoint(app, "/api/inspect-keys", "POST")
+    raw_series_ep = _find_endpoint(app, "/api/raw-key-series", "POST")
+    series_ep = _find_endpoint(app, "/api/series", "POST")
+    ensemble_ep = _find_endpoint(app, "/api/ensemble-series", "POST")
+    refresh_ep = _find_endpoint(app, "/api/refresh-dataset", "POST")
+    mol_traj_ep = _find_endpoint(app, "/api/molecule3d/trajectory/{traj_id}", "GET")
+    mol_nac_ep = _find_endpoint(app, "/api/molecule3d/nac/{traj_id}", "GET")
+    mol_de_ep = _find_endpoint(app, "/api/molecule3d/de/{traj_id}", "GET")
+    mol_de_nac_ep = _find_endpoint(app, "/api/molecule3d/de_nac/{traj_id}", "GET")
 
-    mol = client.get("/molecule3d.html")
-    _assert(mol.status_code == 200, "GET /molecule3d.html should return 200")
-    _assert('id="bootstrap-json"' in mol.text, "GET /molecule3d.html missing bootstrap-json")
-    _assert('id="payload-json"' not in mol.text, "GET /molecule3d.html should not include payload-json")
+    index = index_ep()
+    _assert(int(index.status_code) == 200, "GET / should return 200")
+    index_text = index.body.decode("utf-8", errors="ignore")
+    _assert('id="bootstrap-json"' in index_text, "GET / missing bootstrap-json")
+    _assert('id="payload-json"' not in index_text, "GET / should not include payload-json")
 
-    bootstrap = client.get("/api/bootstrap")
-    _assert(bootstrap.status_code == 200, "GET /api/bootstrap should return 200")
-    _assert(bootstrap.json().get("data_mode") == "api", "/api/bootstrap data_mode should be api")
-    _assert("all_mode_manual_refresh" not in bootstrap.json(), "/api/bootstrap should not include all_mode_manual_refresh")
-    _assert(isinstance(bootstrap.json().get("raw_key_aliases"), list), "/api/bootstrap should include raw_key_aliases")
+    mol = mol_page_ep()
+    _assert(int(mol.status_code) == 200, "GET /molecule3d.html should return 200")
+    mol_text = mol.body.decode("utf-8", errors="ignore")
+    _assert('id="bootstrap-json"' in mol_text, "GET /molecule3d.html missing bootstrap-json")
+    _assert('id="payload-json"' not in mol_text, "GET /molecule3d.html should not include payload-json")
 
-    raw_key_aliases_empty = client.get("/api/raw-key-aliases")
-    _assert(raw_key_aliases_empty.status_code == 200, "GET /api/raw-key-aliases should return 200")
-    _assert(raw_key_aliases_empty.json().get("aliases") == [], "raw-key aliases should be empty initially")
+    bootstrap = bootstrap_ep()
+    bootstrap_dump = bootstrap.model_dump()
+    _assert(str(bootstrap_dump.get("data_mode")) == "api", "/api/bootstrap data_mode should be api")
+    _assert("all_mode_manual_refresh" not in bootstrap_dump, "/api/bootstrap should not include all_mode_manual_refresh")
+    _assert(isinstance(bootstrap_dump.get("raw_key_aliases"), list), "/api/bootstrap should include raw_key_aliases")
 
-    raw_key_aliases_create = client.post(
-        "/api/raw-key-aliases",
-        json={"alias": "TWFpop", "raw_key": "_.0.record.TWFpop"},
+    raw_key_aliases_empty = raw_alias_list_ep()
+    _assert(raw_key_aliases_empty.aliases == [], "raw-key aliases should be empty initially")
+
+    raw_key_aliases_create = raw_alias_upsert_ep(
+        RawKeyAliasUpsertRequest(alias="TWFpop", raw_key="_.0.record.TWFpop")
     )
-    _assert(raw_key_aliases_create.status_code == 200, "POST /api/raw-key-aliases should return 200")
-    alias_map = {
-        str(item.get("alias")): str(item.get("raw_key"))
-        for item in (raw_key_aliases_create.json().get("aliases") or [])
-        if isinstance(item, dict)
-    }
+    alias_map = {str(item.alias): str(item.raw_key) for item in raw_key_aliases_create.aliases}
     _assert(alias_map.get("TWFpop") == "_.0.record.TWFpop", "new raw-key alias should be persisted in memory")
 
-    raw_key_aliases_override = client.post(
-        "/api/raw-key-aliases",
-        json={"alias": "TWFpop", "raw_key": "complex.matrix"},
+    raw_key_aliases_override = raw_alias_upsert_ep(
+        RawKeyAliasUpsertRequest(alias="TWFpop", raw_key="complex.matrix")
     )
-    _assert(raw_key_aliases_override.status_code == 200, "raw-key alias override should return 200")
-    alias_map = {
-        str(item.get("alias")): str(item.get("raw_key"))
-        for item in (raw_key_aliases_override.json().get("aliases") or [])
-        if isinstance(item, dict)
-    }
+    alias_map = {str(item.alias): str(item.raw_key) for item in raw_key_aliases_override.aliases}
     _assert(alias_map.get("TWFpop") == "complex.matrix", "raw-key alias override should update mapping")
 
-    bootstrap_after_alias_update = client.get("/api/bootstrap")
-    _assert(bootstrap_after_alias_update.status_code == 200, "GET /api/bootstrap after alias update should return 200")
+    bootstrap_after_alias_update = bootstrap_ep()
     alias_map_from_bootstrap = {
-        str(item.get("alias")): str(item.get("raw_key"))
-        for item in (bootstrap_after_alias_update.json().get("raw_key_aliases") or [])
-        if isinstance(item, dict)
+        str(item.alias): str(item.raw_key)
+        for item in bootstrap_after_alias_update.raw_key_aliases
     }
     _assert(
         alias_map_from_bootstrap.get("TWFpop") == "complex.matrix",
         "/api/bootstrap should include latest raw-key alias mapping",
     )
 
-    raw_key_alias_conflict = client.post(
-        "/api/raw-key-aliases",
-        json={"alias": "etot", "raw_key": "_.0.record.TWFpop"},
+    _expect_http_status(
+        422,
+        lambda: raw_alias_upsert_ep(RawKeyAliasUpsertRequest(alias="etot", raw_key="_.0.record.TWFpop")),
+        "alias conflicting with built-in observable should return 422",
     )
-    _assert(raw_key_alias_conflict.status_code == 422, "alias conflicting with built-in observable should return 422")
-
-    raw_key_alias_missing_key = client.post(
-        "/api/raw-key-aliases",
-        json={"alias": "missingAlias", "raw_key": "missing.key"},
+    _expect_http_status(
+        422,
+        lambda: raw_alias_upsert_ep(RawKeyAliasUpsertRequest(alias="missingAlias", raw_key="missing.key")),
+        "alias with missing raw key should return 422",
     )
-    _assert(raw_key_alias_missing_key.status_code == 422, "alias with missing raw key should return 422")
 
-    inspect_keys = client.post("/api/inspect-keys", json={"keys": ["_.0.record.time", "model.atoms", "missing.key"]})
-    _assert(inspect_keys.status_code == 200, "POST /api/inspect-keys should return 200")
-    inspect_payload = inspect_keys.json()
-    _assert("keys" in inspect_payload and "rows" in inspect_payload, "inspect-keys response should include keys/rows")
-    _assert(len(inspect_payload.get("rows") or []) == 2, "inspect-keys rows should match trajectory count")
-    row0 = inspect_payload["rows"][0]
-    row1 = inspect_payload["rows"][1]
-    _assert(row0["values"]["missing.key"] == "MISSING", "missing key should return MISSING for traj 0")
-    _assert(row1["values"]["model.atoms"] == "MISSING", "missing key should return MISSING for traj 1")
+    inspect_keys = inspect_ep(InspectKeysRequest(keys=["_.0.record.time", "model.atoms", "missing.key"]))
+    _assert(len(inspect_keys.rows) == 2, "inspect-keys rows should match trajectory count")
+    row0 = inspect_keys.rows[0].values
+    row1 = inspect_keys.rows[1].values
+    _assert(row0["missing.key"] == "MISSING", "missing key should return MISSING for traj 0")
+    _assert(row1["model.atoms"] == "MISSING", "missing key should return MISSING for traj 1")
 
-    inspect_too_many = client.post("/api/inspect-keys", json={"keys": [f"k{i}" for i in range(201)]})
-    _assert(inspect_too_many.status_code == 422, "inspect-keys should return 422 for too many keys")
+    _expect_http_status(
+        422,
+        lambda: inspect_ep(InspectKeysRequest(keys=[f"k{i}" for i in range(201)])),
+        "inspect-keys should return 422 for too many keys",
+    )
 
-    raw_scalar = client.post("/api/raw-key-series", json={"traj_id": "0", "raw_key": "_.0.record.time"})
-    _assert(raw_scalar.status_code == 200, "POST /api/raw-key-series scalar should return 200")
-    _assert(raw_scalar.json().get("series_kind") == "scalar", "raw-key scalar response should have series_kind=scalar")
+    raw_scalar = raw_series_ep(RawKeySeriesRequest(traj_id="0", raw_key="_.0.record.time"))
+    _assert(raw_scalar.series_kind == "scalar", "raw-key scalar response should have series_kind=scalar")
 
-    raw_matrix = client.post("/api/raw-key-series", json={"traj_id": "0", "raw_key": "_.0.record.eig"})
-    _assert(raw_matrix.status_code == 200, "POST /api/raw-key-series matrix should return 200")
-    _assert(raw_matrix.json().get("series_kind") == "matrix", "raw-key matrix response should have series_kind=matrix")
+    raw_matrix = raw_series_ep(RawKeySeriesRequest(traj_id="0", raw_key="_.0.record.eig"))
+    _assert(raw_matrix.series_kind == "matrix", "raw-key matrix response should have series_kind=matrix")
 
-    raw_complex_scalar = client.post("/api/raw-key-series", json={"traj_id": "0", "raw_key": "_.0.record.TWFpop"})
-    _assert(raw_complex_scalar.status_code == 200, "POST /api/raw-key-series complex scalar should return 200")
-    raw_complex_scalar_payload = raw_complex_scalar.json()
-    _assert(raw_complex_scalar_payload.get("series_kind") == "matrix", "complex scalar should be returned as matrix")
-    _assert(raw_complex_scalar_payload.get("n_components") == 2, "complex scalar should have 2 components (re/im)")
+    raw_complex_scalar = raw_series_ep(RawKeySeriesRequest(traj_id="0", raw_key="_.0.record.TWFpop"))
+    _assert(raw_complex_scalar.series_kind == "matrix", "complex scalar should be returned as matrix")
+    _assert(int(raw_complex_scalar.n_components or 0) == 2, "complex scalar should have 2 components (re/im)")
+    _assert(raw_complex_scalar.component_labels == ["re", "im"], "complex scalar should return labels ['re', 'im']")
+
+    raw_complex_matrix = raw_series_ep(RawKeySeriesRequest(traj_id="0", raw_key="complex.matrix"))
+    _assert(raw_complex_matrix.series_kind == "matrix", "complex matrix should be returned as matrix")
+    _assert(int(raw_complex_matrix.n_components or 0) == 4, "complex matrix with 2 columns should map to 4 components")
     _assert(
-        raw_complex_scalar_payload.get("component_labels") == ["re", "im"],
-        "complex scalar should return component labels ['re', 'im']",
+        raw_complex_matrix.component_labels == ["comp0.re", "comp0.im", "comp1.re", "comp1.im"],
+        "complex matrix labels should follow compK.re/compK.im order",
     )
 
-    raw_complex_matrix = client.post("/api/raw-key-series", json={"traj_id": "0", "raw_key": "complex.matrix"})
-    _assert(raw_complex_matrix.status_code == 200, "POST /api/raw-key-series complex matrix should return 200")
-    raw_complex_matrix_payload = raw_complex_matrix.json()
-    _assert(raw_complex_matrix_payload.get("series_kind") == "matrix", "complex matrix should be returned as matrix")
-    _assert(raw_complex_matrix_payload.get("n_components") == 4, "complex matrix with 2 columns should map to 4 components")
-    _assert(
-        raw_complex_matrix_payload.get("component_labels") == ["comp0.re", "comp0.im", "comp1.re", "comp1.im"],
-        "complex matrix component labels should follow compK.re/compK.im order",
+    _expect_http_status(
+        422,
+        lambda: raw_series_ep(RawKeySeriesRequest(traj_id="0", raw_key="bad.len")),
+        "raw-key series with mismatched first dimension should return 422",
+    )
+    _expect_http_status(
+        404,
+        lambda: raw_series_ep(RawKeySeriesRequest(traj_id="0", raw_key="missing.key")),
+        "raw-key series with missing key should return 404",
     )
 
-    raw_bad_len = client.post("/api/raw-key-series", json={"traj_id": "0", "raw_key": "bad.len"})
-    _assert(raw_bad_len.status_code == 422, "raw-key series with mismatched first dimension should return 422")
+    series_req = SeriesRequest(traj_id="0", observable="etot", indices=[])
+    series_1 = series_ep(series_req)
+    _assert(series_1.cached is False, "first /api/series should have cached=false")
+    series_2 = series_ep(series_req)
+    _assert(series_2.cached is True, "second /api/series should have cached=true")
 
-    raw_missing = client.post("/api/raw-key-series", json={"traj_id": "0", "raw_key": "missing.key"})
-    _assert(raw_missing.status_code == 404, "raw-key series with missing key should return 404")
-
-    series_req = {"traj_id": "0", "observable": "etot", "indices": []}
-    series_1 = client.post("/api/series", json=series_req)
-    _assert(series_1.status_code == 200, "first /api/series should return 200")
-    _assert(series_1.json().get("cached") is False, "first /api/series should have cached=false")
-
-    series_2 = client.post("/api/series", json=series_req)
-    _assert(series_2.status_code == 200, "second /api/series should return 200")
-    _assert(series_2.json().get("cached") is True, "second /api/series should have cached=true")
-
-    de_nac_series_req = {"traj_id": "0", "observable": "de_nac", "indices": [0, 1]}
-    de_nac_series_1 = client.post("/api/series", json=de_nac_series_req)
-    _assert(de_nac_series_1.status_code == 200, "first /api/series de_nac should return 200")
-    _assert(de_nac_series_1.json().get("cached") is False, "first /api/series de_nac should have cached=false")
-
-    de_nac_series_2 = client.post("/api/series", json=de_nac_series_req)
-    _assert(de_nac_series_2.status_code == 200, "second /api/series de_nac should return 200")
-    _assert(de_nac_series_2.json().get("cached") is True, "second /api/series de_nac should have cached=true")
-
-    de_nac_series_invalid_pair = client.post(
-        "/api/series",
-        json={"traj_id": "0", "observable": "de_nac", "indices": [1, 1]},
-    )
-    _assert(de_nac_series_invalid_pair.status_code == 422, "de_nac series with identical state pair should return 422")
-
-    ensemble_scalar_req = {
-        "observable": "etot",
-        "indices": [],
-        "raw_key": None,
-        "stat_mode": "mean_ci95_bootstrap",
-    }
-    ensemble_scalar_1 = client.post("/api/ensemble-series", json=ensemble_scalar_req)
-    _assert(ensemble_scalar_1.status_code == 200, "first /api/ensemble-series scalar should return 200")
-    ensemble_scalar_payload = ensemble_scalar_1.json()
-    _assert(ensemble_scalar_payload.get("cached") is False, "first /api/ensemble-series scalar should have cached=false")
-    _assert(
-        isinstance(ensemble_scalar_payload.get("component_series"), list)
-        and len(ensemble_scalar_payload.get("component_series")) == 1,
-        "scalar ensemble should return exactly one component series",
+    de_nac_series_1 = series_ep(SeriesRequest(traj_id="0", observable="de_nac", indices=[0, 1]))
+    _assert(de_nac_series_1.cached is False, "first /api/series de_nac should have cached=false")
+    de_nac_series_2 = series_ep(SeriesRequest(traj_id="0", observable="de_nac", indices=[0, 1]))
+    _assert(de_nac_series_2.cached is True, "second /api/series de_nac should have cached=true")
+    _expect_http_status(
+        422,
+        lambda: series_ep(SeriesRequest(traj_id="0", observable="de_nac", indices=[1, 1])),
+        "de_nac series with identical state pair should return 422",
     )
 
-    ensemble_scalar_2 = client.post("/api/ensemble-series", json=ensemble_scalar_req)
-    _assert(ensemble_scalar_2.status_code == 200, "second /api/ensemble-series scalar should return 200")
-    _assert(ensemble_scalar_2.json().get("cached") is True, "second /api/ensemble-series scalar should have cached=true")
+    ensemble_scalar_req = EnsembleSeriesRequest(
+        observable="etot",
+        indices=[],
+        raw_key=None,
+        stat_mode="mean_ci95_bootstrap",
+    )
+    ensemble_scalar_1 = ensemble_ep(ensemble_scalar_req)
+    _assert(ensemble_scalar_1.cached is False, "first /api/ensemble-series scalar should have cached=false")
+    _assert(len(ensemble_scalar_1.component_series) == 1, "scalar ensemble should return exactly one component series")
+    ensemble_scalar_2 = ensemble_ep(ensemble_scalar_req)
+    _assert(ensemble_scalar_2.cached is True, "second /api/ensemble-series scalar should have cached=true")
 
-    ensemble_median_req = {
-        "observable": "etot",
-        "indices": [],
-        "raw_key": None,
-        "stat_mode": "median_iqr",
-    }
-    ensemble_median = client.post("/api/ensemble-series", json=ensemble_median_req)
-    _assert(ensemble_median.status_code == 200, "/api/ensemble-series median mode should return 200")
-    _assert(ensemble_median.json().get("cached") is False, "new stat_mode should miss cache on first request")
+    ensemble_median = ensemble_ep(
+        EnsembleSeriesRequest(
+            observable="etot",
+            indices=[],
+            raw_key=None,
+            stat_mode="median_iqr",
+        )
+    )
+    _assert(ensemble_median.cached is False, "new stat_mode should miss cache on first request")
 
-    ensemble_matrix_req = {
-        "observable": "|c|^2",
-        "indices": [],
-        "raw_key": None,
-        "stat_mode": "mean_ci95_bootstrap",
-    }
-    ensemble_matrix = client.post("/api/ensemble-series", json=ensemble_matrix_req)
-    _assert(ensemble_matrix.status_code == 200, "/api/ensemble-series matrix observable should return 200")
-    _assert(
-        isinstance(ensemble_matrix.json().get("component_series"), list)
-        and len(ensemble_matrix.json().get("component_series")) >= 2,
-        "matrix ensemble should return multiple component series",
+    ensemble_matrix = ensemble_ep(
+        EnsembleSeriesRequest(
+            observable="|c|^2",
+            indices=[],
+            raw_key=None,
+            stat_mode="mean_ci95_bootstrap",
+        )
+    )
+    _assert(len(ensemble_matrix.component_series) >= 2, "matrix ensemble should return multiple component series")
+
+    ensemble_raw_key = ensemble_ep(
+        EnsembleSeriesRequest(
+            observable="raw_key",
+            indices=[],
+            raw_key="complex.matrix",
+            stat_mode="mean_ci95_bootstrap",
+        )
+    )
+    _assert(len(ensemble_raw_key.component_series) >= 2, "raw_key matrix ensemble should return multiple component series")
+
+    _expect_http_status(
+        422,
+        lambda: ensemble_ep(
+            EnsembleSeriesRequest(
+                observable="raw_key",
+                indices=[],
+                raw_key="",
+                stat_mode="mean_ci95_bootstrap",
+            )
+        ),
+        "raw_key ensemble with empty raw_key should return 422",
+    )
+    _expect_http_status(
+        422,
+        lambda: ensemble_ep(
+            EnsembleSeriesRequest(
+                observable="raw_key",
+                indices=[0],
+                raw_key="complex.matrix",
+                stat_mode="mean_ci95_bootstrap",
+            )
+        ),
+        "raw_key ensemble with indices should return 422",
+    )
+    _expect_http_status(
+        422,
+        lambda: ensemble_ep(
+            SimpleNamespace(
+                observable="etot",
+                indices=[],
+                raw_key=None,
+                stat_mode="not_a_mode",
+            )
+        ),
+        "ensemble request with invalid stat_mode should return 422",
     )
 
-    ensemble_raw_key_req = {
-        "observable": "raw_key",
-        "indices": [],
-        "raw_key": "complex.matrix",
-        "stat_mode": "mean_ci95_bootstrap",
-    }
-    ensemble_raw_key = client.post("/api/ensemble-series", json=ensemble_raw_key_req)
-    _assert(ensemble_raw_key.status_code == 200, "/api/ensemble-series raw_key matrix should return 200")
-    _assert(
-        isinstance(ensemble_raw_key.json().get("component_series"), list)
-        and len(ensemble_raw_key.json().get("component_series")) >= 2,
-        "raw_key matrix ensemble should return multiple component series",
-    )
+    traj_1 = mol_traj_ep("0")
+    _assert(traj_1.cached is False, "first trajectory response should have cached=false")
+    _assert(str(traj_1.de_global_norm_scope or "") == "traj_global", "trajectory should include de_global_norm_scope")
+    _assert(isinstance(traj_1.de_global_norm_count, int), "trajectory should include integer de_global_norm_count")
+    _assert(float(traj_1.de_global_norm_p95 or 0.0) > 0.0, "trajectory should include positive de_global_norm_p95")
 
-    ensemble_raw_key_empty = client.post(
-        "/api/ensemble-series",
-        json={"observable": "raw_key", "indices": [], "raw_key": "", "stat_mode": "mean_ci95_bootstrap"},
-    )
-    _assert(ensemble_raw_key_empty.status_code == 422, "raw_key ensemble with empty raw_key should return 422")
+    traj_2 = mol_traj_ep("0")
+    _assert(traj_2.cached is True, "second trajectory response should have cached=true")
 
-    ensemble_raw_key_with_indices = client.post(
-        "/api/ensemble-series",
-        json={"observable": "raw_key", "indices": [0], "raw_key": "complex.matrix", "stat_mode": "mean_ci95_bootstrap"},
-    )
-    _assert(ensemble_raw_key_with_indices.status_code == 422, "raw_key ensemble with indices should return 422")
+    nac_1 = mol_nac_ep("0", 0, 1)
+    _assert(nac_1.cached is False, "first NAC response should have cached=false")
+    nac_2 = mol_nac_ep("0", 0, 1)
+    _assert(nac_2.cached is True, "second NAC response should have cached=true")
+    _expect_http_status(422, lambda: mol_nac_ep("0", 1, 1), "NAC with identical state pair should return 422")
 
-    ensemble_invalid_mode = client.post(
-        "/api/ensemble-series",
-        json={"observable": "etot", "indices": [], "raw_key": None, "stat_mode": "not_a_mode"},
-    )
-    _assert(ensemble_invalid_mode.status_code == 422, "ensemble request with invalid stat_mode should return 422")
+    de_1 = mol_de_ep("0", 0, 0)
+    _assert(de_1.cached is False, "first dE response should have cached=false")
+    de_2 = mol_de_ep("0", 0, 0)
+    _assert(de_2.cached is True, "second dE response should have cached=true")
+    de_diag_pair = mol_de_ep("0", 1, 1)
+    _assert(int(de_diag_pair.n_states) == 2, "dE with identical state pair should return 200")
 
-    traj_1 = client.get("/api/molecule3d/trajectory/0")
-    _assert(traj_1.status_code == 200, "first /api/molecule3d/trajectory/0 should return 200")
-    traj_1_payload = traj_1.json()
-    _assert(traj_1_payload.get("cached") is False, "first trajectory response should have cached=false")
-    _assert(str(traj_1_payload.get("de_global_norm_scope") or "") == "traj_global", "trajectory payload should include de_global_norm_scope")
-    _assert(isinstance(traj_1_payload.get("de_global_norm_count"), int), "trajectory payload should include integer de_global_norm_count")
-    _assert(float(traj_1_payload.get("de_global_norm_p95") or 0.0) > 0.0, "trajectory payload should include positive de_global_norm_p95")
+    de_nac_1 = mol_de_nac_ep("0", 0, 1)
+    _assert(de_nac_1.cached is False, "first de_nac response should have cached=false")
+    de_nac_2 = mol_de_nac_ep("0", 0, 1)
+    _assert(de_nac_2.cached is True, "second de_nac response should have cached=true")
+    _expect_http_status(422, lambda: mol_de_nac_ep("0", 1, 1), "de_nac with identical state pair should return 422")
 
-    traj_2 = client.get("/api/molecule3d/trajectory/0")
-    _assert(traj_2.status_code == 200, "second /api/molecule3d/trajectory/0 should return 200")
-    _assert(traj_2.json().get("cached") is True, "second trajectory response should have cached=true")
+    refresh_ok = refresh_ep()
+    _assert(str(refresh_ok.status) == "ok", "/api/refresh-dataset status should be ok")
+    _assert(int(refresh_ok.dataset_revision) == 2, "dataset revision should be incremented after refresh")
 
-    nac_1 = client.get("/api/molecule3d/nac/0?state_i=0&state_j=1")
-    _assert(nac_1.status_code == 200, "first /api/molecule3d/nac/0 should return 200")
-    _assert(nac_1.json().get("cached") is False, "first NAC response should have cached=false")
+    raw_key_aliases_after_refresh = raw_alias_list_ep()
+    alias_map_after_refresh = {str(item.alias): str(item.raw_key) for item in raw_key_aliases_after_refresh.aliases}
+    _assert(alias_map_after_refresh.get("TWFpop") == "complex.matrix", "raw-key alias mapping should persist after refresh")
 
-    nac_2 = client.get("/api/molecule3d/nac/0?state_i=0&state_j=1")
-    _assert(nac_2.status_code == 200, "second /api/molecule3d/nac/0 should return 200")
-    _assert(nac_2.json().get("cached") is True, "second NAC response should have cached=true")
-
-    nac_invalid_pair = client.get("/api/molecule3d/nac/0?state_i=1&state_j=1")
-    _assert(nac_invalid_pair.status_code == 422, "NAC with identical state pair should return 422")
-
-    de_1 = client.get("/api/molecule3d/de/0?state_i=0&state_j=0")
-    _assert(de_1.status_code == 200, "first /api/molecule3d/de/0 should return 200")
-    _assert(de_1.json().get("cached") is False, "first dE response should have cached=false")
-
-    de_2 = client.get("/api/molecule3d/de/0?state_i=0&state_j=0")
-    _assert(de_2.status_code == 200, "second /api/molecule3d/de/0 should return 200")
-    _assert(de_2.json().get("cached") is True, "second dE response should have cached=true")
-
-    de_diag_pair = client.get("/api/molecule3d/de/0?state_i=1&state_j=1")
-    _assert(de_diag_pair.status_code == 200, "dE with identical state pair should return 200")
-
-    de_nac_1 = client.get("/api/molecule3d/de_nac/0?state_i=0&state_j=1")
-    _assert(de_nac_1.status_code == 200, "first /api/molecule3d/de_nac/0 should return 200")
-    _assert(de_nac_1.json().get("cached") is False, "first de_nac response should have cached=false")
-
-    de_nac_2 = client.get("/api/molecule3d/de_nac/0?state_i=0&state_j=1")
-    _assert(de_nac_2.status_code == 200, "second /api/molecule3d/de_nac/0 should return 200")
-    _assert(de_nac_2.json().get("cached") is True, "second de_nac response should have cached=true")
-
-    de_nac_invalid_pair = client.get("/api/molecule3d/de_nac/0?state_i=1&state_j=1")
-    _assert(de_nac_invalid_pair.status_code == 422, "de_nac with identical state pair should return 422")
-
-    refresh_ok = client.post("/api/refresh-dataset")
-    _assert(refresh_ok.status_code == 200, "POST /api/refresh-dataset should return 200")
-    _assert(refresh_ok.json().get("status") == "ok", "/api/refresh-dataset status should be ok")
-    _assert(refresh_ok.json().get("dataset_revision") == 2, "dataset revision should be incremented after refresh")
-
-    raw_key_aliases_after_refresh = client.get("/api/raw-key-aliases")
-    _assert(raw_key_aliases_after_refresh.status_code == 200, "GET /api/raw-key-aliases after refresh should return 200")
-    alias_map_after_refresh = {
-        str(item.get("alias")): str(item.get("raw_key"))
-        for item in (raw_key_aliases_after_refresh.json().get("aliases") or [])
-        if isinstance(item, dict)
-    }
-    _assert(
-        alias_map_after_refresh.get("TWFpop") == "complex.matrix",
-        "raw-key alias mapping should persist after refresh",
-    )
-
-    series_3 = client.post("/api/series", json=series_req)
-    _assert(series_3.status_code == 200, "post-refresh /api/series should return 200")
-    _assert(series_3.json().get("cached") is False, "post-refresh first /api/series should have cached=false")
-
-    traj_3 = client.get("/api/molecule3d/trajectory/0")
-    _assert(traj_3.status_code == 200, "post-refresh /api/molecule3d/trajectory/0 should return 200")
-    _assert(traj_3.json().get("cached") is False, "post-refresh first trajectory response should have cached=false")
-
-    nac_3 = client.get("/api/molecule3d/nac/0?state_i=0&state_j=1")
-    _assert(nac_3.status_code == 200, "post-refresh /api/molecule3d/nac/0 should return 200")
-    _assert(nac_3.json().get("cached") is False, "post-refresh first NAC response should have cached=false")
-
-    de_3 = client.get("/api/molecule3d/de/0?state_i=0&state_j=0")
-    _assert(de_3.status_code == 200, "post-refresh /api/molecule3d/de/0 should return 200")
-    _assert(de_3.json().get("cached") is False, "post-refresh first dE response should have cached=false")
-
-    de_nac_3 = client.get("/api/molecule3d/de_nac/0?state_i=0&state_j=1")
-    _assert(de_nac_3.status_code == 200, "post-refresh /api/molecule3d/de_nac/0 should return 200")
-    _assert(de_nac_3.json().get("cached") is False, "post-refresh first de_nac response should have cached=false")
+    series_3 = series_ep(series_req)
+    _assert(series_3.cached is False, "post-refresh first /api/series should have cached=false")
+    traj_3 = mol_traj_ep("0")
+    _assert(traj_3.cached is False, "post-refresh first trajectory response should have cached=false")
+    nac_3 = mol_nac_ep("0", 0, 1)
+    _assert(nac_3.cached is False, "post-refresh first NAC response should have cached=false")
+    de_3 = mol_de_ep("0", 0, 0)
+    _assert(de_3.cached is False, "post-refresh first dE response should have cached=false")
+    de_nac_3 = mol_de_nac_ep("0", 0, 1)
+    _assert(de_nac_3.cached is False, "post-refresh first de_nac response should have cached=false")
 
     reload_state["fail"] = True
-    refresh_fail = client.post("/api/refresh-dataset")
-    _assert(refresh_fail.status_code == 500, "failed refresh should return 500")
+    _expect_http_status(500, lambda: refresh_ep(), "failed refresh should return 500")
     reload_state["fail"] = False
 
-    series_after_failed_refresh = client.post("/api/series", json=series_req)
-    _assert(series_after_failed_refresh.status_code == 200, "series should remain available after failed refresh")
-    _assert(
-        series_after_failed_refresh.json().get("cached") is True,
-        "series cache should remain valid after failed refresh",
-    )
+    series_after_failed_refresh = series_ep(series_req)
+    _assert(series_after_failed_refresh.cached is True, "series cache should remain valid after failed refresh")
 
     app_without_refresh = create_app(
         _FakeStore(version=0),
         SeriesLRUCache(max_entries=4),
         mol3d_cache=SeriesLRUCache(max_entries=4),
     )
-    client_without_refresh = TestClient(app_without_refresh)
-    refresh_not_enabled = client_without_refresh.post("/api/refresh-dataset")
-    _assert(refresh_not_enabled.status_code == 501, "refresh endpoint should return 501 when disabled")
+    refresh_without_reload_ep = _find_endpoint(app_without_refresh, "/api/refresh-dataset", "POST")
+    _expect_http_status(501, lambda: refresh_without_reload_ep(), "refresh endpoint should return 501 when disabled")
 
-    missing = client.get("/api/molecule3d/trajectory/not-found")
-    _assert(missing.status_code == 404, "missing trajectory should return 404")
-
-    missing_nac = client.get("/api/molecule3d/nac/not-found?state_i=0&state_j=1")
-    _assert(missing_nac.status_code == 404, "missing NAC trajectory should return 404")
-
-    missing_de = client.get("/api/molecule3d/de/not-found?state_i=0&state_j=1")
-    _assert(missing_de.status_code == 404, "missing dE trajectory should return 404")
-
-    missing_de_nac = client.get("/api/molecule3d/de_nac/not-found?state_i=0&state_j=1")
-    _assert(missing_de_nac.status_code == 404, "missing de_nac trajectory should return 404")
+    _expect_http_status(404, lambda: mol_traj_ep("not-found"), "missing trajectory should return 404")
+    _expect_http_status(404, lambda: mol_nac_ep("not-found", 0, 1), "missing NAC trajectory should return 404")
+    _expect_http_status(404, lambda: mol_de_ep("not-found", 0, 1), "missing dE trajectory should return 404")
+    _expect_http_status(404, lambda: mol_de_nac_ep("not-found", 0, 1), "missing de_nac trajectory should return 404")
 
 
 def run_checks() -> int:

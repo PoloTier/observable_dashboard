@@ -433,11 +433,209 @@ class DatasetStore:
             "vectors": vectors.astype(float).tolist(),
         }
 
+    @staticmethod
+    def _frame_mask_suffix_break_index(frame_meta: RawFrameMeta | None) -> int | None:
+        if frame_meta is None:
+            return None
+
+        base_len = int(frame_meta.base_len)
+        if base_len <= 0:
+            return None
+
+        valid_indices = np.asarray(frame_meta.valid_indices, dtype=int).reshape(-1)
+        if valid_indices.size <= 0:
+            return 0
+        if np.any((valid_indices < 0) | (valid_indices >= base_len)):
+            return None
+
+        expected_prefix = np.arange(valid_indices.size, dtype=int)
+        if not np.array_equal(valid_indices, expected_prefix):
+            return None
+        if int(valid_indices.size) >= base_len:
+            return None
+        return int(valid_indices.size)
+
+    @staticmethod
+    def _nan_suffix_break_index(values: np.ndarray) -> int | None:
+        arr = np.asarray(values)
+        if arr.ndim <= 0:
+            return None
+
+        n_frames = int(arr.shape[0])
+        if n_frames <= 0:
+            return None
+
+        if arr.ndim == 1:
+            finite_mask = np.isfinite(arr)
+        else:
+            finite_mask = np.all(np.isfinite(arr.reshape(n_frames, -1)), axis=1)
+        invalid_mask = ~np.asarray(finite_mask, dtype=bool)
+        if not np.any(invalid_mask):
+            return None
+
+        suffix_all_invalid = np.logical_and.accumulate(invalid_mask[::-1])[::-1]
+        candidates = np.flatnonzero(suffix_all_invalid)
+        if candidates.size <= 0:
+            return None
+        return int(candidates[0])
+
+    def _safe_raw_time_axis(self, raw_record: dict[str, Any]) -> np.ndarray | None:
+        raw_time_value = raw_record.get(self.time_key)
+        if raw_time_value is None:
+            return None
+        try:
+            raw_time = np.asarray(flatten_time_array(raw_time_value), dtype=float).reshape(-1)
+        except Exception:  # noqa: BLE001
+            return None
+        if raw_time.size <= 0:
+            return None
+        return raw_time
+
+    @staticmethod
+    def _coerce_numeric_timeseries(raw_value: Any, base_len: int) -> np.ndarray | None:
+        if int(base_len) <= 0:
+            return None
+        try:
+            arr = np.asarray(raw_value)
+        except Exception:  # noqa: BLE001
+            return None
+
+        if arr.ndim <= 0:
+            return None
+        if int(arr.shape[0]) != int(base_len):
+            return None
+
+        try:
+            if np.iscomplexobj(arr):
+                return np.asarray(arr, dtype=np.complex128)
+            return np.asarray(arr, dtype=float)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _pick_nan_break_source_key(self, raw_record: dict[str, Any], base_len: int) -> str | None:
+        preferred_keys = ["_.0.record.Etot", "_.0.record.eig", "_.0.record.c"]
+
+        for key in preferred_keys:
+            if key not in raw_record:
+                continue
+            values = self._coerce_numeric_timeseries(raw_record.get(key), base_len)
+            if values is not None:
+                return key
+
+        for key in sorted(raw_record.keys()):
+            key_text = str(key)
+            if key_text == self.time_key or key_text in preferred_keys:
+                continue
+            values = self._coerce_numeric_timeseries(raw_record.get(key_text), base_len)
+            if values is not None:
+                return key_text
+
+        return None
+
+    @staticmethod
+    def _infer_base_len_for_break_summary(
+        *,
+        raw_record: dict[str, Any],
+        frame_meta: RawFrameMeta | None,
+        raw_time: np.ndarray | None,
+    ) -> int:
+        if frame_meta is not None and int(frame_meta.base_len) > 0:
+            return int(frame_meta.base_len)
+        if raw_time is not None and int(raw_time.size) > 0:
+            return int(raw_time.size)
+
+        for value in raw_record.values():
+            try:
+                arr = np.asarray(value)
+            except Exception:  # noqa: BLE001
+                continue
+            if arr.ndim <= 0:
+                continue
+            n_frames = int(arr.shape[0])
+            if n_frames > 0:
+                return n_frames
+        return 0
+
+    def _build_trajectory_break_item(self, traj_id: str) -> dict[str, Any] | None:
+        tid = str(traj_id)
+        raw_record = self.raw_records_by_traj.get(tid)
+        if not isinstance(raw_record, dict):
+            raw_record = {}
+
+        frame_meta = self.raw_frame_meta_by_traj.get(tid)
+        raw_time = self._safe_raw_time_axis(raw_record)
+        base_len = self._infer_base_len_for_break_summary(
+            raw_record=raw_record,
+            frame_meta=frame_meta,
+            raw_time=raw_time,
+        )
+        if base_len <= 0:
+            return None
+
+        frame_break_index = self._frame_mask_suffix_break_index(frame_meta)
+        nan_break_index: int | None = None
+        nan_source_key: str | None = None
+
+        source_key = self._pick_nan_break_source_key(raw_record, base_len)
+        if source_key:
+            values = self._coerce_numeric_timeseries(raw_record.get(source_key), base_len)
+            if values is not None:
+                nan_break_index = self._nan_suffix_break_index(values)
+                if nan_break_index is not None:
+                    nan_source_key = source_key
+
+        if frame_break_index is None and nan_break_index is None:
+            return None
+
+        if nan_break_index is not None and (frame_break_index is None or nan_break_index <= frame_break_index):
+            break_index = int(nan_break_index)
+            reason = "nan_suffix"
+            source_key_out = nan_source_key
+        else:
+            break_index = int(frame_break_index)
+            reason = "frame_mask_suffix"
+            source_key_out = None
+
+        if break_index < 0 or break_index >= base_len:
+            return None
+
+        break_time: float | None = None
+        if raw_time is not None and break_index < int(raw_time.shape[0]):
+            value = float(raw_time[break_index])
+            if np.isfinite(value):
+                break_time = value
+
+        return {
+            "traj_id": tid,
+            "break_frame_index": int(break_index),
+            "break_time": (None if break_time is None else float(break_time)),
+            "reason": reason,
+            "source_key": source_key_out,
+        }
+
+    def build_trajectory_break_summary(self) -> dict[str, Any]:
+        broken_trajs: list[dict[str, Any]] = []
+        for traj_id in self.traj_ids:
+            item = self._build_trajectory_break_item(str(traj_id))
+            if item is not None:
+                broken_trajs.append(item)
+
+        total_traj = len(self.traj_ids)
+        broken_count = len(broken_trajs)
+        return {
+            "total_traj": int(total_traj),
+            "broken_traj_count": int(broken_count),
+            "complete_traj_count": int(total_traj - broken_count),
+            "broken_trajs": broken_trajs,
+        }
+
     def to_bootstrap(self, api_base: str = "/api") -> dict[str, Any]:
+        meta_payload = dict(self.meta)
+        meta_payload["trajectory_break_summary"] = self.build_trajectory_break_summary()
         return {
             "schema_version": 1,
             "data_mode": "api",
-            "meta": self.meta,
+            "meta": meta_payload,
             "defaults": self.defaults,
             "traj_ids": self.traj_ids,
             "api_base": api_base,

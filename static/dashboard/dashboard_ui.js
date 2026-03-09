@@ -1187,6 +1187,109 @@
     }
   }
 
+  function normalizeBreakSummary(rawSummary) {
+    if (!rawSummary || typeof rawSummary !== 'object') return null;
+    const rawBroken = Array.isArray(rawSummary.broken_trajs) ? rawSummary.broken_trajs : [];
+    const brokenTrajs = [];
+    for (const item of rawBroken) {
+      const trajId = String(item?.traj_id || '').trim();
+      const breakFrameIndex = Number.parseInt(item?.break_frame_index, 10);
+      if (!trajId || !Number.isFinite(breakFrameIndex) || breakFrameIndex < 0) continue;
+      const breakTimeRaw = Number(item?.break_time);
+      const reason = String(item?.reason || 'unknown').trim() || 'unknown';
+      const sourceKeyRaw = String(item?.source_key || '').trim();
+      brokenTrajs.push({
+        traj_id: trajId,
+        break_frame_index: breakFrameIndex,
+        break_time: Number.isFinite(breakTimeRaw) ? breakTimeRaw : null,
+        reason,
+        source_key: sourceKeyRaw || null,
+      });
+    }
+
+    const totalTrajRaw = Number.parseInt(rawSummary.total_traj, 10);
+    const totalTraj = Number.isFinite(totalTrajRaw) && totalTrajRaw >= 0 ? totalTrajRaw : trajIds.length;
+    const brokenTrajCountRaw = Number.parseInt(rawSummary.broken_traj_count, 10);
+    const brokenTrajCount = Number.isFinite(brokenTrajCountRaw) && brokenTrajCountRaw >= 0
+      ? brokenTrajCountRaw
+      : brokenTrajs.length;
+    const completeTrajCountRaw = Number.parseInt(rawSummary.complete_traj_count, 10);
+    const completeTrajCount = Number.isFinite(completeTrajCountRaw) && completeTrajCountRaw >= 0
+      ? completeTrajCountRaw
+      : Math.max(0, totalTraj - brokenTrajCount);
+
+    return {
+      totalTraj,
+      brokenTrajCount,
+      completeTrajCount,
+      brokenTrajs,
+    };
+  }
+
+  function formatBreakTime(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 'n/a';
+    const abs = Math.abs(number);
+    if ((abs > 0 && abs < 1e-3) || abs >= 1e4) {
+      return number.toExponential(3);
+    }
+    const fixed = number.toFixed(6);
+    return fixed.replace(/\.?0+$/, '');
+  }
+
+  function renderTrajectoryBreakSummary() {
+    const detailsEl = document.getElementById('traj-break-summary');
+    const statusEl = document.getElementById('break-summary-status');
+    const listEl = document.getElementById('break-summary-list');
+    if (!detailsEl || !statusEl || !listEl) return;
+
+    const summary = normalizeBreakSummary(meta?.trajectory_break_summary);
+    listEl.innerHTML = '';
+
+    if (!summary) {
+      statusEl.textContent = 'Trajectory completion summary is unavailable for this dataset.';
+      statusEl.classList.remove('ok');
+      statusEl.classList.add('warn');
+      detailsEl.setAttribute('open', '');
+      return;
+    }
+
+    const total = Math.max(0, Number(summary.totalTraj) || 0);
+    const brokenCount = Math.max(0, Number(summary.brokenTrajCount) || 0);
+    const completeCount = Math.max(0, Number(summary.completeTrajCount) || 0);
+
+    if (brokenCount <= 0) {
+      statusEl.textContent = `All trajectories complete (${completeCount}/${total}).`;
+      statusEl.classList.remove('warn');
+      statusEl.classList.add('ok');
+      const item = document.createElement('div');
+      item.className = 'break-summary-item';
+      item.textContent = 'No broken trajectories detected.';
+      listEl.appendChild(item);
+      detailsEl.removeAttribute('open');
+      return;
+    }
+
+    statusEl.textContent = `Broken trajectories: ${brokenCount}/${total}.`;
+    statusEl.classList.remove('ok');
+    statusEl.classList.add('warn');
+    detailsEl.setAttribute('open', '');
+
+    const rows = Array.isArray(summary.brokenTrajs) ? summary.brokenTrajs : [];
+    for (const row of rows) {
+      const trajId = String(row?.traj_id || '').trim();
+      const frameIndex = Number.parseInt(row?.break_frame_index, 10);
+      if (!trajId || !Number.isFinite(frameIndex)) continue;
+      const reason = String(row?.reason || 'unknown').trim() || 'unknown';
+      const sourceKey = row?.source_key ? String(row.source_key) : '';
+      const item = document.createElement('div');
+      item.className = 'break-summary-item';
+      const sourceLabel = sourceKey ? `, key=${sourceKey}` : '';
+      item.textContent = `traj ${trajId}: break@frame ${frameIndex}, t=${formatBreakTime(row?.break_time)}, reason=${reason}${sourceLabel}`;
+      listEl.appendChild(item);
+    }
+  }
+
   function initGlobalControls() {
     const sourcePklEl = document.getElementById('source-pkl');
     if (sourcePklEl) {
@@ -1200,6 +1303,7 @@
         sourcePklEl.title = 'unknown';
       }
     }
+    renderTrajectoryBreakSummary();
 
     const trajSelect = document.getElementById('global-traj');
     trajSelect.innerHTML = '';
