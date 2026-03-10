@@ -751,6 +751,47 @@ def check_app_routes() -> None:
     )
     _assert(len(ensemble_matrix.component_series) >= 2, "matrix ensemble should return multiple component series")
 
+    ensemble_renorm = ensemble_ep(
+        EnsembleSeriesRequest(
+            observable="|c|^2",
+            indices=[],
+            raw_key=None,
+            stat_mode="renorm_mean_ci95_bootstrap",
+        )
+    )
+    _assert(ensemble_renorm.cached is False, "first renorm ensemble request should have cached=false")
+    _assert(
+        len(ensemble_renorm.component_series) >= 2,
+        "renorm matrix ensemble should return multiple component series",
+    )
+    if ensemble_renorm.component_series:
+        point_count = min(len(comp.center) for comp in ensemble_renorm.component_series)
+        for idx in range(point_count):
+            center_sum = 0.0
+            finite_count = 0
+            for comp in ensemble_renorm.component_series:
+                value = float(comp.center[idx])
+                if np.isfinite(value):
+                    center_sum += value
+                    finite_count += 1
+            _assert(
+                finite_count == len(ensemble_renorm.component_series),
+                "renorm ensemble center should be finite for every component",
+            )
+            _assert(
+                abs(center_sum - 1.0) < 1e-9,
+                "renorm ensemble center should sum to 1 across components",
+            )
+    ensemble_renorm_cached = ensemble_ep(
+        EnsembleSeriesRequest(
+            observable="|c|^2",
+            indices=[],
+            raw_key=None,
+            stat_mode="renorm_mean_ci95_bootstrap",
+        )
+    )
+    _assert(ensemble_renorm_cached.cached is True, "second renorm ensemble request should have cached=true")
+
     ensemble_raw_key = ensemble_ep(
         EnsembleSeriesRequest(
             observable="raw_key",

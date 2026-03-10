@@ -43,7 +43,9 @@
   }
 
   function normalizeEnsembleStatMode(mode) {
-    return String(mode) === 'median_iqr' ? 'median_iqr' : 'mean_ci95_bootstrap';
+    const text = String(mode);
+    if (text === 'median_iqr' || text === 'renorm_mean_ci95_bootstrap') return text;
+    return 'mean_ci95_bootstrap';
   }
 
   function makeSeriesKey(trajId, observable, indices) {

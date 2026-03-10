@@ -66,7 +66,7 @@
   const observableOptions = [
     'bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key', 'expression'
   ];
-  const ensembleStatModes = ['mean_ci95_bootstrap', 'median_iqr'];
+  const ensembleStatModes = ['mean_ci95_bootstrap', 'median_iqr', 'renorm_mean_ci95_bootstrap'];
 
   function normalizeRawKeyAliases(rawAliases) {
     const out = {};

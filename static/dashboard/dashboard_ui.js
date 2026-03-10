@@ -614,6 +614,7 @@
 
   function ensembleStatModeLabel(mode) {
     if (mode === 'median_iqr') return 'Median + q25/q75';
+    if (mode === 'renorm_mean_ci95_bootstrap') return 'Renormalize mean + 95% CI';
     return 'Mean + 95% CI';
   }
 
@@ -737,7 +738,7 @@
     if (observable === 'expression') {
       if (exprWrap) exprWrap.style.display = 'flex';
       if (notebookWrap) notebookWrap.style.display = 'none';
-      if (statSelect) statSelect.style.display = 'none';
+      if (statSelect) statSelect.style.display = 'inline-block';
       indicesWrap.style.display = 'none';
       applyBtn.style.display = 'inline-block';
     } else if (observable === 'notebook_var') {

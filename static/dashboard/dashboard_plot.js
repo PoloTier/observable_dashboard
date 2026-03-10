@@ -127,10 +127,13 @@
   }
 
   function normalizedPanelStatMode(panelState) {
-    return String(panelState?.ensembleStatMode) === 'median_iqr' ? 'median_iqr' : 'mean_ci95_bootstrap';
+    const mode = String(panelState?.ensembleStatMode);
+    if (mode === 'median_iqr' || mode === 'renorm_mean_ci95_bootstrap') return mode;
+    return 'mean_ci95_bootstrap';
   }
 
   function ensembleCenterName(statMode) {
+    if (statMode === 'renorm_mean_ci95_bootstrap') return 'renorm mean';
     return statMode === 'median_iqr' ? 'median' : 'mean';
   }
 

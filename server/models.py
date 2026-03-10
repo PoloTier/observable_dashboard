@@ -95,7 +95,7 @@ class SeriesResponse(BaseModel):
     cached: bool
 
 
-EnsembleStatMode = Literal["mean_ci95_bootstrap", "median_iqr"]
+EnsembleStatMode = Literal["mean_ci95_bootstrap", "median_iqr", "renorm_mean_ci95_bootstrap"]
 
 
 class EnsembleSeriesRequest(BaseModel):

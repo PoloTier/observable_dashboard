@@ -280,6 +280,92 @@ def test_expression_ensemble_matrix_supports_median_iqr() -> None:
     assert payload_cached.cached is True
 
 
+def test_expression_ensemble_scalar_renorm_mode_falls_back_to_mean() -> None:
+    _, ensemble_ep, _ = _make_endpoints()
+    payload_mean = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tadd{_.0.record.A,-5}",
+            stat_mode="mean_ci95_bootstrap",
+        )
+    )
+    payload_renorm = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tadd{_.0.record.A,-5}",
+            stat_mode="renorm_mean_ci95_bootstrap",
+        )
+    )
+    assert isinstance(payload_mean, ExpressionEnsembleResponse)
+    assert isinstance(payload_renorm, ExpressionEnsembleResponse)
+    assert payload_renorm.series_kind == "scalar"
+    assert payload_renorm.stat_mode == "renorm_mean_ci95_bootstrap"
+    comp_mean = payload_mean.component_series[0]
+    comp_renorm = payload_renorm.component_series[0]
+    np.testing.assert_allclose(np.asarray(comp_renorm.time, dtype=float), np.asarray(comp_mean.time, dtype=float))
+    np.testing.assert_allclose(np.asarray(comp_renorm.center, dtype=float), np.asarray(comp_mean.center, dtype=float))
+    np.testing.assert_allclose(np.asarray(comp_renorm.low, dtype=float), np.asarray(comp_mean.low, dtype=float))
+    np.testing.assert_allclose(np.asarray(comp_renorm.high, dtype=float), np.asarray(comp_mean.high, dtype=float))
+    assert comp_renorm.sample_count == comp_mean.sample_count
+
+
+def test_expression_ensemble_matrix_supports_renorm_mean_ci95_bootstrap() -> None:
+    _, ensemble_ep, _ = _make_endpoints()
+    payload = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tabs{_.0.record.CM}",
+            stat_mode="renorm_mean_ci95_bootstrap",
+        )
+    )
+    assert isinstance(payload, ExpressionEnsembleResponse)
+    assert payload.expression == "tabs{_.0.record.CM}"
+    assert payload.series_kind == "matrix"
+    assert payload.n_components == 2
+    assert payload.n_trajectories == 2
+    assert payload.cached is False
+    assert len(payload.component_series) == 2
+
+    comp0 = payload.component_series[0]
+    comp1 = payload.component_series[1]
+    np.testing.assert_allclose(
+        np.asarray(comp0.time, dtype=float),
+        np.asarray([0.0, 2.0], dtype=float),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(comp1.time, dtype=float),
+        np.asarray([0.0, 2.0], dtype=float),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(comp0.center, dtype=float),
+        np.asarray([0.585786437626905, 10.0 / 29.0], dtype=float),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(comp1.center, dtype=float),
+        np.asarray([0.41421356237309503, 19.0 / 29.0], dtype=float),
+        atol=1e-12,
+    )
+    assert comp0.sample_count == [2, 2]
+    assert comp1.sample_count == [2, 2]
+    for idx in range(len(comp0.center)):
+        total = float(comp0.center[idx]) + float(comp1.center[idx])
+        assert np.isfinite(total)
+        assert abs(total - 1.0) < 1e-12
+    for low, high in zip(comp0.low, comp0.high):
+        assert float(low) <= float(high)
+    for low, high in zip(comp1.low, comp1.high):
+        assert float(low) <= float(high)
+
+    payload_cached = ensemble_ep(
+        ExpressionEnsembleRequest(
+            expression="tabs{_.0.record.CM}",
+            stat_mode="renorm_mean_ci95_bootstrap",
+        )
+    )
+    assert isinstance(payload_cached, ExpressionEnsembleResponse)
+    assert payload_cached.cached is True
+
+
 def test_expression_ensemble_rejects_cross_trajectory_ops() -> None:
     _, ensemble_ep, _ = _make_endpoints()
     with pytest.raises(HTTPException) as exc_info:

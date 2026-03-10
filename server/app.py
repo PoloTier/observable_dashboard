@@ -13,7 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from ..config import ALLOWED_OBSERVABLES, required_index_count
 from ..renderer import STATIC_DIR, _json_html_safe, _render_html
 from .cache import SeriesLRUCache
-from .compute import aggregate_scalar_series_by_mode, compute_observable_series
+from .compute import (
+    RENORM_MEAN_CI95_BOOTSTRAP_MODE,
+    aggregate_matrix_renorm_mean_ci95_bootstrap,
+    aggregate_scalar_series_by_mode,
+    compute_observable_series,
+)
 from .dataset_store import DatasetStore
 from .expression import ExpressionEvaluationError, evaluate_expression_payload
 from .models import (
@@ -165,6 +170,110 @@ def _build_ensemble_component_payload(
         "high": [float(v) for v in stats["high"]],
         "sample_count": [int(v) for v in stats["sample_count"]],
     }
+
+
+def _matrix_component_count(record: dict[str, Any]) -> int:
+    count_raw = record.get("n_components")
+    count = int(count_raw) if isinstance(count_raw, int) else 0
+    if count > 0:
+        return count
+    values_raw = list(record.get("values", []) or [])
+    for row in values_raw:
+        if isinstance(row, (list, tuple)):
+            count = max(count, len(row))
+    return count
+
+
+def _effective_scalar_stat_mode(stat_mode: str, *, n_components: int) -> str:
+    if str(stat_mode) == RENORM_MEAN_CI95_BOOTSTRAP_MODE and int(n_components) <= 1:
+        return "mean_ci95_bootstrap"
+    return str(stat_mode)
+
+
+def _build_matrix_ensemble_component_payloads(
+    *,
+    matrix_series_records: list[dict[str, Any]],
+    stat_mode: str,
+    context_key: str,
+    component_labels: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    max_components = 0
+    for record in matrix_series_records:
+        max_components = max(max_components, _matrix_component_count(record))
+    if max_components <= 0:
+        return [], 0
+
+    effective_mode = _effective_scalar_stat_mode(stat_mode, n_components=max_components)
+    component_series: list[dict[str, Any]] = []
+    if effective_mode == RENORM_MEAN_CI95_BOOTSTRAP_MODE:
+        matrix_series_list = [
+            {
+                "time": list(record.get("time", []) or []),
+                "values": list(record.get("values", []) or []),
+            }
+            for record in matrix_series_records
+        ]
+        stats = aggregate_matrix_renorm_mean_ci95_bootstrap(
+            matrix_series_list,
+            context_key=context_key,
+            n_components=max_components,
+        )
+        time_values = [float(v) for v in stats.get("time", [])]
+        low_rows = list(stats.get("low", []) or [])
+        center_rows = list(stats.get("center", []) or [])
+        high_rows = list(stats.get("high", []) or [])
+        sample_counts = [int(v) for v in stats.get("sample_count", [])]
+        n_points = min(len(time_values), len(low_rows), len(center_rows), len(high_rows), len(sample_counts))
+        time_values = time_values[:n_points]
+        sample_counts = sample_counts[:n_points]
+
+        for component_index in range(max_components):
+            label = None
+            if component_labels is not None and component_index < len(component_labels):
+                label = str(component_labels[component_index])
+            low_values = []
+            center_values = []
+            high_values = []
+            for point_index in range(n_points):
+                low_row = list(low_rows[point_index]) if isinstance(low_rows[point_index], (list, tuple)) else []
+                center_row = list(center_rows[point_index]) if isinstance(center_rows[point_index], (list, tuple)) else []
+                high_row = list(high_rows[point_index]) if isinstance(high_rows[point_index], (list, tuple)) else []
+                low_values.append(float(low_row[component_index]) if component_index < len(low_row) else float("nan"))
+                center_values.append(
+                    float(center_row[component_index]) if component_index < len(center_row) else float("nan")
+                )
+                high_values.append(float(high_row[component_index]) if component_index < len(high_row) else float("nan"))
+            component_series.append(
+                {
+                    "component": int(component_index),
+                    "label": label,
+                    "time": time_values,
+                    "low": low_values,
+                    "center": center_values,
+                    "high": high_values,
+                    "sample_count": sample_counts,
+                }
+            )
+        return component_series, max_components
+
+    for component_index in range(max_components):
+        scalar_series = [
+            _matrix_component_to_scalar_series(record, component_index)
+            for record in matrix_series_records
+        ]
+        label = None
+        if component_labels is not None and component_index < len(component_labels):
+            label = str(component_labels[component_index])
+        component_series.append(
+            _build_ensemble_component_payload(
+                scalar_series_list=scalar_series,
+                stat_mode=effective_mode,
+                context_key=context_key,
+                component_index=component_index,
+                label=label,
+            )
+        )
+    return component_series, max_components
 
 
 def _json_safe_float_list(values: list[float] | None) -> list[float | None] | None:
@@ -506,42 +615,23 @@ def create_app(
             component_series: list[dict[str, Any]] = []
             n_components: int | None = None
             if series_kind == "scalar":
+                effective_stat_mode = _effective_scalar_stat_mode(stat_mode, n_components=1)
                 scalar_series = [_as_scalar_series_record(record) for record in series_records]
                 component_series.append(
                     _build_ensemble_component_payload(
                         scalar_series_list=scalar_series,
-                        stat_mode=stat_mode,
+                        stat_mode=effective_stat_mode,
                         context_key=f"expression:{expression}",
                         component_index=0,
                     )
                 )
             else:
-                max_components = 0
-                for record in series_records:
-                    count_raw = record.get("n_components")
-                    count = int(count_raw) if isinstance(count_raw, int) else 0
-                    if count <= 0:
-                        values_raw = list(record.get("values", []) or [])
-                        for row in values_raw:
-                            if isinstance(row, list) and len(row) > count:
-                                count = len(row)
-                    if count > max_components:
-                        max_components = count
-
+                component_series, max_components = _build_matrix_ensemble_component_payloads(
+                    matrix_series_records=series_records,
+                    stat_mode=stat_mode,
+                    context_key=f"expression:{expression}",
+                )
                 n_components = int(max_components)
-                for component_index in range(max_components):
-                    scalar_series = [
-                        _matrix_component_to_scalar_series(record, component_index)
-                        for record in series_records
-                    ]
-                    component_series.append(
-                        _build_ensemble_component_payload(
-                            scalar_series_list=scalar_series,
-                            stat_mode=stat_mode,
-                            context_key=f"expression:{expression}",
-                            component_index=component_index,
-                        )
-                    )
         except HTTPException:
             raise
         except KeyError as exc:
@@ -650,11 +740,12 @@ def create_app(
                     )
 
                 if series_kind == "scalar":
+                    effective_stat_mode = _effective_scalar_stat_mode(stat_mode, n_components=1)
                     scalar_series = [_as_scalar_series_record(record) for record in raw_series_records]
                     component_series.append(
                         _build_ensemble_component_payload(
                             scalar_series_list=scalar_series,
-                            stat_mode=stat_mode,
+                            stat_mode=effective_stat_mode,
                             context_key=f"raw_key:{raw_key}",
                             component_index=0,
                         )
@@ -662,28 +753,13 @@ def create_app(
                 else:
                     if labels_mismatch:
                         component_labels = None
-                    max_components = 0
-                    for record in raw_series_records:
-                        n_components = int(record.get("n_components") or 0)
-                        if n_components > max_components:
-                            max_components = n_components
-                    for component_index in range(max_components):
-                        scalar_series = [
-                            _matrix_component_to_scalar_series(record, component_index)
-                            for record in raw_series_records
-                        ]
-                        label = None
-                        if component_labels is not None and component_index < len(component_labels):
-                            label = str(component_labels[component_index])
-                        component_series.append(
-                            _build_ensemble_component_payload(
-                                scalar_series_list=scalar_series,
-                                stat_mode=stat_mode,
-                                context_key=f"raw_key:{raw_key}",
-                                component_index=component_index,
-                                label=label,
-                            )
-                        )
+                    matrix_component_series, _ = _build_matrix_ensemble_component_payloads(
+                        matrix_series_records=raw_series_records,
+                        stat_mode=stat_mode,
+                        context_key=f"raw_key:{raw_key}",
+                        component_labels=component_labels,
+                    )
+                    component_series.extend(matrix_component_series)
             else:
                 series_records: list[dict[str, Any]] = []
                 series_kind: str | None = None
@@ -715,34 +791,23 @@ def create_app(
                     )
 
                 if series_kind == "scalar":
+                    effective_stat_mode = _effective_scalar_stat_mode(stat_mode, n_components=1)
                     scalar_series = [_as_scalar_series_record(record) for record in series_records]
                     component_series.append(
                         _build_ensemble_component_payload(
                             scalar_series_list=scalar_series,
-                            stat_mode=stat_mode,
+                            stat_mode=effective_stat_mode,
                             context_key=observable,
                             component_index=0,
                         )
                     )
                 else:
-                    max_components = 0
-                    for record in series_records:
-                        n_components = int(record.get("n_components") or 0)
-                        if n_components > max_components:
-                            max_components = n_components
-                    for component_index in range(max_components):
-                        scalar_series = [
-                            _matrix_component_to_scalar_series(record, component_index)
-                            for record in series_records
-                        ]
-                        component_series.append(
-                            _build_ensemble_component_payload(
-                                scalar_series_list=scalar_series,
-                                stat_mode=stat_mode,
-                                context_key=observable,
-                                component_index=component_index,
-                            )
-                        )
+                    matrix_component_series, _ = _build_matrix_ensemble_component_payloads(
+                        matrix_series_records=series_records,
+                        stat_mode=stat_mode,
+                        context_key=observable,
+                    )
+                    component_series.extend(matrix_component_series)
         except HTTPException:
             raise
         except KeyError as exc:

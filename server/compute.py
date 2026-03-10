@@ -10,6 +10,8 @@ from .dataset_store import TrajectoryRecord
 TIME_BUCKET_DECIMALS = 8
 BOOTSTRAP_RESAMPLES = 1000
 CI95_Z_VALUE = 1.96
+RENORM_DENOM_EPSILON = 1e-12
+RENORM_MEAN_CI95_BOOTSTRAP_MODE = "renorm_mean_ci95_bootstrap"
 
 
 def _as_float_list(arr: np.ndarray) -> list[float]:
@@ -132,6 +134,93 @@ def bucket_scalar_series_by_time(
     return out
 
 
+def _coerce_float_vector(row: object, *, n_components: int) -> np.ndarray | None:
+    if isinstance(row, np.ndarray):
+        values = row.reshape(-1).tolist()
+    elif isinstance(row, (list, tuple)):
+        values = list(row)
+    else:
+        return None
+    if len(values) < int(n_components):
+        return None
+
+    vector = np.empty(int(n_components), dtype=float)
+    for idx in range(int(n_components)):
+        try:
+            item = float(values[idx])
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(item):
+            return None
+        vector[idx] = item
+    return vector
+
+
+def bucket_matrix_series_by_time(
+    series_list: list[dict[str, object]],
+    *,
+    n_components: int,
+    decimals: int = TIME_BUCKET_DECIMALS,
+) -> list[dict[str, object]]:
+    if int(n_components) <= 0:
+        return []
+
+    time_buckets: dict[str, dict[str, object]] = {}
+    for series in series_list:
+        time = np.asarray(series.get("time", []), dtype=float).reshape(-1)
+        values_raw = series.get("values", [])
+        if isinstance(values_raw, np.ndarray):
+            rows = values_raw.tolist()
+        elif isinstance(values_raw, list):
+            rows = values_raw
+        else:
+            rows = []
+        point_count = int(min(time.shape[0], len(rows)))
+        if point_count <= 0:
+            continue
+
+        for idx in range(point_count):
+            t = float(time[idx])
+            if not np.isfinite(t):
+                continue
+            vector = _coerce_float_vector(rows[idx], n_components=int(n_components))
+            if vector is None:
+                continue
+
+            time_key = f"{t:.{int(decimals)}f}"
+            bucket = time_buckets.get(time_key)
+            if bucket is None:
+                bucket = {
+                    "time": float(time_key),
+                    "time_key": time_key,
+                    "vectors": [],
+                }
+                time_buckets[time_key] = bucket
+            bucket_vectors = bucket["vectors"]
+            if isinstance(bucket_vectors, list):
+                bucket_vectors.append(vector)
+
+    ordered = sorted(time_buckets.values(), key=lambda item: float(item["time"]))
+    out: list[dict[str, object]] = []
+    for item in ordered:
+        vectors_raw = item.get("vectors", [])
+        if not isinstance(vectors_raw, list) or not vectors_raw:
+            continue
+        vectors = np.asarray(vectors_raw, dtype=float)
+        if vectors.ndim != 2:
+            continue
+        if vectors.shape[0] <= 0 or vectors.shape[1] != int(n_components):
+            continue
+        out.append(
+            {
+                "time": float(item["time"]),
+                "time_key": str(item["time_key"]),
+                "vectors": vectors,
+            }
+        )
+    return out
+
+
 def aggregate_median_iqr(
     buckets: list[dict[str, object]],
 ) -> dict[str, list[float] | list[int]]:
@@ -233,6 +322,83 @@ def aggregate_mean_ci95_bootstrap(
     return out
 
 
+def aggregate_matrix_renorm_mean_ci95_bootstrap(
+    matrix_series_list: list[dict[str, object]],
+    *,
+    context_key: str,
+    n_components: int,
+    n_resamples: int = BOOTSTRAP_RESAMPLES,
+    denom_epsilon: float = RENORM_DENOM_EPSILON,
+) -> dict[str, list[float] | list[int] | list[list[float]]]:
+    buckets = bucket_matrix_series_by_time(
+        matrix_series_list,
+        n_components=int(n_components),
+        decimals=TIME_BUCKET_DECIMALS,
+    )
+    out = {
+        "time": [],
+        "low": [],
+        "center": [],
+        "high": [],
+        "sample_count": [],
+    }
+    n_components_int = int(n_components)
+    for bucket in buckets:
+        vectors = np.asarray(bucket.get("vectors", []), dtype=float)
+        if vectors.ndim != 2 or vectors.shape[1] != n_components_int:
+            continue
+
+        sample_count = int(vectors.shape[0])
+        if sample_count <= 0:
+            continue
+        mean_vector = np.mean(vectors, axis=0)
+        center = np.full((n_components_int,), np.nan, dtype=float)
+        low = np.full((n_components_int,), np.nan, dtype=float)
+        high = np.full((n_components_int,), np.nan, dtype=float)
+
+        denom = float(np.sum(mean_vector))
+        if np.isfinite(denom) and abs(denom) > float(denom_epsilon):
+            center = mean_vector / denom
+
+        if sample_count <= 1:
+            low = center.copy()
+            high = center.copy()
+        elif int(n_resamples) > 1:
+            seed = _bootstrap_seed(
+                context_key=context_key,
+                component_index=-1,
+                time_key=str(bucket.get("time_key", "")),
+                sample_count=sample_count,
+                n_resamples=int(n_resamples),
+            )
+            rng = np.random.default_rng(np.uint64(seed))
+            sample_indices = rng.integers(0, sample_count, size=(int(n_resamples), sample_count))
+            sampled_values = vectors[sample_indices]  # [B, N, K]
+            sampled_means = sampled_values.mean(axis=1)  # [B, K]
+            sampled_denoms = np.sum(sampled_means, axis=1)  # [B]
+            valid = (
+                np.isfinite(sampled_denoms)
+                & (np.abs(sampled_denoms) > float(denom_epsilon))
+                & np.all(np.isfinite(sampled_means), axis=1)
+            )
+            if np.any(valid):
+                ratios = sampled_means[valid] / sampled_denoms[valid, None]
+                for component_idx in range(n_components_int):
+                    values = np.asarray(ratios[:, component_idx], dtype=float).reshape(-1)
+                    if values.size <= 0:
+                        continue
+                    sorted_values = np.sort(values)
+                    low[component_idx] = _quantile_from_sorted(sorted_values, 0.025)
+                    high[component_idx] = _quantile_from_sorted(sorted_values, 0.975)
+
+        out["time"].append(float(bucket["time"]))
+        out["low"].append(low.astype(float).tolist())
+        out["center"].append(center.astype(float).tolist())
+        out["high"].append(high.astype(float).tolist())
+        out["sample_count"].append(sample_count)
+    return out
+
+
 def aggregate_scalar_series_by_mode(
     series_list: list[dict[str, list[float]]],
     *,
@@ -243,7 +409,7 @@ def aggregate_scalar_series_by_mode(
     buckets = bucket_scalar_series_by_time(series_list, decimals=TIME_BUCKET_DECIMALS)
     if stat_mode == "median_iqr":
         return aggregate_median_iqr(buckets)
-    if stat_mode == "mean_ci95_bootstrap":
+    if stat_mode in {"mean_ci95_bootstrap", RENORM_MEAN_CI95_BOOTSTRAP_MODE}:
         return aggregate_mean_ci95_bootstrap(
             buckets,
             context_key=context_key,
