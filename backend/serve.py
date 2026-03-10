@@ -4,8 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .server.cache import SeriesLRUCache
-from .server.dataset_store import DatasetLoadOptions, load_dataset_store
+from backend.server.cache import SeriesLRUCache
+from backend.server.dataset_store import DatasetLoadOptions, load_dataset_store
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,9 +48,9 @@ def main() -> None:
     args = parse_args()
 
     try:
-        from .server.app import create_app
+        from backend.server.app import create_app
         import uvicorn
-    except Exception as exc:  # noqa: BLE001
+    except ImportError as exc:
         print("[ERROR] Missing runtime dependency: fastapi/uvicorn", file=sys.stderr)
         print("Install with: pip install fastapi uvicorn", file=sys.stderr)
         print(f"Detail: {exc}", file=sys.stderr)
@@ -69,7 +69,7 @@ def main() -> None:
 
     try:
         store = load_dataset_store(options)
-    except Exception as exc:  # noqa: BLE001
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"[ERROR] Failed to initialize dataset store: {exc}", file=sys.stderr)
         raise SystemExit(1)
 

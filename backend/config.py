@@ -116,6 +116,6 @@ def load_config(config_path: Path) -> Dict[str, Any]:
             "show_all_traces_in_all_mode": show_all_traces,
         },
         "nac": {
-            "mode": "norm",
+            "mode": nac_mode,
         },
     }

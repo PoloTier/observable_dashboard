@@ -20,12 +20,11 @@ A web-based interactive dashboard for visualizing molecular dynamics observables
   - uvicorn
   - numpy
   - pyyaml
-  - jinja2
 
 ### Install Dependencies
 
 ```bash
-pip install fastapi uvicorn numpy pyyaml jinja2
+pip install fastapi uvicorn numpy pyyaml
 ```
 
 ## Quick Start
@@ -37,10 +36,15 @@ Ensure you have a `dump_all.pkl` file containing your trajectory data with the e
 ### 2. Start the Server
 
 ```bash
-python -m tools.observable_dashboard.serve \
-  -i run0/dump_all.pkl \
-  --host 127.0.0.1 \
-  --port 8000
+# 方式 1：使用 main.py（推荐）
+python main.py -i run0/dump_all.pkl --host 127.0.0.1 --port 8000
+
+# 方式 2：使用模块方式
+python -m backend.serve -i run0/dump_all.pkl --host 127.0.0.1 --port 8000
+
+# 方式 3：安装后使用命令行工具
+pip install -e .
+observable-dashboard -i run0/dump_all.pkl --host 127.0.0.1 --port 8000
 ```
 
 ### 3. Open in Browser
@@ -53,13 +57,14 @@ python -m tools.observable_dashboard.serve \
 ### Command Line Options
 
 ```bash
-python -m tools.observable_dashboard.serve [OPTIONS]
+python main.py [OPTIONS]
 
 Options:
   -i, --input PATH              Input pickle file (default: run0/dump_all.pkl)
   -c, --config PATH             YAML config file (optional)
   --host HOST                   Bind host (default: 127.0.0.1)
   --port PORT                   Bind port (default: 8000)
+  --log-level LEVEL             Log level (default: info)
   --cache-size N                LRU cache size (default: 512)
   --mol3d-cache-size N          3D coordinate cache size (default: 64)
   --time-key KEY                Time data key (default: _.0.record.time)
@@ -91,7 +96,7 @@ If you use this tool in your research, please cite:
 @software{observable_dashboard,
   author = {Haocheng, Lu},
   title = {Observable Dashboard: Interactive Molecular Dynamics Visualization},
-  year = {2025},
+  year = {2026},
   url = {https://github.com/PoloTier/observable_dashboard}
 }
 ```

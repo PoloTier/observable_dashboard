@@ -7,8 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from ..config import load_config
-from ..dataset import flatten_time_array, prepare_dataset, reshape_coords
+from backend.config import load_config
+from backend.dataset import flatten_time_array, prepare_dataset, reshape_coords
 
 
 @dataclass(slots=True)

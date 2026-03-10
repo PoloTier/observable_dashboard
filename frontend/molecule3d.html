@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Molecule 3D Viewer</title>
-  <script src="assets/vendor/3Dmol-min.js?v={{ static_version }}"></script>
-  <script src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"></script>
-  <script src="assets/vendor/gif.min.js?v={{ static_version }}"></script>
+  <script src="assets/vendor/3Dmol-min.js"></script>
+  <script src="assets/vendor/plotly-2.35.2.min.js"></script>
+  <script src="assets/vendor/gif.min.js"></script>
   <style>
     :root {
       --bg: #f7f8fa;
@@ -737,21 +737,59 @@
     </div>
   </div>
 
-  <script id="bootstrap-json" type="application/json">{{ bootstrap_json | safe }}</script>
-  <script src="assets/mol3d/dashboard_mol3d_constants.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_utils.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_store.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_shared.js?v={{ static_version }}"></script>
-  <script src="assets/math/dashboard_math3d.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_geometry.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_measurement.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_vector_overlay.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_viewer.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_io_transformers.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_io_network.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_io_vector_ops.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_io_app.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_io.js?v={{ static_version }}"></script>
-  <script src="assets/mol3d/dashboard_mol3d_page.js?v={{ static_version }}"></script>
+  <script id="bootstrap-json" type="application/json">{}</script>
+  <script>
+    // Load bootstrap data and then load all modules
+    (async function() {
+      try {
+        // Load bootstrap data first
+        const response = await fetch('/api/bootstrap');
+        if (!response.ok) {
+          throw new Error(`Failed to load bootstrap: ${response.status}`);
+        }
+        const bootstrap = await response.json();
+        document.getElementById('bootstrap-json').textContent = JSON.stringify(bootstrap);
+
+        // Now load all modules in order
+        const modules = [
+          '/assets/dashboard/dashboard_state.js',
+          '/assets/dashboard/dashboard_data_loader.js',
+          '/assets/mol3d/dashboard_mol3d_constants.js',
+          '/assets/mol3d/dashboard_mol3d_utils.js',
+          '/assets/mol3d/dashboard_mol3d_store.js',
+          '/assets/mol3d/dashboard_mol3d_shared.js',
+          '/assets/math/dashboard_math3d.js',
+          '/assets/mol3d/dashboard_mol3d_geometry.js',
+          '/assets/mol3d/dashboard_mol3d_measurement.js',
+          '/assets/mol3d/dashboard_mol3d_vector_overlay.js',
+          '/assets/mol3d/dashboard_mol3d_viewer.js',
+          '/assets/mol3d/dashboard_mol3d_io_transformers.js',
+          '/assets/mol3d/dashboard_mol3d_io_network.js',
+          '/assets/mol3d/dashboard_mol3d_io_vector_ops.js',
+          '/assets/mol3d/dashboard_mol3d_io_app.js',
+          '/assets/mol3d/dashboard_mol3d_io.js',
+          '/assets/mol3d/dashboard_mol3d_page.js'
+        ];
+
+        for (const src of modules) {
+          await loadScript(src);
+        }
+      } catch (error) {
+        console.error('Initialization error:', error);
+        alert('Failed to initialize: ' + error.message);
+      }
+    })();
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`Failed to load: ${src}`));
+        document.body.appendChild(script);
+      });
+    }
+  </script>
+  <script src="assets/mol3d/dashboard_mol3d_page.js"></script>
 </body>
 </html>

@@ -13,10 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.observable_dashboard.server.app import create_app
-from tools.observable_dashboard.server.cache import SeriesLRUCache
-from tools.observable_dashboard.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
-from tools.observable_dashboard.server.models import (
+from backend.server.app import create_app
+from backend.server.cache import SeriesLRUCache
+from backend.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
+from backend.server.models import (
     ExpressionEnsembleRequest,
     ExpressionEnsembleResponse,
     ExpressionDatasetRequest,

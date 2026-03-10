@@ -7,21 +7,21 @@ import time
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
-from ..config import ALLOWED_OBSERVABLES, required_index_count
-from ..renderer import STATIC_DIR, _json_html_safe, _render_html
-from .cache import SeriesLRUCache
-from .compute import (
+from backend.config import ALLOWED_OBSERVABLES, required_index_count
+from backend.server.cache import SeriesLRUCache
+from backend.server.compute import (
     RENORM_MEAN_CI95_BOOTSTRAP_MODE,
     aggregate_matrix_renorm_mean_ci95_bootstrap,
     aggregate_scalar_series_by_mode,
     compute_observable_series,
 )
-from .dataset_store import DatasetStore
-from .expression import ExpressionEvaluationError, evaluate_expression_payload
-from .models import (
+from backend.server.dataset_store import DatasetStore
+from backend.server.expression import ExpressionEvaluationError, evaluate_expression_payload
+from backend.server.models import (
     BootstrapResponse,
     ExpressionEnsembleRequest,
     ExpressionEnsembleResponse,
@@ -383,17 +383,23 @@ def create_app(
             )
 
     app = FastAPI(title="Observable Dashboard API", version="1.0.0")
-    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR)), name="assets")
 
+    # Determine frontend location
+    project_root = Path(__file__).parent.parent.parent
+    frontend_dir = project_root / "frontend"
+    frontend_public = frontend_dir / "public"
+
+    # Mount static assets
+    if frontend_public.exists():
+        app.mount("/assets", StaticFiles(directory=str(frontend_public / "assets")), name="assets")
+
+    # Serve frontend HTML pages
     @app.get("/", response_class=HTMLResponse)
     def index_page() -> HTMLResponse:
-        _, bootstrap, _ = _get_runtime_snapshot()
-        html = _render_html(
-            "index.html.j2",
-            bootstrap_json=_json_html_safe(bootstrap),
-            static_version=static_version,
-        )
-        return HTMLResponse(html)
+        index_file = frontend_dir / "index.html"
+        if index_file.exists():
+            return HTMLResponse(index_file.read_text())
+        return HTMLResponse("<h1>Frontend not found</h1><p>Please build frontend or check installation.</p>", status_code=404)
 
     @app.get("/index.html", response_class=HTMLResponse)
     def index_page_alias() -> HTMLResponse:
@@ -401,13 +407,18 @@ def create_app(
 
     @app.get("/molecule3d.html", response_class=HTMLResponse)
     def molecule3d_page() -> HTMLResponse:
-        _, bootstrap, _ = _get_runtime_snapshot()
-        html = _render_html(
-            "molecule3d.html.j2",
-            bootstrap_json=_json_html_safe(bootstrap),
-            static_version=static_version,
-        )
-        return HTMLResponse(html)
+        mol3d_file = frontend_dir / "molecule3d.html"
+        if mol3d_file.exists():
+            return HTMLResponse(mol3d_file.read_text())
+        return HTMLResponse("<h1>Molecule3D page not found</h1>", status_code=404)
+
+    # Serve frontend source files (for development)
+    @app.get("/src/{file_path:path}")
+    def serve_src(file_path: str) -> FileResponse:
+        src_file = frontend_dir / "src" / file_path
+        if src_file.exists() and src_file.is_file():
+            return FileResponse(src_file)
+        raise HTTPException(status_code=404, detail="File not found")
 
     @app.get(f"{api_base}/healthz", response_model=HealthzResponse)
     def healthz() -> HealthzResponse:

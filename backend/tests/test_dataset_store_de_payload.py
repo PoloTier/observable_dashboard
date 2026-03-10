@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.observable_dashboard.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
+from backend.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
 
 
 def _build_store() -> DatasetStore:

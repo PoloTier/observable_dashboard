@@ -11,8 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.observable_dashboard.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
-from tools.observable_dashboard.server.expression import ExpressionEvaluationError, evaluate_expression_payload
+from backend.server.dataset_store import DatasetStore, RawFrameMeta, TrajectoryRecord
+from backend.server.expression import ExpressionEvaluationError, evaluate_expression_payload
 
 
 def _build_traj(traj_id: str, time_values: list[float]) -> TrajectoryRecord:

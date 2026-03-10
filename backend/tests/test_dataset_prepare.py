@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.observable_dashboard.dataset import BOHR_TO_ANGSTROM, prepare_dataset
+from backend.dataset import BOHR_TO_ANGSTROM, prepare_dataset
 
 
 def _prepare(master_dataset: dict[str, object], drop_zero_frames: bool = True) -> dict[str, object]:
