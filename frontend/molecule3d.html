@@ -641,6 +641,20 @@
           </div>
         </details>
 
+        <details id="hbond-controls-group" class="control-group">
+          <summary>Hydrogen Bonds</summary>
+          <div class="controls control-group-body">
+            <label class="check-label" for="show-hydrogen-bonds">
+              <input id="show-hydrogen-bonds" type="checkbox" />
+              显示氢键
+            </label>
+
+            <label for="hbond-line-width-slider">氢键粗细</label>
+            <input id="hbond-line-width-slider" type="range" min="0.2" max="3.0" step="0.1" value="1.8" />
+            <span id="hbond-line-width-label">1.8x</span>
+          </div>
+        </details>
+
         <details id="nac-controls-group" class="control-group">
           <summary>NAC Vectors</summary>
           <div class="controls control-group-body">
@@ -762,6 +776,7 @@
           '/assets/mol3d/dashboard_mol3d_geometry.js',
           '/assets/mol3d/dashboard_mol3d_measurement.js',
           '/assets/mol3d/dashboard_mol3d_vector_overlay.js',
+          '/assets/mol3d/dashboard_mol3d_hbond.js',
           '/assets/mol3d/dashboard_mol3d_viewer.js',
           '/assets/mol3d/dashboard_mol3d_io_transformers.js',
           '/assets/mol3d/dashboard_mol3d_io_network.js',

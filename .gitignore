@@ -40,6 +40,7 @@ frontend/build/
 .env.local
 
 .claude
+.codex
 .pytest_cache
 AGENTS.md
 CODE_REVIEW.md

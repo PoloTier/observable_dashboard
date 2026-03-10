@@ -51,6 +51,7 @@ async function initMolecule3D() {
     '/assets/mol3d/dashboard_mol3d_viewer.js',
     '/assets/mol3d/dashboard_mol3d_measurement.js',
     '/assets/mol3d/dashboard_mol3d_vector_overlay.js',
+    '/assets/mol3d/dashboard_mol3d_hbond.js',
     '/assets/mol3d/dashboard_mol3d_store.js',
     '/assets/mol3d/dashboard_mol3d_io_vector_ops.js',
     '/assets/mol3d/dashboard_mol3d_io_transformers.js',

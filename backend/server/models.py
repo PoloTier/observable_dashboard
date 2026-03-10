@@ -333,3 +333,24 @@ class MoleculeDeNacResponse(BaseModel):
     time: list[float]
     vectors: list[list[list[float]]]
     cached: bool
+
+
+class MoleculeHydrogenBondItem(BaseModel):
+    frame: int
+    donor_idx: int
+    h_idx: int
+    acceptor_idx: int
+    distance: float
+    angle: float
+
+
+class MoleculeHydrogenBondResponse(BaseModel):
+    traj_id: str
+    n_frames: int
+    n_atoms: int
+    donor_acceptor_atomic_numbers: list[int]
+    hbond_distance_cutoff: float
+    hbond_angle_cutoff: float
+    dh_bond_length: float
+    hbonds: list[MoleculeHydrogenBondItem]
+    cached: bool

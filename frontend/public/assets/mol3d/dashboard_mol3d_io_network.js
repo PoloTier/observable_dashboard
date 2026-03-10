@@ -15,6 +15,8 @@
   const deInflight = new Map();
   const deNacCache = new Map();
   const deNacInflight = new Map();
+  const hbondCache = new Map();
+  const hbondInflight = new Map();
 
   function buildTrajectoryApiUrl(trajId) {
     const base = typeof apiBase === 'string' && apiBase.trim() ? apiBase.trim() : '/api';
@@ -50,6 +52,12 @@
       state_j: String(stateJ),
     });
     return `${normalizedBase}/molecule3d/de_nac/${encodeURIComponent(transformers.normalizeTrajId(trajId))}?${params.toString()}`;
+  }
+
+  function buildHbondApiUrl(trajId) {
+    const base = typeof apiBase === 'string' && apiBase.trim() ? apiBase.trim() : '/api';
+    const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+    return `${normalizedBase}/molecule3d/hbonds/${encodeURIComponent(transformers.normalizeTrajId(trajId))}`;
   }
 
   async function readErrorDetail(response) {
@@ -139,6 +147,25 @@
 
     const payload = await response.json();
     return transformers.normalizeDeNacPayload(normalizedTrajId, stateI, stateJ, payload);
+  }
+
+  async function fetchHbondFromApi(trajId) {
+    const normalizedTrajId = transformers.normalizeTrajId(trajId);
+    const url = buildHbondApiUrl(normalizedTrajId);
+    const response = await fetch(url, { cache: 'default' });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      const detailText = await readErrorDetail(response);
+      const detail = detailText ? `HTTP ${response.status}: ${detailText}` : `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+
+    const payload = await response.json();
+    return transformers.normalizeHbondPayload(normalizedTrajId, payload);
   }
 
   async function getTrajectoryRecord(trajId) {
@@ -246,6 +273,29 @@
     return pending;
   }
 
+  async function getHbondRecord(trajId) {
+    const key = transformers.normalizeTrajId(trajId);
+    if (hbondCache.has(key)) {
+      return hbondCache.get(key);
+    }
+    if (hbondInflight.has(key)) {
+      return hbondInflight.get(key);
+    }
+
+    const pending = fetchHbondFromApi(key)
+      .then((payload) => {
+        if (payload) {
+          hbondCache.set(key, payload);
+        }
+        return payload;
+      })
+      .finally(() => {
+        hbondInflight.delete(key);
+      });
+    hbondInflight.set(key, pending);
+    return pending;
+  }
+
   function clearCaches() {
     trajectoryCache.clear();
     trajectoryInflight.clear();
@@ -255,6 +305,8 @@
     deInflight.clear();
     deNacCache.clear();
     deNacInflight.clear();
+    hbondCache.clear();
+    hbondInflight.clear();
   }
 
   root.ioNetwork = {
@@ -262,11 +314,13 @@
     buildNacApiUrl,
     buildDeApiUrl,
     buildDeNacApiUrl,
+    buildHbondApiUrl,
     readErrorDetail,
     fetchTrajectoryFromApi,
     fetchNacFromApi,
     fetchDeFromApi,
     fetchDeNacFromApi,
+    fetchHbondFromApi,
     getTrajectoryRecord,
     makeNacPairKey,
     getNacRecord,
@@ -274,6 +328,7 @@
     getDeRecord,
     makeDeNacPairKey,
     getDeNacRecord,
+    getHbondRecord,
     clearCaches,
   };
 })();

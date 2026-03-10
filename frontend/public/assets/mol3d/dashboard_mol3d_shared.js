@@ -91,6 +91,8 @@
     atomSizeLabel: document.getElementById('atom-size-label'),
     bondRadiusSlider: document.getElementById('bond-radius-slider'),
     bondRadiusLabel: document.getElementById('bond-radius-label'),
+    hbondLineWidthSlider: document.getElementById('hbond-line-width-slider'),
+    hbondLineWidthLabel: document.getElementById('hbond-line-width-label'),
     atomStyleRangeInput: document.getElementById('atom-style-range-input'),
     atomStyleModeSelect: document.getElementById('atom-style-mode-select'),
     atomStyleAddBtn: document.getElementById('atom-style-add-btn'),
@@ -138,6 +140,8 @@
     bondColorSettingsCloseBtn: document.getElementById('bond-color-settings-close-btn'),
     bondColorSettingsListEl: document.getElementById('bond-color-settings-list'),
     viewerEl: document.getElementById('viewer'),
+    showHydrogenBondsCheckbox: document.getElementById('show-hydrogen-bonds'),
+    hbondControlsGroup: document.getElementById('hbond-controls-group'),
   };
 
   const measureTypeButtons = {
@@ -154,6 +158,7 @@
     playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
     atomSizeScale: constants.RENDER_SCALE_DEFAULT,
     bondRadiusScale: constants.RENDER_SCALE_DEFAULT,
+    hbondLineScale: 1.8,
     atomRenderRules: [],
     atomRenderRuleNextId: 1,
     isGifExporting: false,
@@ -228,6 +233,9 @@
     },
     measurementPlotReady: false,
     isMeasurementColorSettingsOpen: false,
+    showHydrogenBonds: false,
+    hbondCache: null,
+    atomNumbers: [],
   };
 
   const store = createMol3dStore(state);
@@ -246,6 +254,9 @@
     },
     setBondRadiusScale(scale) {
       return { type: 'SET_BOND_RADIUS_SCALE', payload: { scale } };
+    },
+    setHbondLineScale(scale) {
+      return { type: 'SET_HBOND_LINE_SCALE', payload: { scale } };
     },
     setNacUserScale(scale) {
       return { type: 'SET_NAC_USER_SCALE', payload: { scale } };
@@ -390,6 +401,27 @@
     }
     if (dom.bondRadiusLabel) {
       dom.bondRadiusLabel.textContent = formatBondRadiusScale(bondRadiusScale);
+    }
+  }
+
+  function clampHbondLineScale(raw) {
+    return clampAtomSizeScale(raw);
+  }
+
+  function formatHbondLineScale(scale) {
+    return `${clampHbondLineScale(scale).toFixed(1)}x`;
+  }
+
+  function syncHbondLineScaleUi() {
+    const hbondLineScale = clampHbondLineScale(state.hbondLineScale);
+    if (dom.hbondLineWidthSlider) {
+      dom.hbondLineWidthSlider.min = String(constants.RENDER_SCALE_MIN);
+      dom.hbondLineWidthSlider.max = String(constants.RENDER_SCALE_MAX);
+      dom.hbondLineWidthSlider.step = String(constants.RENDER_SCALE_STEP);
+      dom.hbondLineWidthSlider.value = String(hbondLineScale);
+    }
+    if (dom.hbondLineWidthLabel) {
+      dom.hbondLineWidthLabel.textContent = formatHbondLineScale(hbondLineScale);
     }
   }
 
@@ -948,6 +980,7 @@
   subscribe(syncPlaybackStrideUi, ['playbackStride']);
   subscribe(syncAtomSizeScaleUi, ['atomSizeScale']);
   subscribe(syncBondRadiusScaleUi, ['bondRadiusScale']);
+  subscribe(syncHbondLineScaleUi, ['hbondLineScale']);
   subscribe(syncNacScaleUi, ['nacUserScale']);
   subscribe(syncDeScaleUi, ['deUserScale']);
   subscribe(syncDeNacScaleUi, ['deNacUserScale']);
@@ -957,6 +990,7 @@
   syncPlaybackStrideUi();
   syncAtomSizeScaleUi();
   syncBondRadiusScaleUi();
+  syncHbondLineScaleUi();
   syncNacScaleUi();
   syncDeScaleUi();
   syncDeNacScaleUi();
@@ -998,6 +1032,9 @@
     clampBondRadiusScale,
     formatBondRadiusScale,
     syncBondRadiusScaleUi,
+    clampHbondLineScale,
+    formatHbondLineScale,
+    syncHbondLineScaleUi,
     clampNacScale,
     formatNacScale,
     syncNacScaleUi,

@@ -33,6 +33,13 @@
 
   // --- Overlay primitives -----------------------------------------------------
   function linePoint(point) {
+    if (point && typeof point === 'object' && !Array.isArray(point)) {
+      return {
+        x: Number(point.x),
+        y: Number(point.y),
+        z: Number(point.z),
+      };
+    }
     return {
       x: Number(point[0]),
       y: Number(point[1]),
@@ -40,16 +47,82 @@
     };
   }
 
-  function addOverlayLine(startPoint, endPoint, color) {
+  function interpolatePoint(startPoint, endPoint, t) {
+    const start = linePoint(startPoint);
+    const end = linePoint(endPoint);
+    const alpha = Number(t);
+    return [
+      start.x + (end.x - start.x) * alpha,
+      start.y + (end.y - start.y) * alpha,
+      start.z + (end.z - start.z) * alpha,
+    ];
+  }
+
+  function addOverlayLine(startPoint, endPoint, color, options = {}) {
+    const dashed = options.dashed !== undefined ? !!options.dashed : true;
+    const dashLength = Number.isFinite(Number(options.dashLength)) ? Number(options.dashLength) : 0.18;
+    const gapLength = Number.isFinite(Number(options.gapLength)) ? Number(options.gapLength) : 0.12;
+    const linewidth = Number.isFinite(Number(options.linewidth)) ? Number(options.linewidth) : 2;
     state.viewer.addLine({
       start: linePoint(startPoint),
       end: linePoint(endPoint),
-      dashed: true,
-      dashLength: 0.18,
-      gapLength: 0.12,
+      dashed,
+      dashLength,
+      gapLength,
       color,
-      linewidth: 2,
+      linewidth,
     });
+  }
+
+  function addOverlayCylinder(startPoint, endPoint, color, options = {}) {
+    const radius = Number.isFinite(Number(options.radius)) ? Number(options.radius) : 0.12;
+    const spec = {
+      start: linePoint(startPoint),
+      end: linePoint(endPoint),
+      color,
+      radius,
+    };
+    const opacity = Number(options.opacity);
+    if (Number.isFinite(opacity)) {
+      spec.opacity = opacity;
+    }
+    if (options.fromCap !== undefined) {
+      spec.fromCap = options.fromCap;
+    }
+    if (options.toCap !== undefined) {
+      spec.toCap = options.toCap;
+    }
+    state.viewer.addCylinder(spec);
+  }
+
+  function addOverlayDashedStick(startPoint, endPoint, color, options = {}) {
+    const dashLength = Number.isFinite(Number(options.dashLength)) ? Number(options.dashLength) : 0.18;
+    const gapLength = Number.isFinite(Number(options.gapLength)) ? Number(options.gapLength) : 0.12;
+    const radius = Number.isFinite(Number(options.radius)) ? Number(options.radius) : 0.12;
+    const minSegmentLength = Number.isFinite(Number(options.minSegmentLength))
+      ? Math.max(0, Number(options.minSegmentLength))
+      : 0;
+    const totalLength = geometry.distance3(startPoint, endPoint);
+    if (!Number.isFinite(totalLength) || totalLength <= 1e-8) return;
+
+    const stride = Math.max(1e-6, dashLength + gapLength);
+    for (let offset = 0; offset < totalLength; offset += stride) {
+      const segmentStart = offset / totalLength;
+      const segmentEnd = Math.min(totalLength, offset + dashLength) / totalLength;
+      if (!(segmentEnd > segmentStart)) continue;
+      if ((segmentEnd - segmentStart) * totalLength < minSegmentLength) continue;
+      addOverlayCylinder(
+        interpolatePoint(startPoint, endPoint, segmentStart),
+        interpolatePoint(startPoint, endPoint, segmentEnd),
+        color,
+        {
+          radius,
+          opacity: options.opacity,
+          fromCap: options.fromCap,
+          toCap: options.toCap,
+        }
+      );
+    }
   }
 
   function addOverlayLabel(text, position, color, screenOffset = { x: 0, y: -8 }) {
@@ -146,6 +219,13 @@
       return;
     }
     vectorOverlay.renderRegisteredOverlays(state.currentFrame);
+  }
+
+  function renderHydrogenBondsForFrame() {
+    if (!state.showHydrogenBonds) return;
+    const hbond = root.hbond;
+    if (!hbond || typeof hbond.renderHydrogenBonds !== 'function') return;
+    hbond.renderHydrogenBonds(state.currentFrame);
   }
 
   function getAtomIndexLabelText(atomIndex) {
@@ -317,6 +397,7 @@
     addAtomIndexLabels(model);
     renderMeasurementOverlayForFrame();
     renderVectorOverlayForFrame();
+    renderHydrogenBondsForFrame();
     if (refitView) {
       state.viewer.zoomTo();
       state.viewer.zoom(1.12, 0);
@@ -354,11 +435,15 @@
     enforceViewerBounds,
     resizeViewer,
     linePoint,
+    interpolatePoint,
     addOverlayLine,
+    addOverlayCylinder,
+    addOverlayDashedStick,
     addOverlayLabel,
     formatOverlayValue,
     renderMeasurementOverlayForFrame,
     renderVectorOverlayForFrame,
+    renderHydrogenBondsForFrame,
     getAtomIndexLabelText,
     addAtomIndexLabels,
     bindAtomClickHandler,

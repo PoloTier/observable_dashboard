@@ -56,6 +56,155 @@ class RawFrameMeta:
     valid_indices: list[int]
 
 
+HBOND_DONOR_ACCEPTOR_ATOMIC_NUMBERS = (7, 8, 9)
+HBOND_NEIGHBOR_SKIN = 1.0
+
+
+def _build_hbond_candidate_table(distance_matrix: np.ndarray, cutoff: float) -> tuple[np.ndarray, np.ndarray]:
+    matrix = np.asarray(distance_matrix, dtype=float)
+    if matrix.ndim != 2:
+        raise ValueError(f"Hydrogen-bond distance matrix must be rank-2, got shape={matrix.shape}.")
+
+    candidate_mask = np.isfinite(matrix) & (matrix < float(cutoff))
+    counts = np.sum(candidate_mask, axis=1, dtype=int)
+    n_rows = int(matrix.shape[0])
+    max_candidates = int(counts.max()) if counts.size else 0
+    if n_rows <= 0 or max_candidates <= 0:
+        return np.empty((n_rows, 0), dtype=int), np.zeros((n_rows, 0), dtype=bool)
+
+    padded = np.full((n_rows, max_candidates), -1, dtype=int)
+    valid = np.zeros((n_rows, max_candidates), dtype=bool)
+    for row_idx in range(n_rows):
+        row_candidates = np.flatnonzero(candidate_mask[row_idx])
+        if row_candidates.size <= 0:
+            continue
+        count = int(row_candidates.size)
+        padded[row_idx, :count] = row_candidates
+        valid[row_idx, :count] = True
+    return padded, valid
+
+
+def _expand_hbond_neighbor_segment(
+    coords: np.ndarray,
+    relevant_atom_indices: np.ndarray,
+    start_frame: int,
+    displacement_limit: float,
+) -> int:
+    frame_count = int(coords.shape[0])
+    if start_frame < 0 or start_frame >= frame_count:
+        return frame_count
+    if relevant_atom_indices.size <= 0:
+        return min(frame_count, start_frame + 1)
+
+    ref_coords = np.asarray(coords[start_frame, relevant_atom_indices, :], dtype=float)
+    limit = float(displacement_limit)
+    if not np.isfinite(limit) or limit <= 0:
+        return min(frame_count, start_frame + 1)
+
+    end_frame = start_frame + 1
+    while end_frame < frame_count:
+        deltas = np.asarray(coords[end_frame, relevant_atom_indices, :], dtype=float) - ref_coords
+        displacements = np.linalg.norm(deltas, axis=1)
+        if not np.all(np.isfinite(displacements)):
+            break
+        if float(np.max(displacements)) > limit:
+            break
+        end_frame += 1
+    return end_frame
+
+
+def _collect_frame_hbonds(
+    *,
+    frame_idx: int,
+    frame_coords: np.ndarray,
+    hydrogen_indices: np.ndarray,
+    donor_acceptor_indices: np.ndarray,
+    donor_candidate_positions: np.ndarray,
+    donor_candidate_valid: np.ndarray,
+    acceptor_candidate_positions: np.ndarray,
+    acceptor_candidate_valid: np.ndarray,
+    dh_bond_length: float,
+    hbond_distance_cutoff: float,
+    hbond_angle_cutoff: float,
+) -> list[dict[str, Any]]:
+    h_count = int(hydrogen_indices.size)
+    da_count = int(donor_acceptor_indices.size)
+    if h_count <= 0 or da_count <= 0:
+        return []
+    if donor_candidate_positions.shape[1] <= 0 or acceptor_candidate_positions.shape[1] <= 0:
+        return []
+
+    frame = np.asarray(frame_coords, dtype=float)
+    hydrogen_coords = np.asarray(frame[hydrogen_indices], dtype=float)
+    donor_acceptor_coords = np.asarray(frame[donor_acceptor_indices], dtype=float)
+
+    donor_safe_positions = np.where(donor_candidate_valid, donor_candidate_positions, 0)
+    donor_candidate_coords = donor_acceptor_coords[donor_safe_positions]
+    donor_vectors = donor_candidate_coords - hydrogen_coords[:, None, :]
+    donor_distances = np.linalg.norm(donor_vectors, axis=2)
+    donor_within_cutoff = donor_candidate_valid & np.isfinite(donor_distances) & (donor_distances < float(dh_bond_length))
+    donor_has_match = np.any(donor_within_cutoff, axis=1)
+    if not np.any(donor_has_match):
+        return []
+
+    donor_first_slots = np.argmax(donor_within_cutoff, axis=1)
+    row_indices = np.arange(h_count, dtype=int)
+    donor_choice_positions = np.full(h_count, -1, dtype=int)
+    donor_choice_positions[donor_has_match] = donor_safe_positions[row_indices[donor_has_match], donor_first_slots[donor_has_match]]
+
+    donor_direction = np.zeros((h_count, 3), dtype=float)
+    donor_direction[donor_has_match] = donor_vectors[row_indices[donor_has_match], donor_first_slots[donor_has_match]]
+    donor_norms = np.linalg.norm(donor_direction, axis=1)
+    donor_ready = donor_has_match & np.isfinite(donor_norms) & (donor_norms > 1e-12)
+    if not np.any(donor_ready):
+        return []
+
+    acceptor_safe_positions = np.where(acceptor_candidate_valid, acceptor_candidate_positions, 0)
+    acceptor_candidate_coords = donor_acceptor_coords[acceptor_safe_positions]
+    acceptor_vectors = acceptor_candidate_coords - hydrogen_coords[:, None, :]
+    acceptor_distances = np.linalg.norm(acceptor_vectors, axis=2)
+    acceptor_norms = acceptor_distances
+
+    dot_products = np.einsum("hkc,hc->hk", acceptor_vectors, donor_direction)
+    denom = acceptor_norms * donor_norms[:, None]
+    cos_theta = np.zeros_like(acceptor_distances, dtype=float)
+    np.divide(dot_products, denom, out=cos_theta, where=denom > 1e-12)
+    np.clip(cos_theta, -1.0, 1.0, out=cos_theta)
+    angles = np.degrees(np.arccos(cos_theta))
+
+    hit_mask = (
+        donor_ready[:, None]
+        & acceptor_candidate_valid
+        & np.isfinite(acceptor_distances)
+        & (acceptor_distances < float(hbond_distance_cutoff))
+        & np.isfinite(angles)
+        & (angles >= float(hbond_angle_cutoff))
+        & (acceptor_safe_positions != donor_choice_positions[:, None])
+    )
+    if not np.any(hit_mask):
+        return []
+
+    hit_rows, hit_slots = np.nonzero(hit_mask)
+    donor_abs_indices = donor_acceptor_indices[donor_choice_positions[hit_rows]]
+    acceptor_abs_indices = donor_acceptor_indices[acceptor_safe_positions[hit_rows, hit_slots]]
+
+    hbonds: list[dict[str, Any]] = []
+    for hit_idx in range(int(hit_rows.size)):
+        row = int(hit_rows[hit_idx])
+        slot = int(hit_slots[hit_idx])
+        hbonds.append(
+            {
+                "frame": int(frame_idx),
+                "donor_idx": int(donor_abs_indices[hit_idx]),
+                "h_idx": int(hydrogen_indices[row]),
+                "acceptor_idx": int(acceptor_abs_indices[hit_idx]),
+                "distance": float(acceptor_distances[row, slot]),
+                "angle": float(angles[row, slot]),
+            }
+        )
+    return hbonds
+
+
 class DatasetStore:
     def __init__(
         self,
@@ -84,6 +233,131 @@ class DatasetStore:
 
     def get_trajectory(self, traj_id: str) -> TrajectoryRecord | None:
         return self.trajectories.get(str(traj_id))
+
+    def build_mol3d_hbond_payload(
+        self,
+        traj_id: str,
+        *,
+        hbond_distance_cutoff: float = 3.5,
+        hbond_angle_cutoff: float = 120.0,
+        dh_bond_length: float = 1.3,
+    ) -> dict[str, Any] | None:
+        traj = self.get_trajectory(traj_id)
+        if traj is None:
+            return None
+
+        if not np.isfinite(hbond_distance_cutoff) or float(hbond_distance_cutoff) <= 0:
+            raise ValueError("hbond_distance_cutoff must be a positive finite value.")
+        if not np.isfinite(hbond_angle_cutoff) or float(hbond_angle_cutoff) <= 0:
+            raise ValueError("hbond_angle_cutoff must be a positive finite value.")
+        if not np.isfinite(dh_bond_length) or float(dh_bond_length) <= 0:
+            raise ValueError("dh_bond_length must be a positive finite value.")
+
+        coords = np.asarray(traj.coords, dtype=float)
+        if coords.ndim != 3 or coords.shape[-1] < 3:
+            raise ValueError(
+                (
+                    "Coordinates are invalid for hydrogen-bond detection: "
+                    f"expected shape [frame, atom, 3], got shape={coords.shape}."
+                )
+            )
+
+        atom_numbers = np.asarray(traj.atom_numbers, dtype=int).reshape(-1)
+        if atom_numbers.size <= 0:
+            return {
+                "traj_id": str(traj.traj_id),
+                "n_frames": int(coords.shape[0]),
+                "n_atoms": int(coords.shape[1]),
+                "donor_acceptor_atomic_numbers": [7, 8, 9],
+                "hbond_distance_cutoff": float(hbond_distance_cutoff),
+                "hbond_angle_cutoff": float(hbond_angle_cutoff),
+                "dh_bond_length": float(dh_bond_length),
+                "hbonds": [],
+            }
+
+        n_frames = int(coords.shape[0])
+        n_atoms = int(min(coords.shape[1], atom_numbers.size))
+        if n_atoms <= 0 or n_frames <= 0:
+            return {
+                "traj_id": str(traj.traj_id),
+                "n_frames": max(0, n_frames),
+                "n_atoms": max(0, n_atoms),
+                "donor_acceptor_atomic_numbers": [7, 8, 9],
+                "hbond_distance_cutoff": float(hbond_distance_cutoff),
+                "hbond_angle_cutoff": float(hbond_angle_cutoff),
+                "dh_bond_length": float(dh_bond_length),
+                "hbonds": [],
+            }
+
+        coords = np.asarray(coords[:, :n_atoms, :3], dtype=float)
+        atom_numbers = np.asarray(atom_numbers[:n_atoms], dtype=int)
+
+        hydrogen_indices = np.flatnonzero(atom_numbers == 1).astype(int)
+        donor_acceptor_indices = np.flatnonzero(
+            np.isin(atom_numbers, np.asarray(HBOND_DONOR_ACCEPTOR_ATOMIC_NUMBERS, dtype=int))
+        ).astype(int)
+
+        hbonds: list[dict[str, Any]] = []
+        if hydrogen_indices.size > 0 and donor_acceptor_indices.size > 0:
+            relevant_atom_indices = np.unique(np.concatenate([hydrogen_indices, donor_acceptor_indices])).astype(int)
+            displacement_limit = float(HBOND_NEIGHBOR_SKIN) * 0.5
+            donor_candidate_cutoff = float(dh_bond_length) + float(HBOND_NEIGHBOR_SKIN)
+            acceptor_candidate_cutoff = float(hbond_distance_cutoff) + float(HBOND_NEIGHBOR_SKIN)
+
+            frame_idx = 0
+            while frame_idx < n_frames:
+                segment_end = _expand_hbond_neighbor_segment(
+                    coords=coords,
+                    relevant_atom_indices=relevant_atom_indices,
+                    start_frame=frame_idx,
+                    displacement_limit=displacement_limit,
+                )
+                if segment_end <= frame_idx:
+                    segment_end = frame_idx + 1
+
+                ref_frame_coords = np.asarray(coords[frame_idx], dtype=float)
+                ref_hydrogen_coords = np.asarray(ref_frame_coords[hydrogen_indices], dtype=float)
+                ref_donor_acceptor_coords = np.asarray(ref_frame_coords[donor_acceptor_indices], dtype=float)
+                ref_deltas = ref_donor_acceptor_coords[None, :, :] - ref_hydrogen_coords[:, None, :]
+                ref_distances = np.linalg.norm(ref_deltas, axis=2)
+
+                donor_candidate_positions, donor_candidate_valid = _build_hbond_candidate_table(
+                    ref_distances,
+                    donor_candidate_cutoff,
+                )
+                acceptor_candidate_positions, acceptor_candidate_valid = _build_hbond_candidate_table(
+                    ref_distances,
+                    acceptor_candidate_cutoff,
+                )
+
+                for current_frame_idx in range(frame_idx, segment_end):
+                    hbonds.extend(
+                        _collect_frame_hbonds(
+                            frame_idx=current_frame_idx,
+                            frame_coords=coords[current_frame_idx],
+                            hydrogen_indices=hydrogen_indices,
+                            donor_acceptor_indices=donor_acceptor_indices,
+                            donor_candidate_positions=donor_candidate_positions,
+                            donor_candidate_valid=donor_candidate_valid,
+                            acceptor_candidate_positions=acceptor_candidate_positions,
+                            acceptor_candidate_valid=acceptor_candidate_valid,
+                            dh_bond_length=float(dh_bond_length),
+                            hbond_distance_cutoff=float(hbond_distance_cutoff),
+                            hbond_angle_cutoff=float(hbond_angle_cutoff),
+                        )
+                    )
+                frame_idx = segment_end
+
+        return {
+            "traj_id": str(traj.traj_id),
+            "n_frames": int(n_frames),
+            "n_atoms": int(n_atoms),
+            "donor_acceptor_atomic_numbers": list(HBOND_DONOR_ACCEPTOR_ATOMIC_NUMBERS),
+            "hbond_distance_cutoff": float(hbond_distance_cutoff),
+            "hbond_angle_cutoff": float(hbond_angle_cutoff),
+            "dh_bond_length": float(dh_bond_length),
+            "hbonds": hbonds,
+        }
 
     def _build_mol3d_de_tensor(self, traj_id: str) -> np.ndarray:
         tid = str(traj_id)

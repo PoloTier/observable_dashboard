@@ -556,6 +556,7 @@
   }
 
   function clearLoadedTrajectoryView() {
+    const hbond = root.hbond;
     cancelGifExport(false);
     state.xyzFrames = [];
     state.currentTrajId = null;
@@ -578,6 +579,9 @@
     if (viewer && typeof viewer.clearScene === 'function') {
       viewer.clearScene();
     }
+    if (hbond && typeof hbond.resetHydrogenBondState === 'function') {
+      hbond.resetHydrogenBondState();
+    }
     if (state.viewer) state.viewer.render();
   }
 
@@ -588,8 +592,12 @@
 
     const selectedTrajId = transformers.normalizeTrajId(trajId);
     const requestSeq = ++loadRequestSeq;
+    const hbond = root.hbond;
     cancelGifExport(false);
     viewer.stopPlayback();
+    if (hbond && typeof hbond.resetHydrogenBondState === 'function') {
+      hbond.resetHydrogenBondState();
+    }
     shared.setDownloadButtonsEnabled(false);
     shared.setGifExportProgress(0, 0);
     shared.setStatus(`Loading trajectory ${selectedTrajId} from API...`);
@@ -617,6 +625,14 @@
 
     state.currentCoords = Array.isArray(rec.coords) ? rec.coords : [];
     state.currentTimes = Array.isArray(rec.time) ? rec.time : [];
+    state.atomNumbers = Array.isArray(rec.atom_numbers) ? rec.atom_numbers : [];
+    state.hbondCache = null;
+
+    console.log('Loaded trajectory:', {
+      nFrames: state.currentCoords.length,
+      nAtoms: state.atomNumbers.length,
+      atomNumbers: state.atomNumbers
+    });
 
     state.xyzFrames = transformers.buildXyzFrames(rec);
     state.currentTrajId = selectedTrajId;

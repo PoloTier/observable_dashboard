@@ -63,6 +63,18 @@
       viewer.renderFrame(state.currentFrame);
     });
 
+    bind(dom.showHydrogenBondsCheckbox, 'change', async () => {
+      const enabled = !!dom.showHydrogenBondsCheckbox?.checked;
+      const hbond = root.hbond;
+      if (hbond && typeof hbond.setHydrogenBondsVisible === 'function') {
+        await hbond.setHydrogenBondsVisible(enabled);
+        return;
+      }
+      state.showHydrogenBonds = enabled;
+      if (!state.currentTrajId || !state.xyzFrames.length) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+
     bind(dom.atomSizeSlider, 'input', () => {
       shared.dispatch(shared.actions.setAtomSizeScale(dom.atomSizeSlider?.value));
       if (!state.currentTrajId || !state.xyzFrames.length) return;
@@ -72,6 +84,12 @@
     bind(dom.bondRadiusSlider, 'input', () => {
       shared.dispatch(shared.actions.setBondRadiusScale(dom.bondRadiusSlider?.value));
       if (!state.currentTrajId || !state.xyzFrames.length) return;
+      viewer.renderFrame(state.currentFrame);
+    });
+
+    bind(dom.hbondLineWidthSlider, 'input', () => {
+      shared.dispatch(shared.actions.setHbondLineScale(dom.hbondLineWidthSlider?.value));
+      if (!state.currentTrajId || !state.xyzFrames.length || !state.showHydrogenBonds) return;
       viewer.renderFrame(state.currentFrame);
     });
   }

@@ -127,6 +127,62 @@
     };
   }
 
+  function normalizeHbondPayload(trajId, payload) {
+    const normalizedTrajId = normalizeTrajId(payload?.traj_id ?? trajId);
+    const parseFiniteOrFallback = (rawValue, fallback) => {
+      const numeric = Number(rawValue);
+      return Number.isFinite(numeric) ? numeric : fallback;
+    };
+    const nFrames = Math.max(0, Number.parseInt(String(payload?.n_frames), 10) || 0);
+    const nAtoms = Math.max(0, Number.parseInt(String(payload?.n_atoms), 10) || 0);
+    const donorAcceptorRaw = Array.isArray(payload?.donor_acceptor_atomic_numbers)
+      ? payload.donor_acceptor_atomic_numbers
+      : [];
+    const donorAcceptorAtomicNumbers = donorAcceptorRaw
+      .map((value) => Number.parseInt(String(value), 10))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    const hbondsRaw = Array.isArray(payload?.hbonds) ? payload.hbonds : [];
+    const hbonds = [];
+    for (const item of hbondsRaw) {
+      const frame = Number.parseInt(String(item?.frame), 10);
+      const donorIdx = Number.parseInt(String(item?.donor_idx), 10);
+      const hIdx = Number.parseInt(String(item?.h_idx), 10);
+      const acceptorIdx = Number.parseInt(String(item?.acceptor_idx), 10);
+      const distance = Number(item?.distance);
+      const angle = Number(item?.angle);
+
+      if (!Number.isFinite(frame) || frame < 0) continue;
+      if (nFrames > 0 && frame >= nFrames) continue;
+      if (!Number.isFinite(donorIdx) || donorIdx < 0) continue;
+      if (!Number.isFinite(hIdx) || hIdx < 0) continue;
+      if (!Number.isFinite(acceptorIdx) || acceptorIdx < 0) continue;
+      if (nAtoms > 0 && (donorIdx >= nAtoms || hIdx >= nAtoms || acceptorIdx >= nAtoms)) continue;
+      if (!Number.isFinite(distance)) continue;
+      if (!Number.isFinite(angle)) continue;
+
+      hbonds.push({
+        frame,
+        donor_idx: donorIdx,
+        h_idx: hIdx,
+        acceptor_idx: acceptorIdx,
+        distance,
+        angle,
+      });
+    }
+
+    return {
+      traj_id: normalizedTrajId,
+      n_frames: nFrames,
+      n_atoms: nAtoms,
+      donor_acceptor_atomic_numbers: donorAcceptorAtomicNumbers.length ? donorAcceptorAtomicNumbers : [7, 8, 9],
+      hbond_distance_cutoff: parseFiniteOrFallback(payload?.hbond_distance_cutoff, 3.5),
+      hbond_angle_cutoff: parseFiniteOrFallback(payload?.hbond_angle_cutoff, 120),
+      dh_bond_length: parseFiniteOrFallback(payload?.dh_bond_length, 1.3),
+      hbonds,
+    };
+  }
+
   function clampStateIndex(rawValue, fallback, nStates) {
     const parsed = Number.parseInt(String(rawValue), 10);
     if (!Number.isFinite(parsed)) return fallback;
@@ -268,6 +324,7 @@
     normalizeNacPayload,
     normalizeDePayload,
     normalizeDeNacPayload,
+    normalizeHbondPayload,
     clampStateIndex,
     normalizeStatePair,
     normalizeDistinctStatePair,

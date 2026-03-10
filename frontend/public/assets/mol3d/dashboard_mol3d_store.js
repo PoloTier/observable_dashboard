@@ -193,6 +193,8 @@
         setIfChanged(changedKeys, 'atomSizeScale', clampRenderScale(payload.scale));
       } else if (type === 'SET_BOND_RADIUS_SCALE') {
         setIfChanged(changedKeys, 'bondRadiusScale', clampRenderScale(payload.scale));
+      } else if (type === 'SET_HBOND_LINE_SCALE') {
+        setIfChanged(changedKeys, 'hbondLineScale', clampRenderScale(payload.scale));
       } else if (type === 'SET_GIF_EXPORTING') {
         setIfChanged(changedKeys, 'isGifExporting', !!payload.exporting);
       } else if (type === 'SET_GIF_EXPORT_RANGE') {

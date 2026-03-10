@@ -35,6 +35,7 @@ from backend.server.models import (
     MoleculeDeNacResponse,
     MoleculeDeResponse,
     HealthzResponse,
+    MoleculeHydrogenBondResponse,
     MoleculeNacResponse,
     MoleculeTrajectoryResponse,
     RawKeyAliasListResponse,
@@ -1013,6 +1014,31 @@ def create_app(
         out = dict(payload)
         out["cached"] = False
         return MoleculeDeNacResponse(**out)
+
+    @app.get(f"{api_base}/molecule3d/hbonds/{{traj_id}}", response_model=MoleculeHydrogenBondResponse)
+    def get_molecule3d_hbonds(traj_id: str) -> MoleculeHydrogenBondResponse:
+        tid = str(traj_id)
+        cache_key = ("mol3d_hbonds", tid)
+        cached_value = mol3d_cache.get(cache_key)
+        if cached_value is not None:
+            payload = dict(cached_value)
+            payload["cached"] = True
+            return MoleculeHydrogenBondResponse(**payload)
+
+        current_store, _, _ = _get_runtime_snapshot()
+        try:
+            payload = current_store.build_mol3d_hbond_payload(tid)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to prepare molecule3d hbond payload: {exc}") from exc
+        if payload is None:
+            raise HTTPException(status_code=404, detail=f"Trajectory not found: {tid}")
+
+        mol3d_cache.put(cache_key, payload)
+        out = dict(payload)
+        out["cached"] = False
+        return MoleculeHydrogenBondResponse(**out)
 
     @app.post(f"{api_base}/series", response_model=SeriesResponse)
     def get_series(req: SeriesRequest) -> SeriesResponse:
