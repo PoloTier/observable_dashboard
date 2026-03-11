@@ -72,12 +72,18 @@
 
   const dom = {
     controlsPrimary: document.getElementById('controls-primary'),
+    controlsTabs: document.getElementById('controls-tabs'),
     controlsGroups: document.getElementById('controls-groups'),
     measureControlsGroup: document.getElementById('measure-controls-group'),
     playbackControlsGroup: document.getElementById('playback-controls-group'),
     renderControlsGroup: document.getElementById('render-controls-group'),
     nacControlsGroup: document.getElementById('nac-controls-group'),
     gifRangeControlsGroup: document.getElementById('gif-range-controls-group'),
+    controlsTabMeasureBtn: document.getElementById('controls-tab-measure'),
+    controlsTabPlaybackBtn: document.getElementById('controls-tab-playback'),
+    controlsTabRenderBtn: document.getElementById('controls-tab-render'),
+    controlsTabVectorsBtn: document.getElementById('controls-tab-vectors'),
+    controlsTabExportBtn: document.getElementById('controls-tab-export'),
     trajSelect: document.getElementById('traj-select'),
     playBtn: document.getElementById('play-btn'),
     playbackRateSlider: document.getElementById('playback-rate-slider'),
@@ -141,7 +147,6 @@
     bondColorSettingsListEl: document.getElementById('bond-color-settings-list'),
     viewerEl: document.getElementById('viewer'),
     showHydrogenBondsCheckbox: document.getElementById('show-hydrogen-bonds'),
-    hbondControlsGroup: document.getElementById('hbond-controls-group'),
   };
 
   const measureTypeButtons = {
@@ -149,6 +154,7 @@
     angle: dom.measureTypeAngleBtn,
     dihedral: dom.measureTypeDihedralBtn,
   };
+  const CONTROLS_GROUP_KEYS = Object.freeze(['measure', 'playback', 'render', 'nac', 'gifRange']);
 
   const state = {
     viewer: null,
@@ -236,6 +242,7 @@
     showHydrogenBonds: false,
     hbondCache: null,
     atomNumbers: [],
+    activeControlsGroupKey: 'measure',
   };
 
   const store = createMol3dStore(state);
@@ -600,21 +607,66 @@
     return null;
   }
 
-  function setControlsGroupOpen(groupKey, open) {
-    const groupEl = getControlsGroupElement(groupKey);
-    if (!groupEl) return false;
-    if (open) {
-      groupEl.setAttribute('open', '');
-    } else {
-      groupEl.removeAttribute('open');
+  function getControlsGroupTabElement(groupKey) {
+    if (groupKey === 'measure') return dom.controlsTabMeasureBtn;
+    if (groupKey === 'playback') return dom.controlsTabPlaybackBtn;
+    if (groupKey === 'render') return dom.controlsTabRenderBtn;
+    if (groupKey === 'nac') return dom.controlsTabVectorsBtn;
+    if (groupKey === 'gifRange') return dom.controlsTabExportBtn;
+    return null;
+  }
+
+  function normalizeControlsGroupKey(groupKey) {
+    const text = String(groupKey || '').trim();
+    return CONTROLS_GROUP_KEYS.includes(text) ? text : '';
+  }
+
+  function syncControlsGroupUi() {
+    const activeGroupKey = normalizeControlsGroupKey(state.activeControlsGroupKey);
+    for (const groupKey of CONTROLS_GROUP_KEYS) {
+      const panelEl = getControlsGroupElement(groupKey);
+      const buttonEl = getControlsGroupTabElement(groupKey);
+      const isActive = groupKey === activeGroupKey;
+
+      if (panelEl) {
+        panelEl.hidden = !isActive;
+        panelEl.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+      }
+      if (buttonEl) {
+        buttonEl.classList.toggle('is-active', isActive);
+        buttonEl.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+        buttonEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      }
     }
+  }
+
+  function setControlsGroupOpen(groupKey, open) {
+    const normalizedGroupKey = normalizeControlsGroupKey(groupKey);
+    if (!normalizedGroupKey) return false;
+    if (open) {
+      state.activeControlsGroupKey = normalizedGroupKey;
+    } else if (state.activeControlsGroupKey === normalizedGroupKey) {
+      state.activeControlsGroupKey = '';
+    }
+    syncControlsGroupUi();
     return true;
   }
 
   function getControlsGroupOpen(groupKey) {
-    const groupEl = getControlsGroupElement(groupKey);
-    if (!groupEl) return false;
-    return groupEl.hasAttribute('open');
+    return state.activeControlsGroupKey === normalizeControlsGroupKey(groupKey);
+  }
+
+  function bindControlsGroupToggles() {
+    for (const groupKey of CONTROLS_GROUP_KEYS) {
+      const buttonEl = getControlsGroupTabElement(groupKey);
+      if (!(buttonEl instanceof HTMLElement)) continue;
+      if (buttonEl.dataset.controlsGroupBound === '1') continue;
+      buttonEl.addEventListener('click', () => {
+        const isOpen = getControlsGroupOpen(groupKey);
+        setControlsGroupOpen(groupKey, !isOpen);
+      });
+      buttonEl.dataset.controlsGroupBound = '1';
+    }
   }
 
   function normalizeMeasureType(type) {
@@ -1001,6 +1053,8 @@
   setDeNacRangeLabel('|dE*NAC|: n/a');
   setNacControlsEnabled(false);
   renderAtomRenderRulesUi();
+  bindControlsGroupToggles();
+  syncControlsGroupUi();
 
   root.shared = {
     bootstrap,

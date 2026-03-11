@@ -19,7 +19,6 @@
   const CSS_BASE_DPI = 96;
   const PLOT_EXPORT_SCALE = PLOT_EXPORT_DPI / CSS_BASE_DPI;
   const HOVER_SYNC_CLEAR_DELAY_MS = 80;
-  const HOVER_SYNC_LINE_STYLE = { color: 'rgba(80,80,80,0.35)', width: 1 };
 
   let hoverSyncTime = null;
   let hoverSyncClearTimer = null;
@@ -27,12 +26,80 @@
   let hoverSyncPendingTime = null;
   let renderQueue = Promise.resolve();
 
+  function getAppearanceModule() {
+    return window.ObservableAppearance || null;
+  }
+
+  function getPlotThemeColors() {
+    const appearance = getAppearanceModule();
+    if (appearance && typeof appearance.getPlotColors === 'function') {
+      return appearance.getPlotColors();
+    }
+    return {
+      hoverSyncLineColor: 'rgba(80,80,80,0.35)',
+      traceMutedColor: 'rgba(120,120,120,0.35)',
+      neutralFillColor: 'rgba(0,0,0,0.08)',
+      accentFillColor: 'rgba(31,119,180,0.18)',
+      dangerFillColor: 'rgba(214,39,40,0.18)',
+    };
+  }
+
+  function mergePlotlyLayout(baseLayout) {
+    const appearance = getAppearanceModule();
+    if (!appearance || typeof appearance.getPlotlyLayoutPatch !== 'function') {
+      return baseLayout;
+    }
+
+    const patch = appearance.getPlotlyLayoutPatch();
+    return {
+      ...patch,
+      ...baseLayout,
+      font: {
+        ...(patch.font || {}),
+        ...(baseLayout.font || {}),
+      },
+      title: {
+        ...(patch.title || {}),
+        ...(baseLayout.title || {}),
+        font: {
+          ...((patch.title && patch.title.font) || {}),
+          ...((baseLayout.title && baseLayout.title.font) || {}),
+        },
+      },
+      xaxis: {
+        ...(patch.xaxis || {}),
+        ...(baseLayout.xaxis || {}),
+      },
+      yaxis: {
+        ...(patch.yaxis || {}),
+        ...(baseLayout.yaxis || {}),
+      },
+      legend: {
+        ...(patch.legend || {}),
+        ...(baseLayout.legend || {}),
+        font: {
+          ...((patch.legend && patch.legend.font) || {}),
+          ...((baseLayout.legend && baseLayout.legend.font) || {}),
+        },
+      },
+      hoverlabel: {
+        ...(patch.hoverlabel || {}),
+        ...(baseLayout.hoverlabel || {}),
+        font: {
+          ...((patch.hoverlabel && patch.hoverlabel.font) || {}),
+          ...((baseLayout.hoverlabel && baseLayout.hoverlabel.font) || {}),
+        },
+      },
+    };
+  }
+
   function enqueueRender(task) {
     renderQueue = renderQueue.then(task, task);
     return renderQueue;
   }
 
   function buildHoverSyncShape(t) {
+    const plotThemeColors = getPlotThemeColors();
     return {
       type: 'line',
       x0: t,
@@ -40,7 +107,7 @@
       yref: 'paper',
       y0: 0,
       y1: 1,
-      line: HOVER_SYNC_LINE_STYLE,
+      line: { color: plotThemeColors.hoverSyncLineColor, width: 1 },
     };
   }
 
@@ -707,8 +774,9 @@
     lineColor,
     ensembleRecord,
     statMode,
-    { lineShape = null, fillColor = 'rgba(31,119,180,0.18)', centerHoverLabel = 'y' } = {}
+    { lineShape = null, fillColor = null, centerHoverLabel = 'y' } = {}
   ) {
+    const plotThemeColors = getPlotThemeColors();
     const drawTraces = state.showAllTraces || !state.showEnsemble;
     const shapePart = lineShape ? { shape: lineShape } : {};
     if (drawTraces) {
@@ -719,7 +787,7 @@
           y: series.value,
           type: 'scatter',
           mode: 'lines',
-          line: { color: 'rgba(120,120,120,0.35)', width: 1, ...shapePart },
+          line: { color: plotThemeColors.traceMutedColor, width: 1, ...shapePart },
           name: `${namePrefix} traj ${series.traj_id}`,
           showlegend: false,
           hovertemplate: `${trajLabel}<br>t=%{x:.4f}<br>y=%{y:.6f}<extra></extra>`
@@ -735,7 +803,7 @@
         namePrefix,
         statMode,
         lineColor,
-        fillColor,
+        fillColor: fillColor || plotThemeColors.accentFillColor,
         lineShape,
         centerHoverLabel,
       });
@@ -792,11 +860,12 @@
       }
 
       if (state.showEnsemble) {
+        const plotThemeColors = getPlotThemeColors();
         addEnsembleBandAndCenter(figData, ensembleComp, {
           namePrefix: `eig state ${s}`,
           statMode,
           lineColor: color,
-          fillColor: 'rgba(0,0,0,0.08)',
+          fillColor: plotThemeColors.neutralFillColor,
         });
       }
     }
@@ -852,11 +921,12 @@
       }
 
       if (state.showEnsemble) {
+        const plotThemeColors = getPlotThemeColors();
         addEnsembleBandAndCenter(figData, ensembleComp, {
           namePrefix: `|c|^2 component ${component}`,
           statMode,
           lineColor: color,
-          fillColor: 'rgba(0,0,0,0.08)',
+          fillColor: plotThemeColors.neutralFillColor,
           centerHoverLabel: '|c|^2',
         });
       }
@@ -921,11 +991,12 @@
       }
 
       if (state.showEnsemble) {
+        const plotThemeColors = getPlotThemeColors();
         addEnsembleBandAndCenter(figData, ensembleComp, {
           namePrefix: `${rawKey} ${label}`,
           statMode,
           lineColor: color,
-          fillColor: 'rgba(0,0,0,0.08)',
+          fillColor: plotThemeColors.neutralFillColor,
         });
       }
     }
@@ -1626,7 +1697,7 @@
           }
           addAllModeScalar(figData, stateSeries, 'state', '#d62728', ensembleRecord, panelStatMode, {
             lineShape: 'hv',
-            fillColor: 'rgba(214,39,40,0.18)',
+            fillColor: getPlotThemeColors().dangerFillColor,
             centerHoverLabel: 'state'
           });
         } else {
@@ -1848,23 +1919,24 @@
       return;
     }
 
-    const layout = {
+    const baseLayout = {
       title: { text: title, font: { size: 15 } },
       xaxis: { title: 'Time (fs)' },
       yaxis: { title: yLabel },
-      template: 'plotly_white',
       margin: { l: 58, r: 18, t: 48, b: 48 },
       legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'left', x: 0 }
     };
 
     if (observable === 'state') {
-      layout.yaxis = {
-        ...layout.yaxis,
+      baseLayout.yaxis = {
+        ...baseLayout.yaxis,
         tickmode: 'linear',
         tick0: 0,
         dtick: 1,
       };
     }
+
+    const layout = mergePlotlyLayout(baseLayout);
 
     Plotly.react(plotId, figData, layout, {
       responsive: true,
@@ -1899,10 +1971,11 @@
     return enqueueRender(() => renderPanelCore(panelIndex));
   }
 
-  function renderAllPanels() {
+  function renderAllPanels(options = {}) {
+    const suppressStatus = !!options?.suppressStatus;
     return enqueueRender(async () => {
       await renderAllPanelsCore();
-      if (state.selectedTraj === 'all') {
+      if (!suppressStatus && state.selectedTraj === 'all') {
         setGlobalStatus('All auto compute complete.');
       }
     });

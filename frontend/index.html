@@ -4,6 +4,20 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Trajectory Observable Dashboard</title>
+  <script>
+    (function () {
+      const storageKey = 'observable_dashboard_theme_v1';
+      let mode = 'light';
+      try {
+        const savedMode = localStorage.getItem(storageKey);
+        if (savedMode === 'light' || savedMode === 'dark') mode = savedMode;
+      } catch {
+        // ignore storage failures
+      }
+      document.documentElement.setAttribute('data-theme', mode);
+      document.documentElement.style.colorScheme = mode;
+    })();
+  </script>
   <script src="/assets/vendor/plotly-2.35.2.min.js"></script>
   <link rel="stylesheet" href="/assets/dashboard/dashboard.css" />
 </head>
@@ -28,6 +42,52 @@
         </div>
         <div class="control-group">
           <button class="btn" id="refresh-pkl-btn" type="button">Refresh PKL</button>
+        </div>
+        <div class="appearance-control" data-appearance-control>
+          <button
+            class="appearance-trigger"
+            id="dashboard-appearance-toggle"
+            type="button"
+            aria-label="Open appearance settings"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="dashboard-appearance-panel"
+            data-appearance-trigger
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5c0-.73-.59-1.32-1.32-1.32h-1.26a2.22 2.22 0 0 1 0-4.43h1.26c.73 0 1.32-.59 1.32-1.32A8.5 8.5 0 0 0 12 3.5Z"
+                fill="currentColor"
+              />
+              <circle cx="8.1" cy="10.2" r="1.1" fill="currentColor" />
+              <circle cx="10.7" cy="7.2" r="1.1" fill="currentColor" />
+              <circle cx="14.3" cy="7.5" r="1.1" fill="currentColor" />
+            </svg>
+          </button>
+          <div
+            class="appearance-popover"
+            id="dashboard-appearance-panel"
+            role="dialog"
+            aria-label="Appearance settings"
+            hidden
+            data-appearance-panel
+          >
+            <div class="appearance-popover-title">Appearance</div>
+            <label class="appearance-option" title="Bright surface with soft blue glow.">
+              <input type="radio" name="appearance-mode" value="light" />
+              <span class="appearance-swatch light" aria-hidden="true"></span>
+              <span class="appearance-option-copy">
+                <span class="appearance-option-name">Light</span>
+              </span>
+            </label>
+            <label class="appearance-option" title="Low-glare panels with night-mode plots.">
+              <input type="radio" name="appearance-mode" value="dark" />
+              <span class="appearance-swatch dark" aria-hidden="true"></span>
+              <span class="appearance-option-copy">
+                <span class="appearance-option-name">Dark</span>
+              </span>
+            </label>
+          </div>
         </div>
       </div>
 

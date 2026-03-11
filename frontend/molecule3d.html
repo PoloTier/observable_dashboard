@@ -4,23 +4,132 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Molecule 3D Viewer</title>
+  <script>
+    (function () {
+      const storageKey = 'observable_dashboard_theme_v1';
+      let mode = 'light';
+      try {
+        const savedMode = localStorage.getItem(storageKey);
+        if (savedMode === 'light' || savedMode === 'dark') mode = savedMode;
+      } catch {
+        // ignore storage failures
+      }
+      document.documentElement.setAttribute('data-theme', mode);
+      document.documentElement.style.colorScheme = mode;
+    })();
+  </script>
   <script src="assets/vendor/3Dmol-min.js"></script>
   <script src="assets/vendor/plotly-2.35.2.min.js"></script>
   <script src="assets/vendor/gif.min.js"></script>
   <style>
+    html {
+      min-height: 100%;
+      color-scheme: light;
+    }
     :root {
-      --bg: #f7f8fa;
-      --panel: #ffffff;
+      --bg: #eef3fb;
+      --bg-ambient: radial-gradient(circle at 14% 16%, rgba(59, 130, 246, 0.16), transparent 34%),
+        radial-gradient(circle at 84% 10%, rgba(14, 165, 233, 0.12), transparent 28%),
+        linear-gradient(180deg, #f7f9fe 0%, #edf3fb 100%);
+      --bg-grid: linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+      --panel: rgba(255, 255, 255, 0.8);
+      --panel-strong: #ffffff;
+      --panel-soft: #f8fafc;
+      --panel-softer: #f3f6fa;
+      --panel-inset: #f2f6fb;
       --border: #d7dce3;
+      --border-strong: #cdd4df;
+      --border-soft: #d9dee7;
       --text: #1f2937;
+      --text-soft: #374151;
       --muted: #6b7280;
       --accent: #0b5ed7;
+      --accent-soft: #eef5ff;
+      --accent-soft-hover: #dceaff;
+      --accent-border: #b7c8ea;
+      --danger: #b42318;
+      --danger-soft: #fff7f6;
+      --danger-soft-hover: #ffe9e7;
+      --danger-border: #efc5c1;
+      --input-bg: rgba(255, 255, 255, 0.96);
+      --input-border: #cdd4df;
+      --shadow-elevated: 0 22px 46px rgba(15, 23, 42, 0.08);
+      --plot-container-bg: rgba(255, 255, 255, 0.88);
+    }
+    html[data-theme='dark'] {
+      color-scheme: dark;
+      --bg: #09111f;
+      --bg-ambient: radial-gradient(circle at 18% 18%, rgba(59, 130, 246, 0.2), transparent 36%),
+        radial-gradient(circle at 82% 12%, rgba(34, 197, 94, 0.14), transparent 30%),
+        linear-gradient(180deg, #07111f 0%, #091523 56%, #060c17 100%);
+      --bg-grid: linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+      --panel: rgba(8, 15, 30, 0.78);
+      --panel-strong: rgba(10, 18, 36, 0.92);
+      --panel-soft: rgba(13, 24, 44, 0.88);
+      --panel-softer: rgba(17, 30, 54, 0.92);
+      --panel-inset: rgba(10, 19, 35, 0.82);
+      --border: rgba(148, 163, 184, 0.22);
+      --border-strong: rgba(148, 163, 184, 0.28);
+      --border-soft: rgba(148, 163, 184, 0.16);
+      --text: #e5eef8;
+      --text-soft: #dbe7f4;
+      --muted: #93a4bd;
+      --accent: #7cb7ff;
+      --accent-soft: rgba(59, 130, 246, 0.16);
+      --accent-soft-hover: rgba(96, 165, 250, 0.22);
+      --accent-border: rgba(96, 165, 250, 0.3);
+      --danger: #f08a7d;
+      --danger-soft: rgba(127, 29, 29, 0.22);
+      --danger-soft-hover: rgba(153, 27, 27, 0.34);
+      --danger-border: rgba(240, 138, 125, 0.28);
+      --input-bg: rgba(7, 13, 26, 0.88);
+      --input-border: rgba(148, 163, 184, 0.3);
+      --shadow-elevated: 0 30px 62px rgba(2, 6, 23, 0.42);
+      --plot-container-bg: rgba(9, 16, 32, 0.72);
     }
     body {
       margin: 0;
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+      isolation: isolate;
       font-family: "Segoe UI", "Helvetica Neue", sans-serif;
       background: var(--bg);
       color: var(--text);
+    }
+    body::before,
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+    body::before {
+      z-index: -2;
+      background: var(--bg-ambient);
+    }
+    body::after {
+      z-index: -1;
+      background-image: var(--bg-grid);
+      background-size: 26px 26px;
+      opacity: 0.52;
+      transform: scale(1.02);
+      animation: mol3dAmbientDrift 26s linear infinite alternate;
+    }
+    @keyframes mol3dAmbientDrift {
+      from {
+        transform: translate3d(0, 0, 0) scale(1.01);
+      }
+      to {
+        transform: translate3d(0, -10px, 0) scale(1.05);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body::after {
+        animation: none;
+      }
     }
     .page {
       width: 100%;
@@ -28,12 +137,16 @@
       margin: 0;
       padding: 16px;
       box-sizing: border-box;
+      position: relative;
+      z-index: 1;
     }
     .header,
     .viewer-card {
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 12px;
+      backdrop-filter: blur(18px);
+      box-shadow: var(--shadow-elevated);
     }
     .header {
       padding: 12px 14px;
@@ -50,39 +163,120 @@
       align-items: center;
       gap: 10px;
     }
-    #controls-primary {
-      margin-bottom: 8px;
-    }
-    #controls-groups {
+    .controls-toolbar {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .controls-toolbar-scroll {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .controls-toolbar-main {
+      display: inline-flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 10px;
+      min-width: max-content;
+    }
+    .toolbar-pill {
+      display: inline-flex;
+      align-items: center;
       gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      background: var(--panel-soft);
+      white-space: nowrap;
     }
-    .control-group {
-      border: 1px solid #d9dee7;
-      border-radius: 10px;
-      background: #f8fafc;
-      overflow: hidden;
+    .toolbar-pill-frame {
+      padding-right: 12px;
     }
-    .control-group > summary {
-      list-style: none;
-      cursor: pointer;
-      user-select: none;
-      color: #374151;
+    .toolbar-side {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+    }
+    .toolbar-side .appearance-control {
+      margin-left: 0;
+    }
+    .toolbar-action-btn {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-weight: 600;
+    }
+    .toolbar-action-btn:hover {
+      background: var(--accent-soft-hover);
+    }
+    #controls-primary select {
+      min-width: 132px;
+    }
+    #controls-primary #frame-slider {
+      width: clamp(160px, 24vw, 280px);
+      min-width: 150px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      accent-color: var(--accent);
+    }
+    #controls-primary #frame-label {
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 70px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .controls-tabs {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 0 0 2px;
+      margin-bottom: 10px;
+    }
+    .controls-tab {
+      flex: 0 0 auto;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      background: var(--panel-soft);
+      color: var(--text-soft);
+      padding: 6px 12px;
       font-size: 12px;
       font-weight: 600;
-      padding: 7px 10px;
-      background: #f3f6fa;
-      border-bottom: 1px solid transparent;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
     }
-    .control-group > summary::-webkit-details-marker {
+    .controls-tab:hover {
+      border-color: var(--accent-border);
+      background: var(--panel-inset);
+      color: var(--text);
+    }
+    .controls-tab.is-active {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    #controls-groups {
+      min-height: 0;
+    }
+    .control-panel {
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      background: var(--panel-soft);
+      overflow: hidden;
+    }
+    .control-panel[hidden] {
       display: none;
     }
-    .control-group[open] > summary {
-      border-bottom-color: #d9dee7;
-    }
-    .control-group-body {
-      padding: 8px 10px;
+    .control-panel-body {
+      padding: 10px;
     }
     .controls label {
       font-size: 13px;
@@ -99,10 +293,11 @@
     .controls button,
     .controls input {
       font-size: 13px;
-      border: 1px solid #cdd4df;
+      border: 1px solid var(--input-border);
       border-radius: 6px;
       padding: 5px 8px;
-      background: #fff;
+      background: var(--input-bg);
+      color: var(--text);
     }
     .controls button {
       cursor: pointer;
@@ -112,13 +307,115 @@
       color: #fff;
       border-color: var(--accent);
     }
+    .appearance-control {
+      margin-left: auto;
+      position: relative;
+    }
+    .appearance-trigger {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text-soft);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+    }
+    .appearance-trigger:hover {
+      transform: translateY(-1px);
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .appearance-trigger svg {
+      width: 18px;
+      height: 18px;
+    }
+    .appearance-popover {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: min(220px, calc(100vw - 28px));
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-strong);
+      backdrop-filter: blur(20px);
+      box-shadow: var(--shadow-elevated);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 40;
+    }
+    .appearance-popover[hidden] {
+      display: none;
+    }
+    .appearance-popover-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .appearance-option {
+      display: grid;
+      grid-template-columns: auto 32px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      background: var(--panel-soft);
+      padding: 7px 8px;
+      cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease;
+    }
+    .appearance-option:hover,
+    .appearance-option.is-selected {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .appearance-option input {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+    .appearance-option-copy {
+      display: block;
+      min-width: 0;
+    }
+    .appearance-option-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .appearance-option-desc {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .appearance-swatch {
+      width: 36px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    }
+    .appearance-swatch.light {
+      background: linear-gradient(135deg, #f9fcff 0%, #dbeafe 54%, #eef2ff 100%);
+    }
+    .appearance-swatch.dark {
+      background: linear-gradient(135deg, #0b1220 0%, #13213f 52%, #1f3d74 100%);
+    }
     #playback-rate-slider,
     #playback-stride-slider,
     #nac-scale-slider,
     #de-scale-slider,
     #de-nac-scale-slider,
     #atom-size-slider,
-    #bond-radius-slider {
+    #bond-radius-slider,
+    #hbond-line-width-slider {
       width: clamp(110px, 18vw, 160px);
       min-width: 96px;
       padding: 0;
@@ -132,7 +429,8 @@
     #de-scale-label,
     #de-nac-scale-label,
     #atom-size-label,
-    #bond-radius-label {
+    #bond-radius-label,
+    #hbond-line-width-label {
       font-size: 12px;
       color: var(--muted);
       min-width: 32px;
@@ -143,7 +441,7 @@
       width: 100%;
       margin-top: 6px;
       padding-top: 6px;
-      border-top: 1px dashed #d9dee7;
+      border-top: 1px dashed var(--border-soft);
       display: flex;
       flex-wrap: wrap;
       align-items: center;
@@ -157,29 +455,29 @@
       min-width: 110px;
     }
     #atom-style-add-btn {
-      border: 1px solid #b7c8ea;
-      color: #0b5ed7;
-      background: #eef5ff;
+      border: 1px solid var(--accent-border);
+      color: var(--accent);
+      background: var(--accent-soft);
       font-weight: 600;
       line-height: 1.1;
       padding: 4px 8px;
     }
     #atom-style-add-btn:hover:not(:disabled) {
-      background: #dceaff;
+      background: var(--accent-soft-hover);
     }
     #atom-style-clear-btn {
-      border: 1px solid #efc5c1;
-      color: #b42318;
-      background: #fff7f6;
+      border: 1px solid var(--danger-border);
+      color: var(--danger);
+      background: var(--danger-soft);
       line-height: 1.1;
       padding: 4px 8px;
     }
     #atom-style-clear-btn:hover:not(:disabled) {
-      background: #ffe9e7;
+      background: var(--danger-soft-hover);
     }
     #atom-style-rules-hint {
       width: 100%;
-      color: #64748b;
+      color: var(--muted);
     }
     .atom-style-rules {
       width: 100%;
@@ -191,19 +489,19 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      border: 1px solid #d8dee8;
-      border-left: 4px solid #0b5ed7;
+      border: 1px solid var(--border-soft);
+      border-left: 4px solid var(--accent);
       border-radius: 8px;
-      background: #fff;
+      background: var(--panel-strong);
       padding: 4px 6px;
     }
     .atom-style-rule-mode {
       display: inline-flex;
       align-items: center;
-      border: 1px solid #c7d6ef;
+      border: 1px solid var(--accent-border);
       border-radius: 999px;
-      background: #eef5ff;
-      color: #0b5ed7;
+      background: var(--accent-soft);
+      color: var(--accent);
       font-size: 11px;
       font-weight: 600;
       line-height: 1;
@@ -216,18 +514,18 @@
       flex: 1 1 auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 12px;
-      color: #334155;
+      color: var(--text-soft);
       overflow-wrap: anywhere;
     }
     .atom-style-rule-remove-btn {
-      border: 1px solid #efc5c1;
-      color: #b42318;
-      background: #fff7f6;
+      border: 1px solid var(--danger-border);
+      color: var(--danger);
+      background: var(--danger-soft);
       line-height: 1.1;
       padding: 3px 8px;
     }
     .atom-style-rule-remove-btn:hover:not(:disabled) {
-      background: #ffe9e7;
+      background: var(--danger-soft-hover);
     }
     .atom-style-rule-empty {
       color: var(--muted);
@@ -245,9 +543,9 @@
       grid-template-columns: 14px auto auto minmax(56px, 80px) auto minmax(56px, 80px) auto;
       align-items: center;
       gap: 6px;
-      border: 1px solid #d9dee7;
+      border: 1px solid var(--border-soft);
       border-radius: 8px;
-      background: #fff;
+      background: var(--panel-strong);
       padding: 6px 8px;
     }
     .de-pair-row.disabled {
@@ -257,30 +555,30 @@
       width: 12px;
       height: 12px;
       border-radius: 999px;
-      border: 1px solid rgba(17, 24, 39, 0.24);
+      border: 1px solid var(--border-strong);
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
       justify-self: center;
       align-self: center;
-      background: #6b7280;
+      background: var(--muted);
     }
     .de-row-label {
       font-size: 12px;
-      color: #64748b;
+      color: var(--muted);
     }
     #de-visual-hint {
       width: 100%;
-      color: #64748b;
+      color: var(--muted);
     }
     .de-row-remove-btn {
       justify-self: end;
-      border: 1px solid #efc5c1;
-      color: #b42318;
-      background: #fff7f6;
+      border: 1px solid var(--danger-border);
+      color: var(--danger);
+      background: var(--danger-soft);
       padding: 4px 8px;
       line-height: 1.1;
     }
     .de-row-remove-btn:hover:not(:disabled) {
-      background: #ffe9e7;
+      background: var(--danger-soft-hover);
     }
     .de-pair-actions {
       display: inline-flex;
@@ -288,15 +586,15 @@
       gap: 8px;
     }
     #add-de-pair-btn {
-      border: 1px solid #b7c8ea;
-      color: #0b5ed7;
-      background: #eef5ff;
+      border: 1px solid var(--accent-border);
+      color: var(--accent);
+      background: var(--accent-soft);
       font-weight: 600;
       line-height: 1.1;
       padding: 4px 8px;
     }
     #add-de-pair-btn:hover:not(:disabled) {
-      background: #dceaff;
+      background: var(--accent-soft-hover);
     }
     #add-de-pair-btn:disabled {
       opacity: 0.55;
@@ -353,7 +651,7 @@
       height: clamp(280px, 46vh, 460px);
       min-height: 280px;
       max-height: 85vh;
-      border: 1px solid #d9dee7;
+      border: 1px solid var(--border-soft);
       border-radius: 10px;
       position: relative;
       display: block;
@@ -361,7 +659,7 @@
       resize: both;
       contain: layout paint;
       isolation: isolate;
-      background: #fff;
+      background: var(--plot-container-bg);
     }
     .status-row {
       margin-top: 8px;
@@ -376,9 +674,9 @@
       flex: 1 1 auto;
     }
     .status-tool-btn {
-      border: 1px solid #cdd4df;
+      border: 1px solid var(--input-border);
       border-radius: 6px;
-      background: #fff;
+      background: var(--panel-strong);
       color: var(--muted);
       font-size: 12px;
       line-height: 1.1;
@@ -387,26 +685,26 @@
       white-space: nowrap;
     }
     .status-tool-btn:hover:not(:disabled) {
-      background: #f2f6fb;
+      background: var(--panel-inset);
       color: var(--text);
     }
     .status-tool-btn.active {
       border-color: var(--accent);
       color: var(--accent);
-      background: #eef5ff;
+      background: var(--accent-soft);
     }
     .status-tool-btn:disabled {
       opacity: 0.55;
       cursor: not-allowed;
     }
     .status.error {
-      color: #c0392b;
+      color: var(--danger);
     }
     .bond-color-settings-panel {
       margin-top: 8px;
-      border: 1px solid #d9dee7;
+      border: 1px solid var(--border-soft);
       border-radius: 10px;
-      background: #f8fafc;
+      background: var(--panel-soft);
       padding: 8px;
     }
     .bond-color-settings-panel[hidden] {
@@ -420,14 +718,14 @@
     }
     .bond-color-settings-title {
       font-size: 12px;
-      color: #374151;
+      color: var(--text-soft);
       font-weight: 600;
     }
     .bond-color-settings-close {
-      border: 1px solid #cdd4df;
+      border: 1px solid var(--input-border);
       border-radius: 6px;
-      background: #fff;
-      color: #4b5563;
+      background: var(--panel-strong);
+      color: var(--text-soft);
       cursor: pointer;
       font-size: 12px;
       line-height: 1;
@@ -444,10 +742,10 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      border: 1px solid #d8dee8;
+      border: 1px solid var(--border-soft);
       border-left: 4px solid #1f77b4;
       border-radius: 8px;
-      background: #fff;
+      background: var(--panel-strong);
       padding: 4px 6px;
     }
     .bond-color-swatch {
@@ -459,7 +757,7 @@
     }
     .bond-color-label {
       font-size: 12px;
-      color: #374151;
+      color: var(--text-soft);
       flex: 1 1 auto;
     }
     .bond-color-input {
@@ -492,44 +790,45 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      border: 1px solid #d1d8e3;
+      border: 1px solid var(--border-soft);
       border-left: 4px solid #1f77b4;
       border-radius: 8px;
       padding: 2px 6px;
-      background: #fff;
+      background: var(--panel-strong);
     }
     .bond-item.active {
-      background: #eef5ff;
-      border-color: #8db5ff;
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
     }
     .bond-activate,
     .bond-remove {
-      border: 1px solid #cdd4df;
+      border: 1px solid var(--input-border);
       border-radius: 6px;
-      background: #fff;
+      background: var(--panel-strong);
       font-size: 12px;
       padding: 3px 8px;
       cursor: pointer;
       line-height: 1.1;
+      color: var(--text);
     }
     .bond-activate:hover,
     .bond-remove:hover {
-      background: #f2f6fb;
+      background: var(--panel-inset);
     }
     .bond-remove {
       font-weight: 700;
       padding: 3px 6px;
-      color: #b42318;
-      border-color: #f1c2bd;
-      background: #fff7f6;
+      color: var(--danger);
+      border-color: var(--danger-border);
+      background: var(--danger-soft);
     }
     #bond-plot {
       margin-top: 10px;
       width: 100%;
       height: 220px;
-      border: 1px solid #d9dee7;
+      border: 1px solid var(--border-soft);
       border-radius: 10px;
-      background: #fff;
+      background: var(--plot-container-bg);
       overflow: hidden;
     }
     .bond-plot-empty {
@@ -543,35 +842,156 @@
       padding: 0 12px;
       box-sizing: border-box;
     }
+    button:focus-visible,
+    select:focus-visible,
+    input:focus-visible,
+    .appearance-trigger:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (max-width: 720px) {
+      .controls-toolbar {
+        gap: 10px;
+      }
+      .controls-toolbar-scroll,
+      .controls-tabs {
+        scrollbar-width: thin;
+      }
+      #controls-primary #frame-slider {
+        width: clamp(140px, 54vw, 220px);
+      }
+      .appearance-popover {
+        right: -4px;
+      }
+      .controls-tab {
+        padding: 6px 10px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="page">
     <div class="header">
       <div class="title">Molecule 3D Trajectory Viewer</div>
-      <div class="controls" id="controls-primary">
-        <label for="traj-select">Trajectory</label>
-        <select id="traj-select"></select>
+      <div id="controls-primary" class="controls-toolbar">
+        <div class="controls-toolbar-scroll">
+          <div class="controls controls-toolbar-main">
+            <div class="toolbar-pill">
+              <label for="traj-select">Trajectory</label>
+              <select id="traj-select"></select>
+            </div>
 
-        <button id="play-btn" type="button">Play</button>
+            <button id="play-btn" class="toolbar-action-btn" type="button">Play</button>
 
-        <label for="frame-slider">Frame</label>
-        <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
-        <span id="frame-label">Frame 1/1</span>
+            <div class="toolbar-pill toolbar-pill-frame">
+              <label for="frame-slider">Frame</label>
+              <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
+              <span id="frame-label">Frame 1/1</span>
+            </div>
+          </div>
+        </div>
 
-        <button id="export-gif-btn" type="button" disabled>Export GIF</button>
-        <button id="export-video-btn" type="button" disabled>Export Video</button>
+        <div class="toolbar-side">
+          <div class="appearance-control" data-appearance-control>
+            <button
+              class="appearance-trigger"
+              id="mol3d-appearance-toggle"
+              type="button"
+              aria-label="Open appearance settings"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="mol3d-appearance-panel"
+              data-appearance-trigger
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5c0-.73-.59-1.32-1.32-1.32h-1.26a2.22 2.22 0 0 1 0-4.43h1.26c.73 0 1.32-.59 1.32-1.32A8.5 8.5 0 0 0 12 3.5Z"
+                  fill="currentColor"
+                />
+                <circle cx="8.1" cy="10.2" r="1.1" fill="currentColor" />
+                <circle cx="10.7" cy="7.2" r="1.1" fill="currentColor" />
+                <circle cx="14.3" cy="7.5" r="1.1" fill="currentColor" />
+              </svg>
+            </button>
+            <div
+              class="appearance-popover"
+              id="mol3d-appearance-panel"
+              role="dialog"
+              aria-label="Appearance settings"
+              hidden
+              data-appearance-panel
+            >
+              <div class="appearance-popover-title">Appearance</div>
+              <label class="appearance-option" title="Bright cards with a neutral viewer backdrop.">
+                <input type="radio" name="appearance-mode" value="light" />
+                <span class="appearance-swatch light" aria-hidden="true"></span>
+                <span class="appearance-option-copy">
+                  <span class="appearance-option-name">Light</span>
+                </span>
+              </label>
+              <label class="appearance-option" title="Night-mode viewer and low-glare controls.">
+                <input type="radio" name="appearance-mode" value="dark" />
+                <span class="appearance-swatch dark" aria-hidden="true"></span>
+                <span class="appearance-option-copy">
+                  <span class="appearance-option-name">Dark</span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div id="controls-groups">
-        <details id="measure-controls-group" class="control-group">
-          <summary>Measure & Export</summary>
-          <div class="controls control-group-body">
-            <label class="check-label" for="show-atom-index">
-              <input id="show-atom-index" type="checkbox" />
-              Atom Indices
-            </label>
+      <div id="controls-tabs" class="controls-tabs" role="toolbar" aria-label="Viewer control sections">
+        <button
+          id="controls-tab-measure"
+          class="controls-tab is-active"
+          type="button"
+          data-controls-group-tab="measure"
+          aria-controls="measure-controls-group"
+          aria-expanded="true"
+          aria-pressed="true"
+        >Measure</button>
+        <button
+          id="controls-tab-playback"
+          class="controls-tab"
+          type="button"
+          data-controls-group-tab="playback"
+          aria-controls="playback-controls-group"
+          aria-expanded="false"
+          aria-pressed="false"
+        >Playback</button>
+        <button
+          id="controls-tab-render"
+          class="controls-tab"
+          type="button"
+          data-controls-group-tab="render"
+          aria-controls="render-controls-group"
+          aria-expanded="false"
+          aria-pressed="false"
+        >Render</button>
+        <button
+          id="controls-tab-vectors"
+          class="controls-tab"
+          type="button"
+          data-controls-group-tab="nac"
+          aria-controls="nac-controls-group"
+          aria-expanded="false"
+          aria-pressed="false"
+        >Vectors</button>
+        <button
+          id="controls-tab-export"
+          class="controls-tab"
+          type="button"
+          data-controls-group-tab="gifRange"
+          aria-controls="gif-range-controls-group"
+          aria-expanded="false"
+          aria-pressed="false"
+        >Export</button>
+      </div>
 
+      <div id="controls-groups" class="controls-panels">
+        <section id="measure-controls-group" class="control-panel" aria-labelledby="controls-tab-measure">
+          <div class="controls control-panel-body">
             <label>Measure</label>
             <button id="measure-type-bond-btn" type="button" class="active">Bond</button>
             <button id="measure-type-angle-btn" type="button">Angle</button>
@@ -580,15 +1000,11 @@
             <button id="select-bond-btn" type="button">Select Bond</button>
             <button id="clear-bond-btn" type="button" disabled>Clear Bond</button>
             <span class="bond-selection-info" id="bond-selection-info">Bonds: none</span>
-
-            <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
-            <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
           </div>
-        </details>
+        </section>
 
-        <details id="playback-controls-group" class="control-group">
-          <summary>Playback</summary>
-          <div class="controls control-group-body">
+        <section id="playback-controls-group" class="control-panel" aria-labelledby="controls-tab-playback" hidden>
+          <div class="controls control-panel-body">
             <label for="playback-rate-slider">Speed</label>
             <input id="playback-rate-slider" type="range" min="1" max="10" step="0.5" value="1" />
             <span id="playback-rate-label">1.0x</span>
@@ -597,11 +1013,15 @@
             <input id="playback-stride-slider" type="range" min="1" max="20" step="1" value="1" />
             <span id="playback-stride-label">x1</span>
           </div>
-        </details>
+        </section>
 
-        <details id="render-controls-group" class="control-group">
-          <summary>Render Style</summary>
-          <div class="controls control-group-body">
+        <section id="render-controls-group" class="control-panel" aria-labelledby="controls-tab-render" hidden>
+          <div class="controls control-panel-body">
+            <label class="check-label" for="show-atom-index">
+              <input id="show-atom-index" type="checkbox" />
+              Atom Indices
+            </label>
+
             <label for="atom-size-slider">Atom Size</label>
             <input id="atom-size-slider" type="range" min="0.2" max="3.0" step="0.1" value="1" />
             <span id="atom-size-label">1.0x</span>
@@ -609,6 +1029,15 @@
             <label for="bond-radius-slider">Bond Radius</label>
             <input id="bond-radius-slider" type="range" min="0.2" max="3.0" step="0.1" value="1" />
             <span id="bond-radius-label">1.0x</span>
+
+            <label class="check-label" for="show-hydrogen-bonds">
+              <input id="show-hydrogen-bonds" type="checkbox" />
+              Show H-Bonds
+            </label>
+
+            <label for="hbond-line-width-slider">H-Bond Width</label>
+            <input id="hbond-line-width-slider" type="range" min="0.2" max="3.0" step="0.1" value="1.8" />
+            <span id="hbond-line-width-label">1.8x</span>
 
             <div class="atom-style-controls">
               <label for="atom-style-range-input">Atom Indices (0-based)</label>
@@ -639,25 +1068,10 @@
               </div>
             </div>
           </div>
-        </details>
+        </section>
 
-        <details id="hbond-controls-group" class="control-group">
-          <summary>Hydrogen Bonds</summary>
-          <div class="controls control-group-body">
-            <label class="check-label" for="show-hydrogen-bonds">
-              <input id="show-hydrogen-bonds" type="checkbox" />
-              显示氢键
-            </label>
-
-            <label for="hbond-line-width-slider">氢键粗细</label>
-            <input id="hbond-line-width-slider" type="range" min="0.2" max="3.0" step="0.1" value="1.8" />
-            <span id="hbond-line-width-label">1.8x</span>
-          </div>
-        </details>
-
-        <details id="nac-controls-group" class="control-group">
-          <summary>NAC Vectors</summary>
-          <div class="controls control-group-body">
+        <section id="nac-controls-group" class="control-panel" aria-labelledby="controls-tab-vectors" hidden>
+          <div class="controls control-panel-body">
             <label class="check-label" for="show-nac-vectors">
               <input id="show-nac-vectors" type="checkbox" />
               Show NAC Vectors
@@ -715,11 +1129,15 @@
             <span id="de-nac-scale-label">1.0x</span>
             <span class="bond-selection-info" id="de-nac-range-label">|dE*NAC|: n/a</span>
           </div>
-        </details>
+        </section>
 
-        <details id="gif-range-controls-group" class="control-group">
-          <summary>GIF Range</summary>
-          <div class="controls control-group-body">
+        <section id="gif-range-controls-group" class="control-panel" aria-labelledby="controls-tab-export" hidden>
+          <div class="controls control-panel-body">
+            <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
+            <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
+            <button id="export-gif-btn" type="button" disabled>Export GIF</button>
+            <button id="export-video-btn" type="button" disabled>Export Video</button>
+
             <label for="gif-export-start">GIF Start</label>
             <input id="gif-export-start" type="number" min="0" step="1" value="0" />
             <label for="gif-export-end">GIF End</label>
@@ -727,7 +1145,7 @@
             <button id="cancel-gif-export-btn" type="button" hidden disabled>Cancel Export</button>
             <span id="gif-export-progress"></span>
           </div>
-        </details>
+        </section>
       </div>
 
       <div class="source-pkl" id="source-pkl">PKL: unknown</div>
@@ -766,6 +1184,7 @@
 
         // Now load all modules in order
         const modules = [
+          '/assets/dashboard/dashboard_appearance.js',
           '/assets/dashboard/dashboard_state.js',
           '/assets/dashboard/dashboard_data_loader.js',
           '/assets/mol3d/dashboard_mol3d_constants.js',
@@ -805,6 +1224,5 @@
       });
     }
   </script>
-  <script src="assets/mol3d/dashboard_mol3d_page.js"></script>
 </body>
 </html>

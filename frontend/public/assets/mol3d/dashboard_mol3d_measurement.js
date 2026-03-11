@@ -6,6 +6,69 @@
 
   const { dom, constants, state, measureTypeButtons } = shared;
 
+  function getAppearanceModule() {
+    return window.ObservableAppearance || null;
+  }
+
+  function getPlotColors() {
+    const appearance = getAppearanceModule();
+    if (appearance && typeof appearance.getPlotColors === 'function') {
+      return appearance.getPlotColors();
+    }
+    return {
+      cursorLineColor: '#d62728',
+    };
+  }
+
+  function mergePlotlyLayout(baseLayout) {
+    const appearance = getAppearanceModule();
+    if (!appearance || typeof appearance.getPlotlyLayoutPatch !== 'function') {
+      return baseLayout;
+    }
+
+    const patch = appearance.getPlotlyLayoutPatch();
+    return {
+      ...patch,
+      ...baseLayout,
+      font: {
+        ...(patch.font || {}),
+        ...(baseLayout.font || {}),
+      },
+      title: {
+        ...(patch.title || {}),
+        ...(baseLayout.title || {}),
+        font: {
+          ...((patch.title && patch.title.font) || {}),
+          ...((baseLayout.title && baseLayout.title.font) || {}),
+        },
+      },
+      xaxis: {
+        ...(patch.xaxis || {}),
+        ...(baseLayout.xaxis || {}),
+      },
+      yaxis: {
+        ...(patch.yaxis || {}),
+        ...(baseLayout.yaxis || {}),
+      },
+      legend: {
+        ...(patch.legend || {}),
+        ...(baseLayout.legend || {}),
+        font: {
+          ...((patch.legend && patch.legend.font) || {}),
+          ...((baseLayout.legend && baseLayout.legend.font) || {}),
+        },
+      },
+      hoverlabel: {
+        ...(patch.hoverlabel || {}),
+        ...(baseLayout.hoverlabel || {}),
+        font: {
+          ...((patch.hoverlabel && patch.hoverlabel.font) || {}),
+          ...((baseLayout.hoverlabel && baseLayout.hoverlabel.font) || {}),
+        },
+      },
+    };
+  }
+
   // --- Shared refresh helpers -------------------------------------------------
   function rerenderCurrentFrame() {
     const viewerModule = root.viewer;
@@ -437,10 +500,10 @@
     });
 
     const t = getCursorTime();
+    const plotColors = getPlotColors();
 
-    const layout = {
+    const baseLayout = {
       margin: { l: 58, r: 16, t: 34, b: 42 },
-      template: 'plotly_white',
       xaxis: { title: 'Time (fs)' },
       yaxis: { title: meta.yAxisTitle },
       showlegend: true,
@@ -458,9 +521,11 @@
         yref: 'paper',
         y0: 0,
         y1: 1,
-        line: { color: '#d62728', dash: 'dash', width: 1.6 }
+        line: { color: plotColors.cursorLineColor, dash: 'dash', width: 1.6 }
       }] : [],
     };
+
+    const layout = mergePlotlyLayout(baseLayout);
 
     Plotly.react(dom.bondPlotEl, data, layout, {
       responsive: true,

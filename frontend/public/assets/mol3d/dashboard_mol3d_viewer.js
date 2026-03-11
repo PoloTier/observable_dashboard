@@ -6,6 +6,19 @@
 
   const { dom, constants, state } = shared;
 
+  function currentViewerTheme() {
+    const appearance = window.ObservableAppearance;
+    if (appearance && typeof appearance.getViewerTheme === 'function') {
+      return appearance.getViewerTheme();
+    }
+    return {
+      backgroundColor: '#fbfdff',
+      labelBackgroundColor: '#ffffff',
+      labelBackgroundOpacity: 0.82,
+      atomIndexColor: '#dc2626',
+    };
+  }
+
   // --- Viewer layout ----------------------------------------------------------
   function enforceViewerBounds() {
     if (!dom.viewerEl) return;
@@ -28,6 +41,19 @@
     if (!state.viewer) return;
     enforceViewerBounds();
     state.viewer.resize();
+    state.viewer.render();
+  }
+
+  function applyAppearanceTheme({ rerender = true } = {}) {
+    if (!state.viewer) return;
+    const theme = currentViewerTheme();
+    if (typeof state.viewer.setBackgroundColor === 'function') {
+      state.viewer.setBackgroundColor(theme.backgroundColor);
+    }
+    if (rerender && state.currentTrajId && state.xyzFrames.length) {
+      renderFrame(state.currentFrame);
+      return;
+    }
     state.viewer.render();
   }
 
@@ -126,10 +152,11 @@
   }
 
   function addOverlayLabel(text, position, color, screenOffset = { x: 0, y: -8 }) {
+    const theme = currentViewerTheme();
     state.viewer.addLabel(text, {
       position,
-      backgroundColor: '#ffffff',
-      backgroundOpacity: 0.72,
+      backgroundColor: theme.labelBackgroundColor,
+      backgroundOpacity: theme.labelBackgroundOpacity,
       borderThickness: 1,
       borderColor: color,
       fontColor: color,
@@ -234,6 +261,7 @@
 
   function addAtomIndexLabels(model) {
     if (!state.viewer || !model || !dom.showAtomIndexCheckbox?.checked) return;
+    const theme = currentViewerTheme();
 
     const atomList = model.selectedAtoms({});
     if (!Array.isArray(atomList) || !atomList.length) return;
@@ -243,7 +271,7 @@
         position: { x: atom.x, y: atom.y, z: atom.z },
         alignment: 'center',
         showBackground: false,
-        fontColor: '#dc2626',
+        fontColor: theme.atomIndexColor,
         fontSize: 13,
         inFront: true,
         screenOffset: { x: 6, y: -6 }
@@ -448,6 +476,7 @@
     addAtomIndexLabels,
     bindAtomClickHandler,
     clearScene,
+    applyAppearanceTheme,
     stopPlayback,
     getPlaybackIntervalMs,
     renderFrame,

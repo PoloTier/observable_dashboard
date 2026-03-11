@@ -1292,6 +1292,7 @@
   }
 
   function initGlobalControls() {
+    const appearance = window.ObservableAppearance;
     const sourcePklEl = document.getElementById('source-pkl');
     if (sourcePklEl) {
       const sourcePkl = String(meta?.source_pkl || '');
@@ -1388,6 +1389,15 @@
       saveStateToStorage();
       setGlobalStatus('Reset to default panel layout.');
     });
+
+    if (appearance && typeof appearance.initControls === 'function') {
+      appearance.initControls();
+    }
+    if (appearance && typeof appearance.subscribe === 'function') {
+      appearance.subscribe(() => {
+        plot.renderAllPanels({ suppressStatus: true });
+      });
+    }
   }
 
   root.ui = {

@@ -11,9 +11,36 @@
 
   const { dom, trajIds, state } = shared;
   let viewerResizeObserver = null;
+  let removeAppearanceSubscription = null;
 
   function bind(el, event, handler) {
     if (el) el.addEventListener(event, handler);
+  }
+
+  function currentViewerBackgroundColor() {
+    const appearance = window.ObservableAppearance;
+    if (appearance && typeof appearance.getViewerTheme === 'function') {
+      return String(appearance.getViewerTheme()?.backgroundColor || '#ffffff');
+    }
+    return '#ffffff';
+  }
+
+  function bindAppearanceControls() {
+    const appearance = window.ObservableAppearance;
+    if (!appearance) return;
+    if (typeof appearance.initControls === 'function') {
+      appearance.initControls();
+    }
+    if (removeAppearanceSubscription || typeof appearance.subscribe !== 'function') return;
+
+    removeAppearanceSubscription = appearance.subscribe(() => {
+      if (typeof viewer.applyAppearanceTheme === 'function') {
+        viewer.applyAppearanceTheme({ rerender: true });
+      }
+      if (typeof measurement.renderMeasurementPlot === 'function') {
+        measurement.renderMeasurementPlot();
+      }
+    });
   }
 
   function populateTrajectoryOptions() {
@@ -265,6 +292,10 @@
     window.addEventListener('beforeunload', () => {
       io.cancelGifExport(false);
       viewer.stopPlayback();
+      if (typeof removeAppearanceSubscription === 'function') {
+        removeAppearanceSubscription();
+        removeAppearanceSubscription = null;
+      }
       if (viewerResizeObserver) {
         viewerResizeObserver.disconnect();
         viewerResizeObserver = null;
@@ -304,6 +335,7 @@
   }
 
   function init() {
+    bindAppearanceControls();
     io.setSourcePklInfo();
     shared.setDownloadButtonsEnabled(false);
     shared.setNacControlsEnabled(false);
@@ -315,8 +347,11 @@
     }
 
     viewer.enforceViewerBounds();
-    state.viewer = $3Dmol.createViewer(dom.viewerEl, { backgroundColor: 'white' });
+    state.viewer = $3Dmol.createViewer(dom.viewerEl, { backgroundColor: currentViewerBackgroundColor() });
     viewer.resizeViewer();
+    if (typeof viewer.applyAppearanceTheme === 'function') {
+      viewer.applyAppearanceTheme({ rerender: false });
+    }
     viewer.setPlaybackRate(state.playbackRate);
     viewer.setPlaybackStride(state.playbackStride);
     window.addEventListener('resize', viewer.resizeViewer);
