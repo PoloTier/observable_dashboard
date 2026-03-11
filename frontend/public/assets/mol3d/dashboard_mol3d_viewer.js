@@ -5,6 +5,8 @@
   if (!shared || !geometry) return;
 
   const { dom, constants, state } = shared;
+  let frameRenderSeq = 0;
+  let playbackRenderPending = false;
 
   function currentViewerTheme() {
     const appearance = window.ObservableAppearance;
@@ -50,8 +52,8 @@
     if (typeof state.viewer.setBackgroundColor === 'function') {
       state.viewer.setBackgroundColor(theme.backgroundColor);
     }
-    if (rerender && state.currentTrajId && state.xyzFrames.length) {
-      renderFrame(state.currentFrame);
+    if (rerender && state.currentTrajId && getFrameCount() > 0) {
+      void renderFrame(state.currentFrame);
       return;
     }
     state.viewer.render();
@@ -153,7 +155,7 @@
 
   function addOverlayLabel(text, position, color, screenOffset = { x: 0, y: -8 }) {
     const theme = currentViewerTheme();
-    state.viewer.addLabel(text, {
+    const label = state.viewer.addLabel(text, {
       position,
       backgroundColor: theme.labelBackgroundColor,
       backgroundOpacity: theme.labelBackgroundOpacity,
@@ -165,6 +167,10 @@
       showBackground: true,
       screenOffset,
     });
+    if (label) {
+      state.transientOverlayLabels.push(label);
+    }
+    return label;
   }
 
   function formatOverlayValue(type, value) {
@@ -255,28 +261,180 @@
     hbond.renderHydrogenBonds(state.currentFrame);
   }
 
+  function getFrameCount() {
+    return typeof shared.getCurrentFrameCount === 'function'
+      ? shared.getCurrentFrameCount()
+      : (Array.isArray(state.currentCoords) ? state.currentCoords.length : 0);
+  }
+
+  function shouldRenderAtomIndexLabels() {
+    return !!dom.showAtomIndexCheckbox?.checked && !state.isPlaying;
+  }
+
+  function syncFrameUi(frameIndex, frameCount) {
+    if (dom.frameSlider) dom.frameSlider.value = String(frameIndex);
+    if (dom.framePrevBtn) dom.framePrevBtn.disabled = frameCount <= 1 || frameIndex <= 0;
+    if (dom.frameNextBtn) dom.frameNextBtn.disabled = frameCount <= 1 || frameIndex >= frameCount - 1;
+    if (dom.frameLabel) dom.frameLabel.textContent = `Frame ${frameIndex + 1}/${frameCount}`;
+  }
+
   function getAtomIndexLabelText(atomIndex) {
     return String(atomIndex);
   }
 
-  function addAtomIndexLabels(model) {
-    if (!state.viewer || !model || !dom.showAtomIndexCheckbox?.checked) return;
+  function getFrameCoords(frameIndex = state.currentFrame) {
+    const coords = Array.isArray(state.currentCoords) ? state.currentCoords : [];
+    const idx = Number.parseInt(String(frameIndex), 10);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= coords.length) return null;
+    const frame = coords[idx];
+    return Array.isArray(frame) ? frame : null;
+  }
+
+  function getAtomIndexThemeKey(theme = currentViewerTheme()) {
+    return String(theme?.atomIndexColor || '');
+  }
+
+  function buildAtomIndexLabelStyle(position, theme = currentViewerTheme()) {
+    return {
+      position: linePoint(position),
+      alignment: 'center',
+      showBackground: false,
+      fontColor: theme.atomIndexColor,
+      fontSize: 13,
+      inFront: true,
+      screenOffset: { x: 6, y: -6 },
+    };
+  }
+
+  function getAtomIndexLabelSignature() {
+    const atomCount = (() => {
+      const frame0 = Array.isArray(state.currentCoords) ? state.currentCoords[0] : null;
+      if (Array.isArray(frame0) && frame0.length) return frame0.length;
+      return Array.isArray(state.atomNumbers) ? state.atomNumbers.length : 0;
+    })();
+    const atomNumbers = Array.isArray(state.atomNumbers) ? state.atomNumbers.slice(0, atomCount) : [];
+    return `${atomCount}|${atomNumbers.join(',')}`;
+  }
+
+  function removeTrackedLabel(label) {
+    if (!state.viewer || !label || typeof state.viewer.removeLabel !== 'function') return;
+    try {
+      state.viewer.removeLabel(label);
+    } catch (_) {
+      // Best-effort cleanup; stale handles can occur after full viewer resets.
+    }
+  }
+
+  function clearTransientOverlayLabels() {
+    const labels = Array.isArray(state.transientOverlayLabels) ? state.transientOverlayLabels.slice() : [];
+    state.transientOverlayLabels = [];
+    for (const label of labels) {
+      removeTrackedLabel(label);
+    }
+  }
+
+  function clearAtomIndexLabels() {
+    const labels = Array.isArray(state.atomIndexLabels) ? state.atomIndexLabels.slice() : [];
+    state.atomIndexLabels = [];
+    state.atomIndexLabelSignature = '';
+    state.atomIndexLabelThemeKey = '';
+    for (const label of labels) {
+      removeTrackedLabel(label);
+    }
+  }
+
+  function setAtomIndexLabelsVisible(visible) {
+    const nextVisible = !!visible;
+    const labels = Array.isArray(state.atomIndexLabels) ? state.atomIndexLabels : [];
+    for (const label of labels) {
+      if (label?.sprite) {
+        label.sprite.visible = nextVisible;
+      }
+    }
+  }
+
+  function updateAtomIndexLabelPosition(label, position) {
+    if (!label) return;
+    const nextPosition = linePoint(position);
+    if (label.stylespec && typeof label.stylespec === 'object') {
+      label.stylespec.position = nextPosition;
+    }
+    if (label.sprite?.position && typeof label.sprite.position.set === 'function') {
+      label.sprite.position.set(nextPosition.x, nextPosition.y, nextPosition.z);
+    }
+  }
+
+  function updateAtomIndexLabelPositions(frame) {
+    const labels = Array.isArray(state.atomIndexLabels) ? state.atomIndexLabels : [];
+    if (!Array.isArray(frame) || !labels.length) return;
+    const count = Math.min(labels.length, frame.length);
+    for (let atomIndex = 0; atomIndex < count; atomIndex++) {
+      updateAtomIndexLabelPosition(labels[atomIndex], frame[atomIndex]);
+    }
+  }
+
+  function rebuildAtomIndexLabelStyles(frame, theme = currentViewerTheme()) {
+    if (!state.viewer || typeof state.viewer.setLabelStyle !== 'function') return false;
+    const labels = Array.isArray(state.atomIndexLabels) ? state.atomIndexLabels : [];
+    if (!labels.length || !Array.isArray(frame)) return false;
+    const count = Math.min(labels.length, frame.length);
+    for (let atomIndex = 0; atomIndex < count; atomIndex++) {
+      const currentLabel = labels[atomIndex];
+      const nextStyle = buildAtomIndexLabelStyle(frame[atomIndex], theme);
+      labels[atomIndex] = state.viewer.setLabelStyle(currentLabel, nextStyle) || currentLabel;
+    }
+    state.atomIndexLabelThemeKey = getAtomIndexThemeKey(theme);
+    return true;
+  }
+
+  function createAtomIndexLabels(frame, signature, theme = currentViewerTheme()) {
+    if (!state.viewer || !Array.isArray(frame) || !frame.length) return false;
+    clearAtomIndexLabels();
+    const labels = [];
+    for (let atomIndex = 0; atomIndex < frame.length; atomIndex++) {
+      const label = state.viewer.addLabel(
+        getAtomIndexLabelText(atomIndex),
+        buildAtomIndexLabelStyle(frame[atomIndex], theme)
+      );
+      if (label) {
+        labels.push(label);
+      }
+    }
+    state.atomIndexLabels = labels;
+    state.atomIndexLabelSignature = signature;
+    state.atomIndexLabelThemeKey = getAtomIndexThemeKey(theme);
+    return labels.length > 0;
+  }
+
+  function syncAtomIndexLabelsForFrame(frameIndex = state.currentFrame) {
+    if (!state.viewer) return;
+    if (!shouldRenderAtomIndexLabels()) {
+      setAtomIndexLabelsVisible(false);
+      return;
+    }
+
+    const frame = getFrameCoords(frameIndex);
+    if (!Array.isArray(frame) || !frame.length) {
+      clearAtomIndexLabels();
+      return;
+    }
+
+    const signature = getAtomIndexLabelSignature();
     const theme = currentViewerTheme();
+    const needsRebuild = (
+      !Array.isArray(state.atomIndexLabels)
+      || state.atomIndexLabels.length !== frame.length
+      || state.atomIndexLabelSignature !== signature
+    );
 
-    const atomList = model.selectedAtoms({});
-    if (!Array.isArray(atomList) || !atomList.length) return;
+    if (needsRebuild) {
+      createAtomIndexLabels(frame, signature, theme);
+    } else if (state.atomIndexLabelThemeKey !== getAtomIndexThemeKey(theme)) {
+      rebuildAtomIndexLabelStyles(frame, theme);
+    }
 
-    atomList.forEach((atom, atomIndex) => {
-      state.viewer.addLabel(getAtomIndexLabelText(atomIndex), {
-        position: { x: atom.x, y: atom.y, z: atom.z },
-        alignment: 'center',
-        showBackground: false,
-        fontColor: theme.atomIndexColor,
-        fontSize: 13,
-        inFront: true,
-        screenOffset: { x: 6, y: -6 }
-      });
-    });
+    updateAtomIndexLabelPositions(frame);
+    setAtomIndexLabelsVisible(true);
   }
 
   function bindAtomClickHandler() {
@@ -289,11 +447,26 @@
     });
   }
 
-  function clearScene() {
+  function clearScene(options = {}) {
     if (!state.viewer) return;
-    state.viewer.removeAllLabels();
+    const preserveAtomIndexLabels = !!options.preserveAtomIndexLabels;
+    if (options.invalidateRenderSeq !== false) {
+      frameRenderSeq += 1;
+    }
+    clearTransientOverlayLabels();
+    if (!preserveAtomIndexLabels) {
+      clearAtomIndexLabels();
+    }
     state.viewer.removeAllShapes();
     state.viewer.removeAllModels();
+    state.currentModel = null;
+    state.currentModelRenderMode = '';
+  }
+
+  function clearOverlayScene() {
+    if (!state.viewer) return;
+    clearTransientOverlayLabels();
+    state.viewer.removeAllShapes();
   }
 
   function buildDefaultRenderStyle(atomScale, bondRadius) {
@@ -370,14 +543,117 @@
     }
   }
 
-  // --- Playback lifecycle -----------------------------------------------------
-  function stopPlayback() {
-    if (state.timer) {
-      clearInterval(state.timer);
-      state.timer = null;
+  function refreshModelStyle() {
+    if (!state.viewer || !state.currentModel) return false;
+    const bondRadius = constants.MODEL_STICK_RADIUS_BASE * shared.clampBondRadiusScale(state.bondRadiusScale);
+    const atomScale = constants.MODEL_SPHERE_SCALE_BASE * shared.clampAtomSizeScale(state.atomSizeScale);
+    applyRenderStyles(state.currentModel, atomScale, bondRadius);
+    return true;
+  }
+
+  function buildCurrentTrajectoryRecord() {
+    const frame0 = Array.isArray(state.currentCoords) ? state.currentCoords[0] : null;
+    const atomCount = Array.isArray(frame0) ? frame0.length : 0;
+    return {
+      coords: Array.isArray(state.currentCoords) ? state.currentCoords : [],
+      time: Array.isArray(state.currentTimes) ? state.currentTimes : [],
+      atom_numbers: Array.isArray(state.atomNumbers) ? state.atomNumbers : [],
+      n_atoms: atomCount,
+    };
+  }
+
+  function buildFrameXyz(frameIndex) {
+    const idx = Number.parseInt(String(frameIndex), 10);
+    if (!Number.isFinite(idx) || idx < 0) return '';
+
+    if (!Array.isArray(state.xyzFrames)) {
+      state.xyzFrames = [];
     }
+    const cached = state.xyzFrames[idx];
+    if (typeof cached === 'string' && cached) {
+      return cached;
+    }
+
+    const transformers = root.ioTransformers;
+    if (!transformers || typeof transformers.buildXyzFrame !== 'function') {
+      return '';
+    }
+
+    const xyz = transformers.buildXyzFrame(buildCurrentTrajectoryRecord(), idx);
+    if (typeof xyz === 'string' && xyz) {
+      state.xyzFrames[idx] = xyz;
+      return xyz;
+    }
+    return '';
+  }
+
+  function initializeTrajectoryModel(initialFrameXyz, coordsFrames, options = {}) {
+    if (!state.viewer || !initialFrameXyz) return false;
+    clearScene({
+      preserveAtomIndexLabels: true,
+      invalidateRenderSeq: options.invalidateRenderSeq !== false,
+    });
+    const model = state.viewer.addModel(initialFrameXyz, 'xyz');
+    if (!model) return false;
+
+    if (typeof model.setCoordinates === 'function' && Array.isArray(coordsFrames) && coordsFrames.length) {
+      model.setCoordinates(coordsFrames, 'array');
+    }
+
+    state.currentModel = model;
+    state.currentModelRenderMode = 'static';
+    refreshModelStyle();
+    bindAtomClickHandler();
+    return true;
+  }
+
+  function ensureStaticTrajectoryModel() {
+    if (state.currentModel && state.currentModelRenderMode === 'static') {
+      return true;
+    }
+    const firstFrameXyz = buildFrameXyz(0);
+    if (!firstFrameXyz) return false;
+    return initializeTrajectoryModel(firstFrameXyz, state.currentCoords, { invalidateRenderSeq: false });
+  }
+
+  function rebuildDynamicFrameModel(frameIndex) {
+    if (!state.viewer) return false;
+    const frameXyz = buildFrameXyz(frameIndex);
+    if (!frameXyz) return false;
+
+    clearScene({ preserveAtomIndexLabels: true, invalidateRenderSeq: false });
+    const model = state.viewer.addModel(frameXyz, 'xyz');
+    if (!model) return false;
+
+    state.currentModel = model;
+    state.currentModelRenderMode = 'dynamic';
+    refreshModelStyle();
+    bindAtomClickHandler();
+    return true;
+  }
+
+  function setDynamicBondsEnabled(enabled) {
+    state.dynamicBonds = !!enabled;
+    if (dom.dynamicBondsCheckbox) {
+      dom.dynamicBondsCheckbox.checked = state.dynamicBonds;
+    }
+  }
+
+  // --- Playback lifecycle -----------------------------------------------------
+  function stopPlayback(options = {}) {
+    if (state.playbackRafId) {
+      cancelAnimationFrame(state.playbackRafId);
+      state.playbackRafId = 0;
+    }
+    playbackRenderPending = false;
+    state.playbackLastTickMs = 0;
+    state.playbackElapsedMs = 0;
     state.isPlaying = false;
     if (dom.playBtn) dom.playBtn.textContent = 'Play';
+
+    if (options.renderCurrentFrame && state.currentTrajId && getFrameCount() > 0 && state.currentModel) {
+      void renderFrame(state.currentFrame);
+    }
   }
 
   function getPlaybackIntervalMs() {
@@ -390,39 +666,79 @@
     return Math.max(1, Math.round(1000 / renderFps));
   }
 
-  function startPlaybackTimer() {
-    if (!state.xyzFrames.length) return;
-    const stride = shared.clampPlaybackStride(state.playbackStride);
-    state.timer = setInterval(() => {
-      const next = (state.currentFrame + stride) % state.xyzFrames.length;
-      renderFrame(next);
-    }, getPlaybackIntervalMs());
+  function schedulePlaybackTick() {
+    if (!state.isPlaying) return;
+    state.playbackRafId = requestAnimationFrame(runPlaybackTick);
+  }
+
+  function runPlaybackTick(timestamp) {
+    if (!state.isPlaying) return;
+
+    const frameCount = getFrameCount();
+    if (frameCount <= 0 || !state.currentModel) {
+      stopPlayback();
+      return;
+    }
+
+    if (!Number.isFinite(state.playbackLastTickMs) || state.playbackLastTickMs <= 0) {
+      state.playbackLastTickMs = timestamp;
+      schedulePlaybackTick();
+      return;
+    }
+
+    const intervalMs = getPlaybackIntervalMs();
+    const deltaMs = Math.max(0, timestamp - state.playbackLastTickMs);
+    state.playbackLastTickMs = timestamp;
+    state.playbackElapsedMs = Math.min(intervalMs * 4, state.playbackElapsedMs + deltaMs);
+
+    if (state.playbackElapsedMs >= intervalMs && !playbackRenderPending) {
+      const stride = shared.clampPlaybackStride(state.playbackStride);
+      const steps = Math.max(1, Math.floor(state.playbackElapsedMs / intervalMs));
+      const next = (state.currentFrame + stride * steps) % frameCount;
+      state.playbackElapsedMs -= steps * intervalMs;
+      playbackRenderPending = true;
+      Promise.resolve(renderFrame(next))
+        .catch((error) => {
+          console.error('ObservableMol3D playback render failed:', error);
+        })
+        .finally(() => {
+          playbackRenderPending = false;
+        });
+    }
+
+    schedulePlaybackTick();
   }
 
   function restartPlaybackTimerIfPlaying() {
     if (!state.isPlaying) return;
-    if (state.timer) {
-      clearInterval(state.timer);
-      state.timer = null;
-    }
-    startPlaybackTimer();
+    state.playbackLastTickMs = 0;
+    state.playbackElapsedMs = 0;
   }
 
-  // Full frame render: replace model, redraw overlay/labels, sync UI cursor.
-  function renderFrame(frameIndex, refitView = false) {
-    if (!state.viewer || !state.xyzFrames.length) return;
+  // Full frame render: switch existing model frame, redraw overlays/labels, sync UI cursor.
+  async function renderFrame(frameIndex, refitView = false) {
+    const frameCount = getFrameCount();
+    if (!state.viewer || frameCount <= 0) return false;
 
-    const idx = Math.max(0, Math.min(frameIndex, state.xyzFrames.length - 1));
+    const idx = Math.max(0, Math.min(frameIndex, frameCount - 1));
+    const renderSeq = ++frameRenderSeq;
     state.currentFrame = idx;
+    syncFrameUi(idx, frameCount);
 
-    clearScene();
-    const model = state.viewer.addModel(state.xyzFrames[idx], 'xyz');
-    state.currentModel = model;
-    const bondRadius = constants.MODEL_STICK_RADIUS_BASE * shared.clampBondRadiusScale(state.bondRadiusScale);
-    const atomScale = constants.MODEL_SPHERE_SCALE_BASE * shared.clampAtomSizeScale(state.atomSizeScale);
-    applyRenderStyles(model, atomScale, bondRadius);
+    if (state.dynamicBonds) {
+      if (!rebuildDynamicFrameModel(idx)) return false;
+    } else {
+      if (!ensureStaticTrajectoryModel()) return false;
+      if (typeof state.currentModel?.setFrame === 'function') {
+        await state.currentModel.setFrame(idx, state.viewer);
+      }
+    }
+
+    if (renderSeq !== frameRenderSeq) return false;
+
+    clearOverlayScene();
     bindAtomClickHandler();
-    addAtomIndexLabels(model);
+    syncAtomIndexLabelsForFrame(idx);
     renderMeasurementOverlayForFrame();
     renderVectorOverlayForFrame();
     renderHydrogenBondsForFrame();
@@ -437,16 +753,18 @@
       measurement.updateMeasurementPlotFrameCursor();
     }
 
-    if (dom.frameSlider) dom.frameSlider.value = String(idx);
-    if (dom.frameLabel) dom.frameLabel.textContent = `Frame ${idx + 1}/${state.xyzFrames.length}`;
+    return true;
   }
 
   function startPlayback() {
-    if (!state.xyzFrames.length) return;
+    if (getFrameCount() <= 0 || !state.currentModel) return;
     stopPlayback();
     state.isPlaying = true;
+    state.playbackElapsedMs = 0;
+    state.playbackLastTickMs = 0;
     if (dom.playBtn) dom.playBtn.textContent = 'Pause';
-    startPlaybackTimer();
+    void renderFrame(state.currentFrame);
+    schedulePlaybackTick();
   }
 
   function setPlaybackRate(rate) {
@@ -473,10 +791,14 @@
     renderVectorOverlayForFrame,
     renderHydrogenBondsForFrame,
     getAtomIndexLabelText,
-    addAtomIndexLabels,
+    syncAtomIndexLabelsForFrame,
     bindAtomClickHandler,
     clearScene,
+    clearOverlayScene,
     applyAppearanceTheme,
+    refreshModelStyle,
+    initializeTrajectoryModel,
+    setDynamicBondsEnabled,
     stopPlayback,
     getPlaybackIntervalMs,
     renderFrame,

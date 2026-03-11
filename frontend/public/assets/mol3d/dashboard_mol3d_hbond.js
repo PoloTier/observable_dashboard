@@ -12,8 +12,9 @@
   const HBOND_DASH_LENGTH = 0.46;
   const HBOND_GAP_LENGTH = 0.24;
   const HBOND_MIN_SEGMENT_LENGTH = 0.16;
-  const HBOND_RADIUS_MIN = 0.09;
-  const HBOND_RADIUS_MAX = 0.34;
+  const HBOND_RADIUS_SCALE = 0.5;
+  const HBOND_RADIUS_MIN = 0.045;
+  const HBOND_RADIUS_MAX = 0.17;
   const HBOND_OPACITY = 0.82;
 
   function buildHbondApiUrl(trajId) {
@@ -110,8 +111,8 @@
           const count = Array.isArray(indexed.hbonds) ? indexed.hbonds.length : 0;
           shared.setStatus(`Hydrogen bonds ready: ${count} matches across ${indexed.n_frames} frames.`);
           const viewer = root.viewer;
-          if (viewer && typeof viewer.renderFrame === 'function' && state.xyzFrames.length) {
-            viewer.renderFrame(state.currentFrame);
+          if (viewer && typeof viewer.renderFrame === 'function' && shared.getCurrentFrameCount() > 0) {
+            void viewer.renderFrame(state.currentFrame);
           }
         }
         return indexed;
@@ -159,7 +160,10 @@
       : 0.15;
     const radius = Math.max(
       HBOND_RADIUS_MIN,
-      Math.min(HBOND_RADIUS_MAX, baseStickRadius * bondRadiusScale * (0.55 + 0.45 * hbondScale))
+      Math.min(
+        HBOND_RADIUS_MAX,
+        baseStickRadius * bondRadiusScale * (0.55 + 0.45 * hbondScale) * HBOND_RADIUS_SCALE
+      )
     );
     const flatCap = resolveFlatCap();
     return {
@@ -258,13 +262,13 @@
     const viewer = root.viewer;
 
     if (!state.showHydrogenBonds) {
-      if (viewer && typeof viewer.renderFrame === 'function' && state.currentTrajId && state.xyzFrames.length) {
-        viewer.renderFrame(state.currentFrame);
+      if (viewer && typeof viewer.renderFrame === 'function' && state.currentTrajId && shared.getCurrentFrameCount() > 0) {
+        void viewer.renderFrame(state.currentFrame);
       }
       return;
     }
 
-    if (!state.currentTrajId || !state.xyzFrames.length) return;
+    if (!state.currentTrajId || shared.getCurrentFrameCount() <= 0) return;
     const payload = await ensureHydrogenBondsLoaded();
     if (!payload) {
       state.showHydrogenBonds = false;
@@ -273,8 +277,8 @@
       }
       return;
     }
-    if (viewer && typeof viewer.renderFrame === 'function' && state.currentTrajId && state.xyzFrames.length) {
-      viewer.renderFrame(state.currentFrame);
+    if (viewer && typeof viewer.renderFrame === 'function' && state.currentTrajId && shared.getCurrentFrameCount() > 0) {
+      void viewer.renderFrame(state.currentFrame);
     }
   }
 

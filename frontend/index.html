@@ -38,6 +38,9 @@
           <label><input type="checkbox" id="global-traces" /> Show all traces in All mode</label>
         </div>
         <div class="control-group">
+          <button class="btn" id="open-pkl-btn" type="button">Open PKL</button>
+        </div>
+        <div class="control-group">
           <a class="mol3d-link" href="molecule3d.html" target="_blank" rel="noopener noreferrer">3D Molecule View</a>
         </div>
         <div class="control-group">
@@ -91,66 +94,163 @@
         </div>
       </div>
 
-      <details id="traj-break-summary" class="break-summary">
-        <summary>Trajectory Completion Summary</summary>
-        <div class="break-summary-body">
-          <div id="break-summary-status" class="break-summary-status"></div>
-          <div id="break-summary-list" class="break-summary-list"></div>
+      <div class="header-sections">
+        <div id="header-sections-tabs" class="header-sections-tabs" role="toolbar" aria-label="Dashboard sections">
+          <button
+            id="dashboard-top-tab-summary"
+            class="header-sections-tab is-active"
+            type="button"
+            data-header-section-tab="summary"
+            aria-controls="dashboard-summary-section"
+            aria-expanded="true"
+            aria-pressed="true"
+          >Summary</button>
+          <button
+            id="dashboard-top-tab-inspector"
+            class="header-sections-tab"
+            type="button"
+            data-header-section-tab="inspector"
+            aria-controls="dashboard-inspector-section"
+            aria-expanded="false"
+            aria-pressed="false"
+          >Inspector</button>
+          <button
+            id="dashboard-top-tab-hopping"
+            class="header-sections-tab"
+            type="button"
+            data-header-section-tab="hopping"
+            aria-controls="dashboard-hopping-section"
+            aria-expanded="false"
+            aria-pressed="false"
+          >Hopping</button>
         </div>
-      </details>
 
-      <details id="key-inspector" class="inspector">
-        <summary>PKL Key Inspector</summary>
-        <div class="inspector-body">
-          <label for="key-inspector-input">Custom keys (one per line or comma-separated)</label>
-          <textarea
-            id="key-inspector-input"
-            rows="5"
-            placeholder="_.0.record.time
+        <div id="header-sections-panels" class="header-sections-panels">
+          <section id="dashboard-summary-section" class="header-section break-summary" aria-labelledby="dashboard-top-tab-summary">
+            <div class="break-summary-body">
+              <div id="break-summary-status" class="break-summary-status"></div>
+              <div id="break-summary-list" class="break-summary-list"></div>
+            </div>
+          </section>
+
+          <section
+            id="dashboard-inspector-section"
+            class="header-section inspector"
+            aria-labelledby="dashboard-top-tab-inspector"
+            hidden
+          >
+            <div class="inspector-body">
+              <label for="key-inspector-input">Custom keys (one per line or comma-separated)</label>
+              <textarea
+                id="key-inspector-input"
+                rows="5"
+                placeholder="_.0.record.time
 model.atoms
 _.0.record.c"
-          ></textarea>
-          <div class="inspector-actions">
-            <button class="btn" id="key-inspector-run" type="button">Inspect</button>
-            <button class="btn" id="key-inspector-clear" type="button">Clear</button>
-          </div>
-          <div id="key-inspector-status" class="inspector-status"></div>
-          <div id="key-inspector-results" class="inspector-results"></div>
+              ></textarea>
+              <div class="inspector-actions">
+                <button class="btn" id="key-inspector-run" type="button">Inspect</button>
+                <button class="btn" id="key-inspector-clear" type="button">Clear</button>
+              </div>
+              <div id="key-inspector-status" class="inspector-status"></div>
+              <div id="key-inspector-results" class="inspector-results"></div>
 
-          <div class="inspector-divider"></div>
+              <div class="inspector-divider"></div>
 
-          <label for="expr-inspector-input">Expression (supports tadd/tminus/tprod/tdiv/tneg/tinv/tabs/reduce)</label>
-          <textarea
-            id="expr-inspector-input"
-            rows="4"
-            placeholder="tadd{_.0.record.Etot,-5}
+              <label for="expr-inspector-input">Expression (supports tadd/tminus/tprod/tdiv/tneg/tinv/tabs/reduce)</label>
+              <textarea
+                id="expr-inspector-input"
+                rows="4"
+                placeholder="tadd{_.0.record.Etot,-5}
 tdiv{_.0.record.Etot,_.0.record.A}
 reduce{tabs{_.0.record.TWFpop},[-1]}"
-          ></textarea>
-          <label for="expr-inspector-label">Expression label (optional)</label>
-          <input
-            id="expr-inspector-label"
-            type="text"
-            placeholder="Etot minus 5"
-          />
-          <div class="inspector-actions">
-            <button class="btn" id="expr-inspector-run" type="button">Run Expression</button>
-            <button class="btn" id="expr-inspector-add" type="button">Add Expression Panel</button>
-            <button class="btn" id="expr-inspector-clear" type="button">Clear</button>
-          </div>
-          <div id="expr-inspector-status" class="inspector-status"></div>
-          <div id="expr-inspector-results" class="inspector-results"></div>
-        </div>
-      </details>
+              ></textarea>
+              <label for="expr-inspector-label">Expression label (optional)</label>
+              <input
+                id="expr-inspector-label"
+                type="text"
+                placeholder="Etot minus 5"
+              />
+              <div class="inspector-actions">
+                <button class="btn" id="expr-inspector-run" type="button">Run Expression</button>
+                <button class="btn" id="expr-inspector-add" type="button">Add Expression Panel</button>
+                <button class="btn" id="expr-inspector-clear" type="button">Clear</button>
+              </div>
+              <div id="expr-inspector-status" class="inspector-status"></div>
+              <div id="expr-inspector-results" class="inspector-results"></div>
+            </div>
+          </section>
 
+          <section
+            id="dashboard-hopping-section"
+            class="header-section inspector hopping-panel"
+            aria-labelledby="dashboard-top-tab-hopping"
+            hidden
+          >
+            <div class="inspector-body">
+              <div class="hopping-toolbar">
+                <div class="control-group hopping-control-group">
+                  <label for="hopping-algorithm">Hopping algorithm</label>
+                  <select id="hopping-algorithm"></select>
+                </div>
+                <div class="control-group hopping-control-group">
+                  <label for="hopping-time-rule">Event time</label>
+                  <select id="hopping-time-rule"></select>
+                </div>
+                <div class="inspector-actions">
+                  <button class="btn" id="hopping-add-group" type="button">Add Hop</button>
+                  <button class="btn primary" id="hopping-apply" type="button">Apply Hopping</button>
+                </div>
+              </div>
+              <div id="hopping-groups" class="hopping-groups"></div>
+              <div id="hopping-status" class="inspector-status"></div>
+              <div id="hopping-summary" class="inspector-results"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="dataset-empty-state" class="dataset-empty-state" hidden>
+      <div class="dataset-empty-state-title">No dataset loaded</div>
+      <div class="dataset-empty-state-copy">Open a PKL file to populate trajectories and enable plotting.</div>
     </div>
 
     <div id="dashboard" class="dashboard"></div>
 
     <div class="footer-tools">
       <button class="btn primary" id="add-panel">Add Panel</button>
+      <button class="btn" id="export-all-panels-data">Export All Data TAR.GZ</button>
+      <button class="btn" id="export-panels">Export Panels</button>
+      <button class="btn" id="import-panels">Import Panels</button>
       <button class="btn" id="reset-panels">Reset to Default</button>
+      <input id="import-panels-file" type="file" accept=".json,application/json" hidden />
       <span class="status" id="panel-status"></span>
+    </div>
+  </div>
+
+  <div id="file-browser-modal" class="file-browser-modal" hidden aria-hidden="true">
+    <div class="file-browser-backdrop" data-file-browser-close></div>
+    <div
+      class="file-browser-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="file-browser-title"
+    >
+      <div class="file-browser-header">
+        <div>
+          <div class="file-browser-title" id="file-browser-title">Open PKL</div>
+          <div class="file-browser-root" id="file-browser-root">Root: ...</div>
+        </div>
+        <button class="btn" id="file-browser-close-btn" type="button">Close</button>
+      </div>
+      <div class="file-browser-toolbar">
+        <button class="btn" id="file-browser-up-btn" type="button">Up</button>
+        <div class="file-browser-path" id="file-browser-path">/</div>
+      </div>
+      <div class="file-browser-status" id="file-browser-status"></div>
+      <div class="file-browser-list" id="file-browser-list"></div>
     </div>
   </div>
 

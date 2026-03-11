@@ -1,6 +1,6 @@
 # Observable Dashboard 功能总览
 
-`tools/observable_dashboard` 当前以 **Python 后端计算模式** 运行：启动 API 服务加载 `dump_all.pkl`，前端只负责参数控制和图形展示（Index + Molecule3D 均已后端化）。
+当前仓库以 **Python 后端计算模式** 运行：启动 API 服务加载 `dump_all.pkl`，前端只负责参数控制和图形展示（Index + Molecule3D 均已后端化）。
 
 - 主页面入口：`http://127.0.0.1:8000/`（默认）
 - 3D 页面入口：`http://127.0.0.1:8000/molecule3d.html`
@@ -10,12 +10,12 @@
 
 ## 快速开始
 
-在仓库根目录运行（推荐）：
+在当前仓库根目录运行（推荐）：
 
 ```bash
-python -m tools.observable_dashboard.serve \
+python main.py \
   -i run0/dump_all.pkl \
-  -c tools/viz_config.yaml \
+  -c ../viz_config.yaml \
   --host 127.0.0.1 \
   --port 8000
 ```
@@ -24,7 +24,7 @@ python -m tools.observable_dashboard.serve \
 
 - `http://127.0.0.1:8000/`
 
-> 说明：`python -m tools.observable_dashboard.cli` 的静态导出模式已移除，仅保留 `serve` 模式。
+> 说明：当前仓库仅保留 `serve` 模式；若使用模块方式，可改为 `python -m backend.serve ...`。
 
 后端接口：
 
@@ -36,32 +36,19 @@ python -m tools.observable_dashboard.serve \
 - `POST /api/ensemble-series`
 - `GET /api/molecule3d/trajectory/{traj_id}`
 
-### Notebook publish 规则
-
-- Notebook `publish()` 产出的变量会在后端入库时默认丢弃 `t == 0` 的点（严格等于零判定）。
-- 该规则仅作用于 notebook 变量，不影响 `raw_key`、`expression` 与内建 observable 的计算结果。
-
-### 布局与路由自动检查
-
-可运行以下脚本进行自动化冒烟校验（资源路径、模板脚本顺序、API-only 模板注入、关键路由可用性）：
-
-```bash
-python tools/observable_dashboard/scripts/check_static_layout.py
-```
-
 ### 离线 Vendor 依赖
 
 前端第三方库已随仓库内置，不再依赖外网 CDN：
 
-- `tools/observable_dashboard/static/vendor/plotly-2.35.2.min.js`
-- `tools/observable_dashboard/static/vendor/3Dmol-min.js`（3dmol `2.0.3`）
-- `tools/observable_dashboard/static/vendor/gif.min.js`
-- `tools/observable_dashboard/static/vendor/gif.worker.js`
+- `frontend/public/assets/vendor/plotly-2.35.2.min.js`
+- `frontend/public/assets/vendor/3Dmol-min.js`（3Dmol.js `2.5.4`）
+- `frontend/public/assets/vendor/gif.min.js`
+- `frontend/public/assets/vendor/gif.worker.js`
 
 当前文件校验值（sha256）：
 
 - `plotly-2.35.2.min.js`: `6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603`
-- `3Dmol-min.js`: `bc9fca2efffeaf8f5491c811ac232fc91a8f47600008d0eac98f94d5e471d690`
+- `3Dmol-min.js`: `1297081865a4d6c0b2ac22d3e909724da8c03ba0caf7bfc78c8a3d9d8b143f4e`
 - `gif.min.js`: `a8b111071bb3b123c302e6182c01d6b3550f93a4b627398b07c46875d84090bb`
 - `gif.worker.js`: `ca9e3048557ec05d619e18b83403cd3669c88939e5fa2d6034ce7625d445970d`
 
@@ -144,17 +131,19 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - 统一通过后端 API 拉取坐标：`GET /api/molecule3d/trajectory/{traj_id}`
 - 按 traj 整条加载，切换 traj 时仅请求目标 traj
 - 首次请求后命中后端 LRU 缓存会返回更快（响应字段 `cached=true`）
+- 3D 渲染基于 `3Dmol.js` / WebGL；播放时复用单个 model，并通过 `setFrame()` 切帧，避免逐帧重建模型
 
 ### 1) 基础浏览
 
-- 顶部控件采用“主栏 + 折叠分组”：主栏常显 `Trajectory / Play / Frame / Export GIF`
-- `Measure`、`Playback`（Speed/Stride）、`GIF Range`（Start/End）位于折叠分组，默认收起
+- 顶部控件采用“主栏 + 折叠分组”：主栏常显 `Trajectory / Play / Frame / Export`
+- `Measure`、`Playback`（Speed/Stride）、`Render`、`Vectors`、`GIF Range`（Start/End）位于折叠分组
 - `Trajectory` 下拉切换轨线
 - `Play / Pause` 播放或暂停
 - `Speed` 滑条调节播放速率（`1x ~ 10x`，步长 `0.5x`，默认 `1x = 10 FPS`）
 - `Stride` 滑条调节跳帧间隔（`x1 ~ x20`，步长 `1`，默认 `x1`）
 - `Frame` 滑条切帧
 - `Atom Indices` 显示/隐藏原子编号（0-based）
+  - 播放中会自动隐藏，暂停后恢复，以降低逐帧标签创建开销
 
 ### 2) 视角缩放行为
 
@@ -168,27 +157,50 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 - `Save Frame XYZ`：导出当前帧
 - `Save Trajectory XYZ`：导出当前轨线全部帧
+- XYZ 文本在导出时按需生成，不再作为逐帧渲染主数据缓存
 
 文件名规则：
 
 - 当前帧：`traj_<trajId>_frame_<frame>.xyz`
 - 全轨线：`traj_<trajId>_all_frames.xyz`
 
-### 4) GIF 动图导出
+### 4) GIF / Video 导出
 
 - `GIF Start` / `GIF End`：导出区间（0-based，默认全轨线）
 - `Export GIF`：导出 3D 视窗动图（仅 viewer 区域）
+- `Export Video`：导出 WebM 视频（浏览器支持 `MediaRecorder` 时可用）
 - `Cancel GIF`：导出过程中可取消
 - 导出开始时会自动展开 `GIF Range` 分组，确保进度和取消按钮可见
 - 导出采样跟随当前 `Stride`（导出帧序列按 `start..end` 以 `stride` 递增）
 - 导出 fps 跟随当前播放有效帧率（`BASE_FPS * Speed / Stride`，带范围保护）
-- 导出进度显示在控制区：`GIF current/total (percent%)`
+- 导出进度显示在控制区：`GIF current/total (percent%)` 或 `VIDEO current/total (percent%)`
 
 文件名规则：
 
 - `traj_<trajId>_frames_<start>_<end>_stride_<stride>_fps_<fps>.gif`
+- `traj_<trajId>_frames_<start>_<end>_stride_<stride>_fps_<fps>.webm`
 
-### 5) 几何量测量（Bond / Angle / Dihedral）
+### 5) Render 分组
+
+- `Atom Size`：调节球半径缩放
+- `Bond Radius`：调节 stick 半径缩放
+- `H-Bond Width`：调节氢键虚线粗细
+- `Atom Style Rules`：按原子索引范围覆写局部渲染模式
+  - 支持 `sphere` / `stick` / `line` / `cartoon`
+  - 规则输入支持 `N`、`A-B`、`A-`
+  - 添加、删除或清空规则时，会刷新当前 model style，但不重建整条轨迹
+
+### 6) Hydrogen Bonds 与向量叠加层
+
+- `Hydrogen Bonds`：按轨线从后端按需计算并缓存
+  - 判定规则：`donor-acceptor distance < 3.5 Å` 且 `D-H-A angle > 150°`
+  - 返回 payload 中的 `distance` 字段即 `D...A` 距离
+- `NAC` / `dE` / `dE*NAC`：
+  - 可按 state pair 显示向量箭头
+  - 支持独立缩放
+  - `dE` 允许对角与非对角 pair；`NAC` 与 `dE*NAC` 保持 `i != j`
+
+### 7) 几何量测量（Bond / Angle / Dihedral）
 
 - 顶部提供 `Measure` 类型切换：`Bond` / `Angle` / `Dihedral`
 - `Select <Type>`：进入当前类型选点模式（0-based）
@@ -217,6 +229,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - 切换 `Measure` 类型时，各类型历史跟踪数据会保留并独立管理。
 
 实现备注（开发者）：`molecule3d` 前端逻辑已按模块拆分为 `shared / geometry / measurement / viewer / io / page(orchestrator)`，便于维护与扩展。
+当前还包含 `store / vector_overlay / hbond / io_transformers / io_network / io_vector_ops` 等模块，用于状态同步、叠加层绘制与 API 交互。
 
 ---
 
@@ -225,7 +238,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 ### 1) 常用 serve 参数
 
 - `-i, --input`：输入 pkl（默认 `run0/dump_all.pkl`）
-- `-c, --config`：配置文件（默认 `tools/viz_config.yaml`）
+- `-c, --config`：配置文件（当前仓库常用示例为 `../viz_config.yaml`）
 - `--host / --port`：服务地址与端口
 - `--cache-size`：Index `/api/series` LRU 容量（默认 `512`）
 - `--mol3d-cache-size`：3D 轨线坐标 LRU 容量（默认 `64`）
@@ -243,7 +256,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 - `--drop-zero-frames`（默认开启）
 - `--keep-zero-frames`（关闭过滤）
 
-### 2) 配置文件能力（`viz_config.yaml`）
+### 2) 配置文件能力（示例：`../viz_config.yaml`）
 
 - `panels`：默认面板配置（observable + indices）
   - 若 observable 使用 `|c|^2`，YAML 中建议写为带引号字符串：`'|c|^2'`
@@ -299,7 +312,7 @@ python tools/observable_dashboard/scripts/check_static_layout.py
 
 优先检查：
 
-1. `python -m tools.observable_dashboard.serve ...` 是否正常启动且无报错
+1. `python main.py ...` 或 `python -m backend.serve ...` 是否正常启动且无报错
 2. 浏览器访问地址是否正确（默认 `http://127.0.0.1:8000/`）
 3. 浏览器控制台是否有脚本报错
 

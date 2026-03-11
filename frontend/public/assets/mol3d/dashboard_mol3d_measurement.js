@@ -6,6 +6,12 @@
 
   const { dom, constants, state, measureTypeButtons } = shared;
 
+  function getFrameCount() {
+    return typeof shared.getCurrentFrameCount === 'function'
+      ? shared.getCurrentFrameCount()
+      : (Array.isArray(state.currentCoords) ? state.currentCoords.length : 0);
+  }
+
   function getAppearanceModule() {
     return window.ObservableAppearance || null;
   }
@@ -73,8 +79,8 @@
   function rerenderCurrentFrame() {
     const viewerModule = root.viewer;
     if (!viewerModule || typeof viewerModule.renderFrame !== 'function') return;
-    if (!state.currentTrajId || !state.xyzFrames.length) return;
-    viewerModule.renderFrame(state.currentFrame);
+    if (!state.currentTrajId || getFrameCount() <= 0) return;
+    void viewerModule.renderFrame(state.currentFrame);
   }
 
   function refreshViews({ controls = true, plot = true, viewer = true } = {}) {
@@ -341,7 +347,7 @@
     if (dom.selectBondBtn) {
       dom.selectBondBtn.classList.toggle('active', !!state.isMeasureSelectMode);
       dom.selectBondBtn.textContent = state.isMeasureSelectMode ? 'Selecting…' : `Select ${meta.displayName}`;
-      dom.selectBondBtn.disabled = !state.currentTrajId || !state.xyzFrames.length;
+      dom.selectBondBtn.disabled = !state.currentTrajId || getFrameCount() <= 0;
     }
     if (dom.clearBondBtn) {
       dom.clearBondBtn.textContent = `Clear ${meta.displayName}`;
@@ -392,7 +398,7 @@
 
   function toggleMeasureSelectMode() {
     const meta = shared.getMeasureMeta();
-    if (!state.currentTrajId || !state.xyzFrames.length) return;
+    if (!state.currentTrajId || getFrameCount() <= 0) return;
     if (state.isMeasureSelectMode) {
       disableMeasurementSelectMode();
       shared.setStatus(`${meta.displayName} selection canceled.`);

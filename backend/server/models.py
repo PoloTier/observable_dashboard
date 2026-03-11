@@ -20,6 +20,33 @@ class RefreshDatasetResponse(BaseModel):
     dataset_revision: int
 
 
+class LoadDatasetRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+
+
+class LoadDatasetResponse(BaseModel):
+    status: str
+    traj_count: int
+    source_pkl: str
+    cleared_series_cache_entries: int
+    cleared_mol3d_cache_entries: int
+    dataset_revision: int
+
+
+class FileBrowserEntry(BaseModel):
+    name: str
+    relative_path: str
+    kind: Literal["directory", "file"]
+    loadable: bool = False
+
+
+class FileBrowserResponse(BaseModel):
+    root_label: str
+    current_path: str
+    parent_path: str | None = None
+    entries: list[FileBrowserEntry]
+
+
 class RawKeyAliasItem(BaseModel):
     alias: str = Field(..., min_length=1)
     raw_key: str = Field(..., min_length=1)
@@ -125,6 +152,63 @@ class EnsembleSeriesResponse(BaseModel):
     cached: bool
 
 
+HoppingAlgorithm = Literal["max_abs_c"]
+HoppingTimeRule = Literal["arrival_frame"]
+
+
+class HoppingTransitionRequest(BaseModel):
+    from_state: int
+    to_state: int
+
+
+class HoppingTransitionItem(BaseModel):
+    transition_key: str
+    from_state: int
+    to_state: int
+
+
+class HoppingEventItem(BaseModel):
+    transition_key: str
+    from_state: int
+    to_state: int
+    frame_from: int
+    frame_to: int
+    time: float
+
+
+class HoppingTrajCountItem(BaseModel):
+    traj_id: str
+    transition_key: str
+    from_state: int
+    to_state: int
+    count: int
+
+
+class HoppingTransitionTotalItem(BaseModel):
+    transition_key: str
+    from_state: int
+    to_state: int
+    count: int
+
+
+class HoppingEventsRequest(BaseModel):
+    traj_ids: list[str] = Field(default_factory=list)
+    algorithm: HoppingAlgorithm
+    time_rule: HoppingTimeRule
+    transitions: list[HoppingTransitionRequest] = Field(default_factory=list)
+
+
+class HoppingEventsResponse(BaseModel):
+    traj_ids: list[str]
+    algorithm: HoppingAlgorithm
+    time_rule: HoppingTimeRule
+    transitions: list[HoppingTransitionItem]
+    events_by_traj: dict[str, list[HoppingEventItem]]
+    counts_by_traj: list[HoppingTrajCountItem]
+    totals_by_transition: list[HoppingTransitionTotalItem]
+    cached: bool
+
+
 ExpressionScope = Literal["trajectory", "dataset"]
 
 
@@ -178,100 +262,6 @@ class ExpressionDatasetResponse(BaseModel):
     n_components: int | None = None
     n_trajectories: int
     sample_count: list[int] | None = None
-    cached: bool
-
-
-NotebookExecMode = Literal["current", "all"]
-
-
-class NotebookSessionResponse(BaseModel):
-    session_id: str
-    dataset_revision: int
-    source_pkl: str
-    traj_ids: list[str]
-    session_version: int
-
-
-class NotebookSessionResetResponse(BaseModel):
-    status: str
-    session_id: str
-    dataset_revision: int
-    session_version: int
-
-
-class NotebookVariableSummary(BaseModel):
-    name: str
-    series_kind: Literal["scalar", "matrix"]
-    traj_count: int
-    n_points: int
-    n_components: int | None = None
-    component_labels: list[str] | None = None
-    preview_traj_id: str | None = None
-    dtype: str
-    shape: list[int]
-    nan_count: int
-    updated_at: float
-
-
-class NotebookPublishedListResponse(BaseModel):
-    session_id: str
-    session_version: int
-    variables: list[NotebookVariableSummary]
-
-
-class NotebookExecuteRequest(BaseModel):
-    code: str = Field(..., min_length=1)
-    mode: NotebookExecMode
-    traj_id: str | None = None
-
-
-class NotebookExecuteResponse(BaseModel):
-    ok: bool
-    session_id: str
-    mode: NotebookExecMode
-    traj_id: str | None = None
-    stdout: str
-    stderr: str
-    error_message: str | None = None
-    traceback: str | None = None
-    published_updates: list[str]
-    run_ms: float
-    session_version: int
-    dataset_revision: int
-
-
-class NotebookSeriesRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    variable: str = Field(..., min_length=1)
-    traj_id: str = Field(..., min_length=1)
-
-
-class NotebookSeriesResponse(BaseModel):
-    session_id: str
-    variable: str
-    traj_id: str
-    series_kind: Literal["scalar", "matrix"]
-    time: list[float]
-    value: list[float | None] | None = None
-    values: list[list[float | None]] | None = None
-    n_points: int
-    n_components: int | None = None
-    component_labels: list[str] | None = None
-    cached: bool
-
-
-class NotebookEnsembleRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    variable: str = Field(..., min_length=1)
-    stat_mode: EnsembleStatMode
-
-
-class NotebookEnsembleResponse(BaseModel):
-    session_id: str
-    variable: str
-    stat_mode: EnsembleStatMode
-    component_series: list[EnsembleComponentSeries]
-    n_trajectories: int
     cached: bool
 
 

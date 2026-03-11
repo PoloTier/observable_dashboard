@@ -13,6 +13,12 @@
   let viewerResizeObserver = null;
   let removeAppearanceSubscription = null;
 
+  function getFrameCount() {
+    return typeof shared.getCurrentFrameCount === 'function'
+      ? shared.getCurrentFrameCount()
+      : (Array.isArray(state.currentCoords) ? state.currentCoords.length : 0);
+  }
+
   function bind(el, event, handler) {
     if (el) el.addEventListener(event, handler);
   }
@@ -63,7 +69,21 @@
     bind(dom.frameSlider, 'input', () => {
       viewer.stopPlayback();
       const idx = Number.parseInt(dom.frameSlider.value, 10);
-      if (Number.isFinite(idx)) viewer.renderFrame(idx);
+      if (Number.isFinite(idx)) void viewer.renderFrame(idx);
+    });
+
+    const stepFrame = (delta) => {
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      viewer.stopPlayback();
+      void viewer.renderFrame(state.currentFrame + delta);
+    };
+
+    bind(dom.framePrevBtn, 'click', () => {
+      stepFrame(-1);
+    });
+
+    bind(dom.frameNextBtn, 'click', () => {
+      stepFrame(1);
     });
   }
 
@@ -80,14 +100,26 @@
     });
 
     bind(dom.playBtn, 'click', () => {
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      if (state.isPlaying) viewer.stopPlayback();
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      if (state.isPlaying) viewer.stopPlayback({ renderCurrentFrame: true });
       else viewer.startPlayback();
     });
 
     bind(dom.showAtomIndexCheckbox, 'change', () => {
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      void viewer.renderFrame(state.currentFrame);
+    });
+
+    bind(dom.dynamicBondsCheckbox, 'change', () => {
+      const enabled = !!dom.dynamicBondsCheckbox?.checked;
+      viewer.stopPlayback();
+      if (typeof viewer.setDynamicBondsEnabled === 'function') {
+        viewer.setDynamicBondsEnabled(enabled);
+      } else {
+        state.dynamicBonds = enabled;
+      }
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      void viewer.renderFrame(state.currentFrame);
     });
 
     bind(dom.showHydrogenBondsCheckbox, 'change', async () => {
@@ -98,32 +130,35 @@
         return;
       }
       state.showHydrogenBonds = enabled;
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      void viewer.renderFrame(state.currentFrame);
     });
 
     bind(dom.atomSizeSlider, 'input', () => {
       shared.dispatch(shared.actions.setAtomSizeScale(dom.atomSizeSlider?.value));
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      viewer.refreshModelStyle();
+      void viewer.renderFrame(state.currentFrame);
     });
 
     bind(dom.bondRadiusSlider, 'input', () => {
       shared.dispatch(shared.actions.setBondRadiusScale(dom.bondRadiusSlider?.value));
-      if (!state.currentTrajId || !state.xyzFrames.length) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      viewer.refreshModelStyle();
+      void viewer.renderFrame(state.currentFrame);
     });
 
     bind(dom.hbondLineWidthSlider, 'input', () => {
       shared.dispatch(shared.actions.setHbondLineScale(dom.hbondLineWidthSlider?.value));
-      if (!state.currentTrajId || !state.xyzFrames.length || !state.showHydrogenBonds) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0 || !state.showHydrogenBonds) return;
+      void viewer.renderFrame(state.currentFrame);
     });
   }
 
-  function rerenderCurrentFrameIfReady() {
-    if (!state.currentTrajId || !state.xyzFrames.length) return;
-    viewer.renderFrame(state.currentFrame);
+  function refreshModelStyleAndRender() {
+    if (!state.currentTrajId || getFrameCount() <= 0) return;
+    viewer.refreshModelStyle();
+    void viewer.renderFrame(state.currentFrame);
   }
 
   function addAtomStyleRuleFromInputs() {
@@ -133,7 +168,7 @@
     if (!rule) return;
     if (dom.atomStyleRangeInput) dom.atomStyleRangeInput.value = '';
     shared.setStatus(`Added atom-style rule ${rule.rawSpec} -> ${rule.mode}.`);
-    rerenderCurrentFrameIfReady();
+    refreshModelStyleAndRender();
   }
 
   function bindRenderStyleRuleControls() {
@@ -158,7 +193,7 @@
         return;
       }
       shared.setStatus(`Cleared ${cleared} atom-style rule${cleared === 1 ? '' : 's'}.`);
-      rerenderCurrentFrameIfReady();
+      refreshModelStyleAndRender();
     });
 
     bind(dom.atomStyleRulesEl, 'click', (event) => {
@@ -171,7 +206,7 @@
       const removed = shared.removeAtomRenderRule(ruleId);
       if (!removed) return;
       shared.setStatus('Removed atom-style rule.');
-      rerenderCurrentFrameIfReady();
+      refreshModelStyleAndRender();
     });
   }
 
@@ -271,20 +306,20 @@
 
     bind(dom.nacScaleSlider, 'input', () => {
       shared.dispatch(shared.actions.setNacUserScale(dom.nacScaleSlider?.value));
-      if (!state.currentTrajId || !state.xyzFrames.length || !state.showNacVectors) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0 || !state.showNacVectors) return;
+      void viewer.renderFrame(state.currentFrame);
     });
 
     bind(dom.deScaleSlider, 'input', () => {
       shared.dispatch(shared.actions.setDeUserScale(dom.deScaleSlider?.value));
-      if (!state.currentTrajId || !state.xyzFrames.length || !state.showDeVectors) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0 || !state.showDeVectors) return;
+      void viewer.renderFrame(state.currentFrame);
     });
 
     bind(dom.deNacScaleSlider, 'input', () => {
       shared.dispatch(shared.actions.setDeNacUserScale(dom.deNacScaleSlider?.value));
-      if (!state.currentTrajId || !state.xyzFrames.length || !state.showDeNacVectors) return;
-      viewer.renderFrame(state.currentFrame);
+      if (!state.currentTrajId || getFrameCount() <= 0 || !state.showDeNacVectors) return;
+      void viewer.renderFrame(state.currentFrame);
     });
   }
 

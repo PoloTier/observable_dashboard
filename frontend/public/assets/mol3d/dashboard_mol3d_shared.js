@@ -91,8 +91,11 @@
     playbackStrideSlider: document.getElementById('playback-stride-slider'),
     playbackStrideLabel: document.getElementById('playback-stride-label'),
     frameSlider: document.getElementById('frame-slider'),
+    framePrevBtn: document.getElementById('frame-prev-btn'),
+    frameNextBtn: document.getElementById('frame-next-btn'),
     frameLabel: document.getElementById('frame-label'),
     showAtomIndexCheckbox: document.getElementById('show-atom-index'),
+    dynamicBondsCheckbox: document.getElementById('dynamic-bonds'),
     atomSizeSlider: document.getElementById('atom-size-slider'),
     atomSizeLabel: document.getElementById('atom-size-label'),
     bondRadiusSlider: document.getElementById('bond-radius-slider'),
@@ -158,7 +161,9 @@
 
   const state = {
     viewer: null,
-    timer: null,
+    playbackRafId: 0,
+    playbackLastTickMs: 0,
+    playbackElapsedMs: 0,
     isPlaying: false,
     playbackRate: constants.PLAYBACK_RATE_DEFAULT,
     playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
@@ -180,6 +185,11 @@
     currentCoords: [],
     currentTimes: [],
     currentModel: null,
+    currentModelRenderMode: '',
+    atomIndexLabels: [],
+    atomIndexLabelSignature: '',
+    atomIndexLabelThemeKey: '',
+    transientOverlayLabels: [],
     nacAvailable: false,
     nacStateCount: 0,
     nacComponentCount: 0,
@@ -197,6 +207,9 @@
     showNacVectors: false,
     showDeVectors: false,
     showDeNacVectors: false,
+    desiredShowNacVectors: false,
+    desiredShowDeVectors: false,
+    desiredShowDeNacVectors: false,
     nacStateI: 0,
     nacStateJ: 1,
     deStateI: 0,
@@ -239,6 +252,7 @@
     },
     measurementPlotReady: false,
     isMeasurementColorSettingsOpen: false,
+    dynamicBonds: false,
     showHydrogenBonds: false,
     hbondCache: null,
     atomNumbers: [],
@@ -387,6 +401,12 @@
     }
     if (dom.atomSizeLabel) {
       dom.atomSizeLabel.textContent = formatAtomSizeScale(atomSizeScale);
+    }
+  }
+
+  function syncDynamicBondsUi() {
+    if (dom.dynamicBondsCheckbox) {
+      dom.dynamicBondsCheckbox.checked = !!state.dynamicBonds;
     }
   }
 
@@ -539,7 +559,7 @@
   }
 
   function syncGifExportRangeUi() {
-    const frameCount = Array.isArray(state.xyzFrames) ? state.xyzFrames.length : 0;
+    const frameCount = getCurrentFrameCount();
     const range = clampGifExportRange(state.gifExportRangeStart, state.gifExportRangeEnd, frameCount);
     const maxIdx = Math.max(0, frameCount - 1);
     if (dom.gifExportStartInput) {
@@ -559,7 +579,7 @@
   }
 
   function syncGifExportControlsUi() {
-    const hasFrames = !!state.currentTrajId && Array.isArray(state.xyzFrames) && state.xyzFrames.length > 0;
+    const hasFrames = !!state.currentTrajId && getCurrentFrameCount() > 0;
     const exporting = !!state.isGifExporting;
     if (dom.exportGifBtn) {
       dom.exportGifBtn.disabled = exporting || !hasFrames;
@@ -808,6 +828,10 @@
     return Array.isArray(frame0) ? frame0.length : 0;
   }
 
+  function getCurrentFrameCount() {
+    return Array.isArray(state.currentCoords) ? state.currentCoords.length : 0;
+  }
+
   function getSupportedAtomRenderModes() {
     return ATOM_RENDER_MODES.slice();
   }
@@ -1041,6 +1065,7 @@
   syncPlaybackRateUi();
   syncPlaybackStrideUi();
   syncAtomSizeScaleUi();
+  syncDynamicBondsUi();
   syncBondRadiusScaleUi();
   syncHbondLineScaleUi();
   syncNacScaleUi();
@@ -1083,6 +1108,7 @@
     clampAtomSizeScale,
     formatAtomSizeScale,
     syncAtomSizeScaleUi,
+    syncDynamicBondsUi,
     clampBondRadiusScale,
     formatBondRadiusScale,
     syncBondRadiusScaleUi,
@@ -1120,6 +1146,7 @@
     setDeNacRangeLabel,
     setNacControlsEnabled,
     getCurrentAtomCount,
+    getCurrentFrameCount,
     getSupportedAtomRenderModes,
     normalizeAtomRenderMode,
     parseAtomIndexRuleSpec,

@@ -1,11 +1,11 @@
 # Observable Dashboard
 
-A web-based interactive dashboard for visualizing molecular dynamics observables and trajectories. This tool provides real-time visualization of molecular properties including bonds, angles, dihedrals, energies, and 3D molecular structures.
+A web-based dashboard for visualizing molecular dynamics observables and trajectories. It serves both 2D time-series plots and a 3D `3Dmol.js` / WebGL viewer for trajectory playback, measurements, hydrogen-bond overlays, and vector fields.
 
 ## Features
 
-- **Interactive 2D Plots**: Visualize time-series data for various observables (bonds, angles, dihedrals, energies, eigenvalues, NAC, state populations)
-- **3D Molecular Viewer**: Real-time 3D visualization with playback controls, geometry measurements, and GIF export
+- **Interactive 2D Plots**: Visualize time-series data for bonds, angles, dihedrals, energies, eigenvalues, NAC, state populations, and raw keys
+- **3D Molecular Viewer**: WebGL-based playback with geometry measurements, hydrogen-bond overlays, NAC/dE/dE-NAC vectors, per-atom render rules, and GIF/WebM export
 - **Ensemble Statistics**: Automatic calculation of mean/median with confidence intervals across multiple trajectories
 - **Custom Data Support**: Inspect and plot arbitrary keys from your pickle files
 - **Expression Engine**: Evaluate custom mathematical expressions on your data
@@ -37,15 +37,17 @@ Ensure you have a `dump_all.pkl` file containing your trajectory data with the e
 
 ```bash
 # 方式 1：使用 main.py（推荐）
-python main.py -i run0/dump_all.pkl --host 127.0.0.1 --port 8000
+python main.py -i run0/dump_all.pkl -c ../viz_config.yaml --host 127.0.0.1 --port 8000
 
 # 方式 2：使用模块方式
-python -m backend.serve -i run0/dump_all.pkl --host 127.0.0.1 --port 8000
+python -m backend.serve -i run0/dump_all.pkl -c ../viz_config.yaml --host 127.0.0.1 --port 8000
 
 # 方式 3：安装后使用命令行工具
 pip install -e .
-observable-dashboard -i run0/dump_all.pkl --host 127.0.0.1 --port 8000
+observable-dashboard -i run0/dump_all.pkl -c ../viz_config.yaml --host 127.0.0.1 --port 8000
 ```
+
+If you are not using the example config next to this repository, replace `../viz_config.yaml` with your own YAML config path.
 
 ### 3. Open in Browser
 
@@ -87,6 +89,16 @@ The server provides a REST API:
 - `POST /api/inspect-keys` - Inspect custom data keys
 - `POST /api/raw-key-series` - Get raw key time series
 - `GET /api/molecule3d/trajectory/{traj_id}` - Get 3D coordinates
+- `GET /api/molecule3d/nac/{traj_id}` - Get NAC vectors for a state pair
+- `GET /api/molecule3d/de/{traj_id}` - Get dE vectors for a state pair
+- `GET /api/molecule3d/de_nac/{traj_id}` - Get dE*NAC vectors for a state pair
+- `GET /api/molecule3d/hbonds/{traj_id}` - Get cached hydrogen-bond detections
+
+## Molecule3D Notes
+
+- Trajectory playback is optimized around a single reusable 3Dmol model instead of rebuilding the scene on every frame.
+- Hydrogen bonds are defined with `donor-acceptor distance < 3.5 Å` and `D-H-A angle > 150°`.
+- The returned hydrogen-bond `distance` field is the donor-acceptor distance.
 
 ## Citation
 

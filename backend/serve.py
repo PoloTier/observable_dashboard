@@ -5,14 +5,14 @@ import sys
 from pathlib import Path
 
 from backend.server.cache import SeriesLRUCache
-from backend.server.dataset_store import DatasetLoadOptions, load_dataset_store
+from backend.server.dataset_store import DatasetLoadOptions, build_empty_dataset_store, load_dataset_store
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the Observable Dashboard API server (backend-compute mode)."
     )
-    parser.add_argument("-i", "--input", default="run0/dump_all.pkl", help="Input aggregated pickle file")
+    parser.add_argument("-i", "--input", default=None, help="Input aggregated pickle file")
     parser.add_argument("-c", "--config", default="tools/viz_config.yaml", help="YAML config path")
 
     parser.add_argument("--time-key", default="_.0.record.time", help="Time key")
@@ -56,35 +56,45 @@ def main() -> None:
         print(f"Detail: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
-    options = DatasetLoadOptions(
-        input_path=Path(args.input),
-        config_path=Path(args.config),
-        time_key=args.time_key,
-        coord_key=args.coord_key,
-        etot_key=args.etot_key,
-        eig_key=args.eig_key,
-        nac_key=args.nac_key,
-        drop_zero_frames=args.drop_zero_frames,
-    )
+    config_path = Path(args.config)
+    browse_root = Path.cwd().resolve()
+
+    def _make_options(input_path: Path) -> DatasetLoadOptions:
+        return DatasetLoadOptions(
+            input_path=input_path,
+            config_path=config_path,
+            time_key=args.time_key,
+            coord_key=args.coord_key,
+            etot_key=args.etot_key,
+            eig_key=args.eig_key,
+            nac_key=args.nac_key,
+            drop_zero_frames=args.drop_zero_frames,
+        )
+
+    def _load_store_from_path(input_path: Path):
+        return load_dataset_store(_make_options(input_path))
 
     try:
-        store = load_dataset_store(options)
+        if args.input:
+            store = _load_store_from_path(Path(args.input).resolve())
+        else:
+            store = build_empty_dataset_store(config_path)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"[ERROR] Failed to initialize dataset store: {exc}", file=sys.stderr)
         raise SystemExit(1)
-
-    def _reload_store():
-        return load_dataset_store(options)
 
     app = create_app(
         store,
         SeriesLRUCache(max_entries=args.cache_size),
         mol3d_cache=SeriesLRUCache(max_entries=args.mol3d_cache_size),
-        reload_store=_reload_store,
+        load_store_from_path=_load_store_from_path,
+        browse_root=browse_root,
     )
 
     print("--- Observable Dashboard API ---")
-    print(f"Input: {options.input_path}")
+    source_pkl = str(store.meta.get("source_pkl") or "")
+    print(f"Browse root: {browse_root}")
+    print(f"Input: {source_pkl or '(none loaded)'}")
     print(f"Trajectories: {len(store.traj_ids)}")
     print(f"Series cache entries: {args.cache_size}")
     print(f"Molecule3D cache entries: {args.mol3d_cache_size}")

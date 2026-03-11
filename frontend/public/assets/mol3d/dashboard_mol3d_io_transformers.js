@@ -12,46 +12,132 @@
     return constants.PERIODIC_SYMBOLS[n] || 'C';
   }
 
-  function buildXyzFrames(record) {
-    const coords = Array.isArray(record?.coords) ? record.coords : [];
-    if (!coords.length) return [];
-
-    const nAtoms = Number(record?.n_atoms || (coords[0] ? coords[0].length : 0));
-    if (!Number.isFinite(nAtoms) || nAtoms <= 0) return [];
-
-    let atomNumbers = Array.isArray(record?.atom_numbers) ? record.atom_numbers.slice(0, nAtoms) : [];
+  function normalizeAtomNumbers(rawAtomNumbers, nAtoms) {
+    let atomNumbers = Array.isArray(rawAtomNumbers) ? rawAtomNumbers.slice(0, nAtoms) : [];
     if (atomNumbers.length < nAtoms) {
       atomNumbers = atomNumbers.concat(new Array(nAtoms - atomNumbers.length).fill(6));
     }
+    return atomNumbers;
+  }
 
+  function getTrajectoryFrameCount(record) {
+    const coords = Array.isArray(record?.coords) ? record.coords : [];
     const times = Array.isArray(record?.time) ? record.time : [];
-    const frameCount = Math.min(coords.length, times.length || coords.length);
-    const out = [];
+    return Math.min(coords.length, times.length || coords.length);
+  }
+
+  function sanitizeFrameAtomCoord(atomCoord) {
+    if (!Array.isArray(atomCoord) || atomCoord.length < 3) {
+      return [0, 0, 0];
+    }
+    const x = Number(atomCoord[0]);
+    const y = Number(atomCoord[1]);
+    const z = Number(atomCoord[2]);
+    return [
+      Number.isFinite(x) ? x : 0,
+      Number.isFinite(y) ? y : 0,
+      Number.isFinite(z) ? z : 0,
+    ];
+  }
+
+  function prepareRenderableTrajectory(record) {
+    const coords = Array.isArray(record?.coords) ? record.coords : [];
+    if (!coords.length) {
+      return {
+        ...record,
+        coords: [],
+        time: [],
+        atom_numbers: [],
+        n_atoms: 0,
+      };
+    }
+
+    const nAtoms = Number(record?.n_atoms || (coords[0] ? coords[0].length : 0));
+    if (!Number.isFinite(nAtoms) || nAtoms <= 0) {
+      return {
+        ...record,
+        coords: [],
+        time: [],
+        atom_numbers: [],
+        n_atoms: 0,
+      };
+    }
+
+    const atomNumbers = normalizeAtomNumbers(record?.atom_numbers, nAtoms);
+    const times = Array.isArray(record?.time) ? record.time : [];
+    const frameCount = getTrajectoryFrameCount(record);
+    const sanitizedCoords = [];
+    const sanitizedTimes = [];
 
     for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
       const frame = coords[frameIndex];
       if (!Array.isArray(frame) || frame.length < nAtoms) continue;
 
-      const lines = [
-        String(nAtoms),
-        `Frame ${frameIndex} time=${Number(times[frameIndex] ?? frameIndex).toFixed(6)} fs`
-      ];
-
+      const sanitizedFrame = [];
       for (let atomIndex = 0; atomIndex < nAtoms; atomIndex++) {
-        const xyz = frame[atomIndex];
-        if (!Array.isArray(xyz) || xyz.length < 3) {
-          lines.push('C 0.000000 0.000000 0.000000');
-          continue;
-        }
-
-        const elem = atomicNumberToElement(atomNumbers[atomIndex]);
-        lines.push(`${elem} ${Number(xyz[0]).toFixed(8)} ${Number(xyz[1]).toFixed(8)} ${Number(xyz[2]).toFixed(8)}`);
+        sanitizedFrame.push(sanitizeFrameAtomCoord(frame[atomIndex]));
       }
 
-      out.push(lines.join('\n'));
+      sanitizedCoords.push(sanitizedFrame);
+      sanitizedTimes.push(Number(times[frameIndex] ?? frameIndex));
+    }
+
+    return {
+      ...record,
+      coords: sanitizedCoords,
+      time: sanitizedTimes,
+      atom_numbers: atomNumbers,
+      n_atoms: nAtoms,
+    };
+  }
+
+  function buildXyzFrameFromPrepared(prepared, frameIndex) {
+    const coords = Array.isArray(prepared?.coords) ? prepared.coords : [];
+    if (!coords.length) return '';
+
+    const nAtoms = Number(prepared?.n_atoms || 0);
+    if (!Number.isFinite(nAtoms) || nAtoms <= 0) return '';
+
+    const idx = Number.parseInt(String(frameIndex), 10);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= coords.length) return '';
+
+    const atomNumbers = normalizeAtomNumbers(prepared.atom_numbers, nAtoms);
+    const frame = coords[idx];
+    if (!Array.isArray(frame) || frame.length < nAtoms) return '';
+
+    const lines = [
+      String(nAtoms),
+      `Frame ${idx} time=${Number(prepared.time[idx] ?? idx).toFixed(6)} fs`
+    ];
+
+    for (let atomIndex = 0; atomIndex < nAtoms; atomIndex++) {
+      const xyz = sanitizeFrameAtomCoord(frame[atomIndex]);
+      const elem = atomicNumberToElement(atomNumbers[atomIndex]);
+      lines.push(`${elem} ${Number(xyz[0]).toFixed(8)} ${Number(xyz[1]).toFixed(8)} ${Number(xyz[2]).toFixed(8)}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  function buildXyzFrame(record, frameIndex) {
+    return buildXyzFrameFromPrepared(prepareRenderableTrajectory(record), frameIndex);
+  }
+
+  function buildXyzFrames(record) {
+    const prepared = prepareRenderableTrajectory(record);
+    const frameCount = getTrajectoryFrameCount(prepared);
+    const out = [];
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+      const frameText = buildXyzFrameFromPrepared(prepared, frameIndex);
+      if (frameText) out.push(frameText);
     }
 
     return out;
+  }
+
+  function buildTrajectoryXyz(record) {
+    return buildXyzFrames(record).join('\n');
   }
 
   function normalizeTrajId(trajId) {
@@ -177,7 +263,7 @@
       n_atoms: nAtoms,
       donor_acceptor_atomic_numbers: donorAcceptorAtomicNumbers.length ? donorAcceptorAtomicNumbers : [7, 8, 9],
       hbond_distance_cutoff: parseFiniteOrFallback(payload?.hbond_distance_cutoff, 3.5),
-      hbond_angle_cutoff: parseFiniteOrFallback(payload?.hbond_angle_cutoff, 120),
+      hbond_angle_cutoff: parseFiniteOrFallback(payload?.hbond_angle_cutoff, 150),
       dh_bond_length: parseFiniteOrFallback(payload?.dh_bond_length, 1.3),
       hbonds,
     };
@@ -318,7 +404,12 @@
 
   root.ioTransformers = {
     atomicNumberToElement,
+    normalizeAtomNumbers,
+    getTrajectoryFrameCount,
+    prepareRenderableTrajectory,
+    buildXyzFrame,
     buildXyzFrames,
+    buildTrajectoryXyz,
     normalizeTrajId,
     normalizeTrajectoryPayload,
     normalizeNacPayload,

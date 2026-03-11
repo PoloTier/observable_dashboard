@@ -76,6 +76,13 @@ def test_index_page_includes_theme_bootstrap_and_control() -> None:
     assert "observable_dashboard_theme_v1" in text
     assert 'data-appearance-control' in text
     assert 'id="dashboard-appearance-panel"' in text
+    assert 'id="open-pkl-btn"' in text
+    assert 'id="file-browser-modal"' in text
+    assert 'id="dashboard-top-tab-summary"' in text
+    assert 'id="dashboard-inspector-section"' in text
+    assert 'id="dashboard-top-tab-hopping"' in text
+    assert 'id="dashboard-hopping-section"' in text
+    assert 'id="hopping-apply"' in text
     assert "/assets/dashboard/dashboard.css" in text
 
 
@@ -92,6 +99,7 @@ def test_molecule3d_page_includes_theme_bootstrap_and_control() -> None:
     assert 'id="mol3d-appearance-panel"' in text
     assert 'id="controls-tab-measure"' in text
     assert 'id="gif-range-controls-group"' in text
+    assert 'id="dynamic-bonds"' in text
     assert "/assets/dashboard/dashboard_appearance.js" in text
     assert 'src="assets/mol3d/dashboard_mol3d_page.js"' not in text
 

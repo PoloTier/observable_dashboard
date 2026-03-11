@@ -225,6 +225,32 @@
       background: transparent;
       accent-color: var(--accent);
     }
+    #controls-primary .frame-step-btn {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 999px;
+      border: 1px solid var(--accent-border);
+      background: var(--panel-strong);
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+    }
+    #controls-primary .frame-step-btn:hover:not(:disabled) {
+      background: var(--accent-soft);
+    }
+    #controls-primary .frame-step-btn:disabled {
+      cursor: default;
+      color: var(--muted);
+      border-color: var(--border-soft);
+      background: var(--panel-softer);
+      opacity: 0.72;
+    }
     #controls-primary #frame-label {
       font-size: 12px;
       color: var(--muted);
@@ -886,6 +912,20 @@
             <div class="toolbar-pill toolbar-pill-frame">
               <label for="frame-slider">Frame</label>
               <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" />
+              <button
+                id="frame-prev-btn"
+                class="frame-step-btn"
+                type="button"
+                aria-label="Previous frame"
+                disabled
+              >&lt;</button>
+              <button
+                id="frame-next-btn"
+                class="frame-step-btn"
+                type="button"
+                aria-label="Next frame"
+                disabled
+              >&gt;</button>
               <span id="frame-label">Frame 1/1</span>
             </div>
           </div>
@@ -1020,6 +1060,11 @@
             <label class="check-label" for="show-atom-index">
               <input id="show-atom-index" type="checkbox" />
               Atom Indices
+            </label>
+
+            <label class="check-label" for="dynamic-bonds">
+              <input id="dynamic-bonds" type="checkbox" />
+              Dynamic Bonds
             </label>
 
             <label for="atom-size-slider">Atom Size</label>

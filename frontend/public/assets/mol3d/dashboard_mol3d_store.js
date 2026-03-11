@@ -120,7 +120,7 @@
   function resolveFrameCountFromPayload(payload, state) {
     const fromPayload = Number.parseInt(String(payload.nFrames), 10);
     if (Number.isFinite(fromPayload) && fromPayload >= 0) return fromPayload;
-    const fromState = Array.isArray(state.xyzFrames) ? state.xyzFrames.length : 0;
+    const fromState = Array.isArray(state.currentCoords) ? state.currentCoords.length : 0;
     return Math.max(0, fromState);
   }
 

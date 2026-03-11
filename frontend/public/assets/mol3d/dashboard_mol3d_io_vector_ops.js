@@ -668,6 +668,29 @@
 
   if (!validateConfigs()) return;
 
+  const VECTOR_VISIBILITY_PREFERENCE_FIELDS = Object.freeze({
+    nac: 'desiredShowNacVectors',
+    de: 'desiredShowDeVectors',
+    deNac: 'desiredShowDeNacVectors',
+  });
+
+  function getVisibilityPreferenceField(kind) {
+    const field = VECTOR_VISIBILITY_PREFERENCE_FIELDS[kind];
+    if (!field) {
+      throw new Error(`Unknown vector preference kind: ${kind}`);
+    }
+    return field;
+  }
+
+  function getDesiredVectorVisibility(kind) {
+    return !!state[getVisibilityPreferenceField(kind)];
+  }
+
+  function setDesiredVectorVisibility(kind, enabled) {
+    state[getVisibilityPreferenceField(kind)] = !!enabled;
+    return !!state[getVisibilityPreferenceField(kind)];
+  }
+
   function getStateCount(config) {
     return parseStateCount(state[config.stateCountField]);
   }
@@ -1123,7 +1146,7 @@
   function rerenderCurrentFrame() {
     const viewer = root.viewer;
     if (viewer && typeof viewer.renderFrame === 'function') {
-      viewer.renderFrame(state.currentFrame);
+      void viewer.renderFrame(state.currentFrame);
     }
   }
 
@@ -1135,8 +1158,9 @@
     const config = assertConfig(kind);
     const viewer = root.viewer;
     const shouldShow = !!enabled;
+    setDesiredVectorVisibility(kind, shouldShow);
 
-    if (!state.currentTrajId || !state.xyzFrames.length) {
+    if (!state.currentTrajId || shared.getCurrentFrameCount() <= 0) {
       state[config.showField] = false;
       setCheckboxChecked(config, false);
       return false;
@@ -1148,7 +1172,7 @@
         setCheckboxChecked(config, false);
         shared.setNacControlsEnabled(true);
         shared.setStatus(config.unavailableStatus);
-        if (viewer && typeof viewer.renderFrame === 'function') viewer.renderFrame(state.currentFrame);
+        if (viewer && typeof viewer.renderFrame === 'function') void viewer.renderFrame(state.currentFrame);
         return false;
       }
       try {
@@ -1159,7 +1183,7 @@
         setCheckboxChecked(config, false);
         shared.setNacControlsEnabled(true);
         shared.setStatus(`Failed to load ${config.label} vectors: ${detail}`, true);
-        if (viewer && typeof viewer.renderFrame === 'function') viewer.renderFrame(state.currentFrame);
+        if (viewer && typeof viewer.renderFrame === 'function') void viewer.renderFrame(state.currentFrame);
         return false;
       }
     }
@@ -1169,7 +1193,7 @@
     shared.setNacControlsEnabled(true);
 
     if (viewer && typeof viewer.renderFrame === 'function') {
-      viewer.renderFrame(state.currentFrame);
+      void viewer.renderFrame(state.currentFrame);
     }
     if (shouldShow) {
       shared.setStatus(config.showingStatus());
@@ -1186,8 +1210,9 @@
   async function setDeVectorsVisible(enabled) {
     const config = assertConfig('de');
     const shouldShow = !!enabled;
+    setDesiredVectorVisibility('de', shouldShow);
 
-    if (!state.currentTrajId || !state.xyzFrames.length) {
+    if (!state.currentTrajId || shared.getCurrentFrameCount() <= 0) {
       state.showDeVectors = false;
       setCheckboxChecked(config, false);
       return false;
@@ -1240,6 +1265,79 @@
       shared.setStatus(config.hiddenStatus);
     }
     return true;
+  }
+
+  async function restoreDesiredVectorVisibility() {
+    const restored = [];
+    const unavailable = [];
+    const failed = [];
+
+    const restoreSimpleVector = async (kind) => {
+      const config = assertConfig(kind);
+      state[config.showField] = false;
+      setCheckboxChecked(config, false);
+
+      if (!getDesiredVectorVisibility(kind)) {
+        return;
+      }
+      if (!state[config.availableField] || getStateCount(config) < 2) {
+        unavailable.push(config.label);
+        return;
+      }
+
+      try {
+        await loadVectorPairGeneric(kind, false);
+        state[config.showField] = true;
+        setCheckboxChecked(config, true);
+        restored.push(config.label);
+      } catch (error) {
+        state[config.showField] = false;
+        setCheckboxChecked(config, false);
+        const detail = error instanceof Error ? error.message : String(error);
+        failed.push(`${config.label}(${detail})`);
+      }
+    };
+
+    await restoreSimpleVector('nac');
+
+    const deConfig = assertConfig('de');
+    state.showDeVectors = false;
+    setCheckboxChecked(deConfig, false);
+    if (getDesiredVectorVisibility('de')) {
+      if (!state.deAvailable || getDeSelectorStateCount() < 1) {
+        unavailable.push(deConfig.label);
+      } else {
+        ensureAtLeastOneDeRow();
+        normalizeDeRowsForStateCount();
+        renderDeRowsUi();
+
+        const { enabledRows, loadedCount, errors } = await loadEnabledDeRows(false);
+        if (enabledRows.length > 0 && loadedCount > 0) {
+          state.showDeVectors = true;
+          setCheckboxChecked(deConfig, true);
+          restored.push(deConfig.label);
+        } else if (errors.length > 0) {
+          deConfig.setRangeLabel(deConfig.labels.loadFailed);
+        }
+
+        if (errors.length > 0) {
+          const detail = errors
+            .map(({ row, error }) => {
+              const pair = row ? formatDePair(row.stateI, row.stateJ) : 'unknown';
+              const message = error instanceof Error ? error.message : String(error);
+              return `${pair}(${message})`;
+            })
+            .join('; ');
+          failed.push(`${deConfig.label}(${detail})`);
+        }
+        updateDeMagnitudeStatsFromRows();
+      }
+    }
+
+    await restoreSimpleVector('deNac');
+    shared.setNacControlsEnabled(true);
+
+    return { restored, unavailable, failed };
   }
 
   function setDeNacVectorsVisible(enabled) {
@@ -1543,9 +1641,6 @@
     resetVectorOverlayState('de');
     resetVectorOverlayState('deNac');
 
-    resetNacStateSelection();
-    resetDeStateSelection();
-
     const nacSelectorStateCount = getNacPairSelectorStateCount();
     const deSelectorStateCount = getDeSelectorStateCount();
 
@@ -1604,14 +1699,6 @@
     resetVectorOverlayState('de');
     resetVectorOverlayState('deNac');
 
-    resetNacStateSelection();
-    resetDeStateSelection();
-
-    populateNacStateOptions(0);
-    populateDeStateOptions(0);
-    syncNacStateSelectValues();
-    syncDeStateSelectValues();
-
     shared.syncNacScaleUi();
     shared.syncDeScaleUi();
     shared.syncDeNacScaleUi();
@@ -1657,6 +1744,7 @@
     setNacVectorsVisible,
     setDeVectorsVisible,
     setDeNacVectorsVisible,
+    restoreDesiredVectorVisibility,
     updateNacStatePairFromControls,
     updateDeStatePairFromControls,
     addDeRow,

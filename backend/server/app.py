@@ -3,11 +3,10 @@ from __future__ import annotations
 import logging
 import math
 from threading import Lock
-import time
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -30,8 +29,13 @@ from backend.server.models import (
     ExpressionSeriesResponse,
     EnsembleSeriesRequest,
     EnsembleSeriesResponse,
+    FileBrowserResponse,
     InspectKeysRequest,
     InspectKeysResponse,
+    HoppingEventsRequest,
+    HoppingEventsResponse,
+    LoadDatasetRequest,
+    LoadDatasetResponse,
     MoleculeDeNacResponse,
     MoleculeDeResponse,
     HealthzResponse,
@@ -50,6 +54,7 @@ from backend.server.models import (
 logger = logging.getLogger(__name__)
 MAX_INSPECT_KEYS = 200
 RAW_ALIAS_PREFIX = "raw_alias::"
+LOADABLE_DATASET_SUFFIXES = frozenset({".pkl", ".pickle"})
 
 
 def _normalize_indices(indices: list[int]) -> list[int]:
@@ -98,6 +103,15 @@ def _build_bootstrap_payload(
     payload = dict(store.to_bootstrap(api_base=api_base))
     payload["raw_key_aliases"] = _build_raw_key_alias_items(raw_key_aliases)
     return payload
+
+
+def _dataset_is_loaded(store: DatasetStore) -> bool:
+    return bool(store.meta.get("dataset_loaded"))
+
+
+def _relative_path_text(root: Path, target: Path) -> str:
+    text = target.relative_to(root).as_posix()
+    return "" if text == "." else text
 
 
 def _raw_key_exists(store: DatasetStore, raw_key: str) -> bool:
@@ -349,12 +363,13 @@ def create_app(
     mol3d_cache: SeriesLRUCache | None = None,
     *,
     api_base: str = "/api",
-    reload_store: Callable[[], DatasetStore] | None = None,
+    load_store_from_path: Callable[[Path], DatasetStore] | None = None,
+    browse_root: Path | None = None,
 ) -> FastAPI:
     api_base = api_base.rstrip("/") or "/api"
-    static_version = str(int(time.time()))
     if mol3d_cache is None:
         mol3d_cache = cache
+    browse_root_resolved = Path(browse_root).resolve() if browse_root is not None else None
 
     runtime_lock = Lock()
     runtime_state: dict[str, Any] = {
@@ -382,6 +397,88 @@ def create_app(
                 runtime_state["bootstrap"],
                 int(runtime_state["dataset_revision"]),
             )
+
+    def _resolve_browse_path(relative_path: str | None) -> Path:
+        if browse_root_resolved is None:
+            raise HTTPException(status_code=501, detail="Dataset browsing is not enabled on this server.")
+
+        raw_path = str(relative_path or "").strip()
+        if raw_path and Path(raw_path).is_absolute():
+            raise HTTPException(status_code=400, detail="Absolute paths are not allowed.")
+
+        candidate = browse_root_resolved if not raw_path else browse_root_resolved / raw_path
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"Path not found: {raw_path or '.'}") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to resolve path: {exc}") from exc
+
+        try:
+            resolved.relative_to(browse_root_resolved)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Requested path is outside the browse root.") from exc
+        return resolved
+
+    def _activate_store(new_store: DatasetStore, *, action_label: str, reset_aliases: bool) -> dict[str, Any]:
+        try:
+            with runtime_lock:
+                prev_store = runtime_state["store"]
+                prev_bootstrap = runtime_state["bootstrap"]
+                prev_aliases = dict(runtime_state["raw_key_aliases"])
+                prev_revision = int(runtime_state["dataset_revision"])
+
+                runtime_state["store"] = new_store
+                if reset_aliases:
+                    runtime_state["raw_key_aliases"] = {}
+                _update_bootstrap_locked()
+                runtime_state["dataset_revision"] = prev_revision + 1
+
+                try:
+                    if mol3d_cache is cache:
+                        cleared_series_cache_entries = cache.clear()
+                        cleared_mol3d_cache_entries = cleared_series_cache_entries
+                    else:
+                        cleared_series_cache_entries = cache.clear()
+                        cleared_mol3d_cache_entries = mol3d_cache.clear()
+                except Exception:  # noqa: BLE001
+                    runtime_state["store"] = prev_store
+                    runtime_state["bootstrap"] = prev_bootstrap
+                    runtime_state["raw_key_aliases"] = prev_aliases
+                    runtime_state["dataset_revision"] = prev_revision
+                    logger.exception(
+                        "%s failed during cache clear; rolled back to revision=%d.",
+                        action_label,
+                        prev_revision,
+                    )
+                    raise
+
+                dataset_revision = int(runtime_state["dataset_revision"])
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("%s activation failed.", action_label)
+            raise HTTPException(status_code=500, detail=f"Failed to activate refreshed dataset: {exc}") from exc
+
+        source_pkl = str(new_store.meta.get("source_pkl") or "")
+        logger.info(
+            (
+                "%s succeeded. revision=%d traj_count=%d source_pkl=%s "
+                "cleared_series_cache_entries=%d cleared_mol3d_cache_entries=%d"
+            ),
+            action_label,
+            dataset_revision,
+            len(new_store.traj_ids),
+            source_pkl or "(none)",
+            cleared_series_cache_entries,
+            cleared_mol3d_cache_entries,
+        )
+        return {
+            "status": "ok",
+            "traj_count": len(new_store.traj_ids),
+            "source_pkl": source_pkl,
+            "cleared_series_cache_entries": cleared_series_cache_entries,
+            "cleared_mol3d_cache_entries": cleared_mol3d_cache_entries,
+            "dataset_revision": dataset_revision,
+        }
 
     app = FastAPI(title="Observable Dashboard API", version="1.0.0")
 
@@ -426,7 +523,7 @@ def create_app(
         current_store, _, _ = _get_runtime_snapshot()
         return HealthzResponse(
             status="ok",
-            dataset_loaded=True,
+            dataset_loaded=_dataset_is_loaded(current_store),
             traj_count=len(current_store.traj_ids),
         )
 
@@ -434,6 +531,64 @@ def create_app(
     def get_bootstrap() -> BootstrapResponse:
         _, bootstrap, _ = _get_runtime_snapshot()
         return BootstrapResponse(**bootstrap)
+
+    @app.get(f"{api_base}/files", response_model=FileBrowserResponse)
+    def list_files(path: str | None = None) -> FileBrowserResponse:
+        current_dir = _resolve_browse_path(path)
+        if not current_dir.is_dir():
+            raise HTTPException(status_code=422, detail=f"Path is not a directory: {path or '.'}")
+
+        entries: list[dict[str, Any]] = []
+        for child in current_dir.iterdir():
+            if child.name.startswith("."):
+                continue
+            try:
+                resolved_child = child.resolve(strict=True)
+                resolved_child.relative_to(browse_root_resolved)
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+
+            kind = "directory" if resolved_child.is_dir() else "file" if resolved_child.is_file() else ""
+            if not kind:
+                continue
+
+            entries.append(
+                {
+                    "name": child.name,
+                    "relative_path": _relative_path_text(browse_root_resolved, child),
+                    "kind": kind,
+                    "loadable": kind == "file" and child.suffix.lower() in LOADABLE_DATASET_SUFFIXES,
+                }
+            )
+
+        entries.sort(key=lambda item: (item["kind"] != "directory", str(item["name"]).lower()))
+        parent_path = None if current_dir == browse_root_resolved else _relative_path_text(browse_root_resolved, current_dir.parent)
+        return FileBrowserResponse(
+            root_label=str(browse_root_resolved),
+            current_path=_relative_path_text(browse_root_resolved, current_dir),
+            parent_path=parent_path,
+            entries=entries,
+        )
+
+    @app.post(f"{api_base}/load-dataset", response_model=LoadDatasetResponse)
+    def load_dataset(req: LoadDatasetRequest) -> LoadDatasetResponse:
+        if load_store_from_path is None:
+            raise HTTPException(status_code=501, detail="Dataset loading is not enabled on this server.")
+
+        target_path = _resolve_browse_path(req.path)
+        if not target_path.is_file():
+            raise HTTPException(status_code=422, detail=f"Path is not a file: {req.path}")
+        if target_path.suffix.lower() not in LOADABLE_DATASET_SUFFIXES:
+            raise HTTPException(status_code=422, detail="Only .pkl and .pickle files can be loaded.")
+
+        try:
+            new_store = load_store_from_path(target_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Dataset load failed before activation. path=%s", target_path)
+            raise HTTPException(status_code=500, detail=f"Failed to load dataset: {exc}") from exc
+
+        payload = _activate_store(new_store, action_label="Dataset load", reset_aliases=True)
+        return LoadDatasetResponse(**payload)
 
     @app.post(f"{api_base}/inspect-keys", response_model=InspectKeysResponse)
     def inspect_keys(req: InspectKeysRequest) -> InspectKeysResponse:
@@ -681,6 +836,62 @@ def create_app(
             ),
         )
 
+    @app.post(f"{api_base}/hopping-events", response_model=HoppingEventsResponse)
+    def get_hopping_events(req: HoppingEventsRequest) -> HoppingEventsResponse:
+        traj_ids = []
+        seen_ids: set[str] = set()
+        for raw_traj_id in req.traj_ids:
+            traj_id = str(raw_traj_id).strip()
+            if not traj_id or traj_id in seen_ids:
+                continue
+            traj_ids.append(traj_id)
+            seen_ids.add(traj_id)
+        if not traj_ids:
+            raise HTTPException(status_code=422, detail="At least one traj_id is required for hopping detection.")
+
+        algorithm = str(req.algorithm)
+        time_rule = str(req.time_rule)
+        transitions = [
+            {
+                "from_state": int(item.from_state),
+                "to_state": int(item.to_state),
+            }
+            for item in req.transitions
+        ]
+        cache_key = (
+            "hopping_events",
+            tuple(traj_ids),
+            algorithm,
+            time_rule,
+            tuple((int(item["from_state"]), int(item["to_state"])) for item in transitions),
+        )
+        cached_value = cache.get(cache_key)
+        if cached_value is not None:
+            payload = dict(cached_value)
+            payload["cached"] = True
+            return HoppingEventsResponse(**payload)
+
+        current_store, _, _ = _get_runtime_snapshot()
+        try:
+            payload = current_store.build_hopping_events(
+                traj_ids,
+                algorithm=algorithm,
+                time_rule=time_rule,
+                transitions=transitions,
+            )
+        except KeyError as exc:
+            detail = str(exc.args[0]) if exc.args else str(exc)
+            raise HTTPException(status_code=404, detail=detail) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to compute hopping events: {exc}") from exc
+
+        cache.put(cache_key, payload)
+        out = dict(payload)
+        out["cached"] = False
+        return HoppingEventsResponse(**out)
+
     @app.post(f"{api_base}/ensemble-series", response_model=EnsembleSeriesResponse)
     def get_ensemble_series(req: EnsembleSeriesRequest) -> EnsembleSeriesResponse:
         observable = str(req.observable)
@@ -846,70 +1057,24 @@ def create_app(
 
     @app.post(f"{api_base}/refresh-dataset", response_model=RefreshDatasetResponse)
     def refresh_dataset() -> RefreshDatasetResponse:
-        if reload_store is None:
-            logger.warning("Dataset refresh requested but reload_store is not configured.")
+        if load_store_from_path is None:
+            logger.warning("Dataset refresh requested but load_store_from_path is not configured.")
             raise HTTPException(status_code=501, detail="Dataset refresh is not enabled on this server.")
 
-        _, _, current_revision = _get_runtime_snapshot()
+        current_store, _, current_revision = _get_runtime_snapshot()
+        if not _dataset_is_loaded(current_store):
+            raise HTTPException(status_code=409, detail="No dataset is currently loaded; use load-dataset first.")
+
         logger.info("Dataset refresh requested. current_revision=%d", current_revision)
 
         try:
-            new_store = reload_store()
+            new_store = load_store_from_path(Path(current_store.input_path).resolve())
         except Exception as exc:  # noqa: BLE001
             logger.exception("Dataset reload failed before activation.")
             raise HTTPException(status_code=500, detail=f"Failed to reload dataset: {exc}") from exc
 
-        try:
-            with runtime_lock:
-                prev_store = runtime_state["store"]
-                prev_bootstrap = runtime_state["bootstrap"]
-                prev_revision = int(runtime_state["dataset_revision"])
-
-                runtime_state["store"] = new_store
-                _update_bootstrap_locked()
-                runtime_state["dataset_revision"] = prev_revision + 1
-
-                try:
-                    if mol3d_cache is cache:
-                        cleared_series_cache_entries = cache.clear()
-                        cleared_mol3d_cache_entries = cleared_series_cache_entries
-                    else:
-                        cleared_series_cache_entries = cache.clear()
-                        cleared_mol3d_cache_entries = mol3d_cache.clear()
-                except Exception:  # noqa: BLE001
-                    runtime_state["store"] = prev_store
-                    runtime_state["bootstrap"] = prev_bootstrap
-                    runtime_state["dataset_revision"] = prev_revision
-                    logger.exception("Dataset refresh failed during cache clear; rolled back to revision=%d.", prev_revision)
-                    raise
-
-                dataset_revision = int(runtime_state["dataset_revision"])
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Dataset activation failed.")
-            raise HTTPException(status_code=500, detail=f"Failed to activate refreshed dataset: {exc}") from exc
-
-        source_pkl = str(new_store.meta.get("source_pkl") or new_store.input_path)
-        logger.info(
-            (
-                "Dataset refresh succeeded. revision=%d traj_count=%d source_pkl=%s "
-                "cleared_series_cache_entries=%d cleared_mol3d_cache_entries=%d"
-            ),
-            dataset_revision,
-            len(new_store.traj_ids),
-            source_pkl,
-            cleared_series_cache_entries,
-            cleared_mol3d_cache_entries,
-        )
-        return RefreshDatasetResponse(
-            status="ok",
-            traj_count=len(new_store.traj_ids),
-            source_pkl=source_pkl,
-            cleared_series_cache_entries=cleared_series_cache_entries,
-            cleared_mol3d_cache_entries=cleared_mol3d_cache_entries,
-            dataset_revision=dataset_revision,
-        )
+        payload = _activate_store(new_store, action_label="Dataset refresh", reset_aliases=False)
+        return RefreshDatasetResponse(**payload)
 
     @app.get(f"{api_base}/molecule3d/trajectory/{{traj_id}}", response_model=MoleculeTrajectoryResponse)
     def get_molecule3d_trajectory(traj_id: str) -> MoleculeTrajectoryResponse:

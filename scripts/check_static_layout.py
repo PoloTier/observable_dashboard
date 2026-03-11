@@ -3,11 +3,13 @@
 Smoke checks for observable_dashboard server-mode layout and wiring.
 
 Usage:
+  python scripts/check_static_layout.py
   python tools/observable_dashboard/scripts/check_static_layout.py
 """
 
 from __future__ import annotations
 
+import importlib
 import re
 import sys
 from pathlib import Path
@@ -16,27 +18,42 @@ from typing import Iterable
 import numpy as np
 
 
-def _find_repo_root() -> Path:
+def _find_repo_layout() -> tuple[str, Path]:
     this_file = Path(__file__).resolve()
     for parent in this_file.parents:
-        marker = parent / "tools" / "observable_dashboard" / "renderer.py"
-        if marker.exists():
-            return parent
-    raise RuntimeError("Failed to locate repository root from script location.")
+        if (parent / "backend" / "server" / "app.py").exists() and (parent / "frontend" / "index.html").exists():
+            return "current", parent
+        if (parent / "tools" / "observable_dashboard" / "renderer.py").exists():
+            return "legacy", parent
+    raise RuntimeError("Failed to locate repository root from script location for current or legacy layout.")
 
 
-REPO_ROOT = _find_repo_root()
+LAYOUT_MODE, REPO_ROOT = _find_repo_layout()
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.observable_dashboard.renderer import STATIC_DIR  # noqa: E402
-from tools.observable_dashboard.server.app import create_app  # noqa: E402
-from tools.observable_dashboard.server.cache import SeriesLRUCache  # noqa: E402
+if LAYOUT_MODE == "current":
+    FRONTEND_DIR = REPO_ROOT / "frontend"
+    STATIC_DIR = FRONTEND_DIR / "public" / "assets"
+    INDEX_TEMPLATE = FRONTEND_DIR / "index.html"
+    MOL_TEMPLATE = FRONTEND_DIR / "molecule3d.html"
+    INDEX_ENTRY = FRONTEND_DIR / "src" / "main.js"
+    APP_MODULE = importlib.import_module("backend.server.app")
+    CACHE_MODULE = importlib.import_module("backend.server.cache")
+    MODELS_MODULE = importlib.import_module("backend.server.models")
+else:
+    PKG_DIR = REPO_ROOT / "tools" / "observable_dashboard"
+    FRONTEND_DIR = PKG_DIR
+    INDEX_TEMPLATE = PKG_DIR / "templates" / "index.html.j2"
+    MOL_TEMPLATE = PKG_DIR / "templates" / "molecule3d.html.j2"
+    INDEX_ENTRY = None
+    APP_MODULE = importlib.import_module("tools.observable_dashboard.server.app")
+    CACHE_MODULE = importlib.import_module("tools.observable_dashboard.server.cache")
+    MODELS_MODULE = importlib.import_module("tools.observable_dashboard.server.models")
+    STATIC_DIR = importlib.import_module("tools.observable_dashboard.renderer").STATIC_DIR
 
-
-PKG_DIR = REPO_ROOT / "tools" / "observable_dashboard"
-INDEX_TEMPLATE = PKG_DIR / "templates" / "index.html.j2"
-MOL_TEMPLATE = PKG_DIR / "templates" / "molecule3d.html.j2"
+create_app = APP_MODULE.create_app
+SeriesLRUCache = CACHE_MODULE.SeriesLRUCache
 
 
 EXPECTED_STATIC_RELFILES = {
@@ -44,17 +61,22 @@ EXPECTED_STATIC_RELFILES = {
     "vendor/3Dmol-min.js",
     "vendor/gif.min.js",
     "vendor/gif.worker.js",
+    "dashboard/dashboard_appearance.js",
     "dashboard/dashboard.css",
     "dashboard/dashboard_state.js",
     "dashboard/dashboard_data_loader.js",
     "dashboard/dashboard_plot.js",
     "dashboard/dashboard_ui.js",
     "math/dashboard_math3d.js",
+    "mol3d/dashboard_mol3d_constants.js",
     "mol3d/dashboard_mol3d_shared.js",
+    "mol3d/dashboard_mol3d_utils.js",
     "mol3d/dashboard_mol3d_geometry.js",
     "mol3d/dashboard_mol3d_measurement.js",
     "mol3d/dashboard_mol3d_vector_overlay.js",
+    "mol3d/dashboard_mol3d_hbond.js",
     "mol3d/dashboard_mol3d_viewer.js",
+    "mol3d/dashboard_mol3d_store.js",
     "mol3d/dashboard_mol3d_io_transformers.js",
     "mol3d/dashboard_mol3d_io_network.js",
     "mol3d/dashboard_mol3d_io_vector_ops.js",
@@ -109,49 +131,116 @@ def check_template_paths_and_order() -> None:
     index = _read_text(INDEX_TEMPLATE)
     mol = _read_text(MOL_TEMPLATE)
 
+    if LAYOUT_MODE == "legacy":
+        _assert_subsequence(
+            index,
+            [
+                'src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"',
+                'href="assets/dashboard/dashboard.css?v={{ static_version }}"',
+                'src="assets/dashboard/dashboard_state.js?v={{ static_version }}"',
+                'src="assets/dashboard/dashboard_data_loader.js?v={{ static_version }}"',
+                'src="assets/math/dashboard_math3d.js?v={{ static_version }}"',
+                'src="assets/dashboard/dashboard_plot.js?v={{ static_version }}"',
+                'src="assets/dashboard/dashboard_ui.js?v={{ static_version }}"',
+            ],
+            name="index.html.j2",
+        )
+        _assert_subsequence(
+            mol,
+            [
+                'src="assets/vendor/3Dmol-min.js?v={{ static_version }}"',
+                'src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"',
+                'src="assets/vendor/gif.min.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_shared.js?v={{ static_version }}"',
+                'src="assets/math/dashboard_math3d.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_geometry.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_measurement.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_vector_overlay.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_viewer.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_io_transformers.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_io_network.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_io_vector_ops.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_io_app.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_io.js?v={{ static_version }}"',
+                'src="assets/mol3d/dashboard_mol3d_page.js?v={{ static_version }}"',
+            ],
+            name="molecule3d.html.j2",
+        )
+        return
+
     _assert_subsequence(
         index,
         [
-            'src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"',
-            'href="assets/dashboard/dashboard.css?v={{ static_version }}"',
-            'src="assets/dashboard/dashboard_state.js?v={{ static_version }}"',
-            'src="assets/dashboard/dashboard_data_loader.js?v={{ static_version }}"',
-            'src="assets/math/dashboard_math3d.js?v={{ static_version }}"',
-            'src="assets/dashboard/dashboard_plot.js?v={{ static_version }}"',
-            'src="assets/dashboard/dashboard_ui.js?v={{ static_version }}"',
+            'src="/assets/vendor/plotly-2.35.2.min.js"',
+            'href="/assets/dashboard/dashboard.css"',
+            'src="/src/main.js"',
         ],
-        name="index.html.j2",
+        name="index.html",
+    )
+    _assert(INDEX_ENTRY is not None and INDEX_ENTRY.exists(), "src/main.js is missing")
+    index_entry = _read_text(INDEX_ENTRY)
+    _assert_subsequence(
+        index_entry,
+        [
+            "/assets/dashboard/dashboard_appearance.js",
+            "/assets/dashboard/dashboard_state.js",
+            "/assets/dashboard/dashboard_data_loader.js",
+            "/assets/math/dashboard_math3d.js",
+            "/assets/dashboard/dashboard_plot.js",
+            "/assets/dashboard/dashboard_ui.js",
+        ],
+        name="src/main.js",
     )
     _assert_subsequence(
         mol,
         [
-            'src="assets/vendor/3Dmol-min.js?v={{ static_version }}"',
-            'src="assets/vendor/plotly-2.35.2.min.js?v={{ static_version }}"',
-            'src="assets/vendor/gif.min.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_shared.js?v={{ static_version }}"',
-            'src="assets/math/dashboard_math3d.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_geometry.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_measurement.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_vector_overlay.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_viewer.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_io_transformers.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_io_network.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_io_vector_ops.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_io_app.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_io.js?v={{ static_version }}"',
-            'src="assets/mol3d/dashboard_mol3d_page.js?v={{ static_version }}"',
+            'src="assets/vendor/3Dmol-min.js"',
+            'src="assets/vendor/plotly-2.35.2.min.js"',
+            'src="assets/vendor/gif.min.js"',
+            "/assets/dashboard/dashboard_appearance.js",
+            "/assets/dashboard/dashboard_state.js",
+            "/assets/dashboard/dashboard_data_loader.js",
+            "/assets/mol3d/dashboard_mol3d_constants.js",
+            "/assets/mol3d/dashboard_mol3d_utils.js",
+            "/assets/mol3d/dashboard_mol3d_store.js",
+            "/assets/mol3d/dashboard_mol3d_shared.js",
+            "/assets/math/dashboard_math3d.js",
+            "/assets/mol3d/dashboard_mol3d_geometry.js",
+            "/assets/mol3d/dashboard_mol3d_measurement.js",
+            "/assets/mol3d/dashboard_mol3d_vector_overlay.js",
+            "/assets/mol3d/dashboard_mol3d_hbond.js",
+            "/assets/mol3d/dashboard_mol3d_viewer.js",
+            "/assets/mol3d/dashboard_mol3d_io_transformers.js",
+            "/assets/mol3d/dashboard_mol3d_io_network.js",
+            "/assets/mol3d/dashboard_mol3d_io_vector_ops.js",
+            "/assets/mol3d/dashboard_mol3d_io_app.js",
+            "/assets/mol3d/dashboard_mol3d_io.js",
+            "/assets/mol3d/dashboard_mol3d_page.js",
         ],
-        name="molecule3d.html.j2",
+        name="molecule3d.html",
     )
 
 
 def check_templates_api_only() -> None:
     index = _read_text(INDEX_TEMPLATE)
     mol = _read_text(MOL_TEMPLATE)
-    _assert('id="bootstrap-json"' in index, "index template missing bootstrap-json")
-    _assert('id="bootstrap-json"' in mol, "molecule3d template missing bootstrap-json")
-    _assert('id="payload-json"' not in index, "index template should not include payload-json")
-    _assert('id="payload-json"' not in mol, "molecule3d template should not include payload-json")
+
+    if LAYOUT_MODE == "legacy":
+        _assert('id="bootstrap-json"' in index, "index template missing bootstrap-json")
+        _assert('id="bootstrap-json"' in mol, "molecule3d template missing bootstrap-json")
+        _assert('id="payload-json"' not in index, "index template should not include payload-json")
+        _assert('id="payload-json"' not in mol, "molecule3d template should not include payload-json")
+    else:
+        _assert('id="bootstrap-json"' not in index, "index.html should not inline bootstrap-json")
+        _assert('id="payload-json"' not in index, "index.html should not include payload-json")
+        _assert('id="bootstrap-json"' in mol, "molecule3d.html missing bootstrap-json")
+        _assert('id="payload-json"' not in mol, "molecule3d.html should not include payload-json")
+        _assert(INDEX_ENTRY is not None and INDEX_ENTRY.exists(), "src/main.js is missing")
+        index_entry = _read_text(INDEX_ENTRY)
+        _assert("/api/bootstrap" in index_entry, "src/main.js should fetch /api/bootstrap")
+        _assert("bootstrap-json" in index_entry, "src/main.js should inject bootstrap-json")
+        _assert("/api/bootstrap" in mol, "molecule3d.html should fetch /api/bootstrap")
+
     _assert('id="refresh-pkl-btn"' in index, "index template missing refresh-pkl-btn")
     _assert('id="key-inspector-input"' in index, "index template missing key-inspector-input")
     _assert('id="key-inspector-run"' in index, "index template missing key-inspector-run")
@@ -220,26 +309,33 @@ def check_no_cdn_refs() -> None:
 
 
 def check_renderer_api_surface() -> None:
-    import tools.observable_dashboard.renderer as renderer
+    if LAYOUT_MODE == "legacy":
+        renderer = importlib.import_module("tools.observable_dashboard.renderer")
 
-    _assert(hasattr(renderer, "STATIC_DIR"), "renderer missing STATIC_DIR")
-    _assert(hasattr(renderer, "_json_html_safe"), "renderer missing _json_html_safe")
-    _assert(hasattr(renderer, "_render_html"), "renderer missing _render_html")
-    _assert(not hasattr(renderer, "write_single_page"), "write_single_page should be removed")
-    _assert(not hasattr(renderer, "write_chunked_page"), "write_chunked_page should be removed")
+        _assert(hasattr(renderer, "STATIC_DIR"), "renderer missing STATIC_DIR")
+        _assert(hasattr(renderer, "_json_html_safe"), "renderer missing _json_html_safe")
+        _assert(hasattr(renderer, "_render_html"), "renderer missing _render_html")
+        _assert(not hasattr(renderer, "write_single_page"), "write_single_page should be removed")
+        _assert(not hasattr(renderer, "write_chunked_page"), "write_chunked_page should be removed")
+        return
+
+    _assert(STATIC_DIR.exists(), "frontend public assets directory is missing")
+    _assert(FRONTEND_DIR.exists(), "frontend directory is missing")
+    _assert(hasattr(APP_MODULE, "create_app"), "backend.server.app missing create_app")
+    _assert(hasattr(CACHE_MODULE, "SeriesLRUCache"), "backend.server.cache missing SeriesLRUCache")
+    _assert(hasattr(MODELS_MODULE, "SeriesRequest"), "backend.server.models missing SeriesRequest")
 
 
 def check_app_routes() -> None:
     from types import SimpleNamespace
 
     from fastapi import HTTPException
-    from tools.observable_dashboard.server.models import (
-        EnsembleSeriesRequest,
-        InspectKeysRequest,
-        RawKeyAliasUpsertRequest,
-        RawKeySeriesRequest,
-        SeriesRequest,
-    )
+
+    EnsembleSeriesRequest = MODELS_MODULE.EnsembleSeriesRequest
+    InspectKeysRequest = MODELS_MODULE.InspectKeysRequest
+    RawKeyAliasUpsertRequest = MODELS_MODULE.RawKeyAliasUpsertRequest
+    RawKeySeriesRequest = MODELS_MODULE.RawKeySeriesRequest
+    SeriesRequest = MODELS_MODULE.SeriesRequest
 
     class _FakeTraj:
         def __init__(self) -> None:
@@ -310,7 +406,7 @@ def check_app_routes() -> None:
             self.traj_ids = ["0", "1"]
             self._traj = _FakeTraj()
             self.input_path = Path(f"/tmp/example_v{self.version}.pkl")
-            self.meta = {"source_pkl": str(self.input_path)}
+            self.meta = {"source_pkl": str(self.input_path), "dataset_loaded": True}
             self.raw_key_previews = {
                 "0": {
                     "_.0.record.time": "dtype=float64 shape=(2,) preview=[0.0, 1.0]",
@@ -359,7 +455,11 @@ def check_app_routes() -> None:
             return {
                 "schema_version": 1,
                 "data_mode": "api",
-                "meta": {"traj_ids": self.traj_ids, "source_pkl": f"/tmp/example_v{self.version}.pkl"},
+                "meta": {
+                    "traj_ids": self.traj_ids,
+                    "source_pkl": f"/tmp/example_v{self.version}.pkl",
+                    "dataset_loaded": True,
+                },
                 "defaults": {"panels": [], "plot": {}, "nac": {}, "ui": {}},
                 "traj_ids": list(self.traj_ids),
                 "api_base": api_base,
@@ -588,7 +688,7 @@ def check_app_routes() -> None:
         _FakeStore(version=0),
         SeriesLRUCache(max_entries=16),
         mol3d_cache=SeriesLRUCache(max_entries=8),
-        reload_store=_reload_store,
+        load_store_from_path=lambda _path: _reload_store(),
     )
 
     index_ep = _find_endpoint(app, "/", "GET")
@@ -609,8 +709,13 @@ def check_app_routes() -> None:
     index = index_ep()
     _assert(int(index.status_code) == 200, "GET / should return 200")
     index_text = index.body.decode("utf-8", errors="ignore")
-    _assert('id="bootstrap-json"' in index_text, "GET / missing bootstrap-json")
-    _assert('id="payload-json"' not in index_text, "GET / should not include payload-json")
+    if LAYOUT_MODE == "legacy":
+        _assert('id="bootstrap-json"' in index_text, "GET / missing bootstrap-json")
+        _assert('id="payload-json"' not in index_text, "GET / should not include payload-json")
+    else:
+        _assert('/src/main.js' in index_text, "GET / missing /src/main.js entrypoint")
+        _assert('id="bootstrap-json"' not in index_text, "GET / should not inline bootstrap-json")
+        _assert('id="payload-json"' not in index_text, "GET / should not include payload-json")
 
     mol = mol_page_ep()
     _assert(int(mol.status_code) == 200, "GET /molecule3d.html should return 200")

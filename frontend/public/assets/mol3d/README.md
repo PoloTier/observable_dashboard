@@ -5,6 +5,12 @@ This folder is organized as small, dependency-ordered modules that all attach to
 
 ## Load order
 
+External prerequisite:
+
+1. `dashboard_math3d.js`
+
+Mol3D modules:
+
 1. `dashboard_mol3d_constants.js`
 2. `dashboard_mol3d_utils.js`
 3. `dashboard_mol3d_store.js`
@@ -12,13 +18,14 @@ This folder is organized as small, dependency-ordered modules that all attach to
 5. `dashboard_mol3d_geometry.js`
 6. `dashboard_mol3d_measurement.js`
 7. `dashboard_mol3d_vector_overlay.js`
-8. `dashboard_mol3d_viewer.js`
-9. `dashboard_mol3d_io_transformers.js`
-10. `dashboard_mol3d_io_network.js`
-11. `dashboard_mol3d_io_vector_ops.js`
-12. `dashboard_mol3d_io_app.js`
-13. `dashboard_mol3d_io.js`
-14. `dashboard_mol3d_page.js`
+8. `dashboard_mol3d_hbond.js`
+9. `dashboard_mol3d_viewer.js`
+10. `dashboard_mol3d_io_transformers.js`
+11. `dashboard_mol3d_io_network.js`
+12. `dashboard_mol3d_io_vector_ops.js`
+13. `dashboard_mol3d_io_app.js`
+14. `dashboard_mol3d_io.js`
+15. `dashboard_mol3d_page.js`
 
 ## Responsibilities
 
@@ -38,7 +45,7 @@ This folder is organized as small, dependency-ordered modules that all attach to
   - Bootstrap JSON parsing
   - Shared DOM references and global state assembly
   - Store wiring + compatibility exports (`root.shared.*`)
-  - Generic UI/status helpers
+  - Generic UI/status helpers and frame-count helpers
 
 - `dashboard_mol3d_geometry.js`
   - Geometry adapters around `window.ObservableDashboardMath`
@@ -54,14 +61,18 @@ This folder is organized as small, dependency-ordered modules that all attach to
   - Registry-based vector overlay sources (`registerVectorSource`)
   - Per-frame rendering of all registered vector sources
 
+- `dashboard_mol3d_hbond.js`
+  - Backend-backed hydrogen-bond loading and frame bucketing
+  - H-bond overlay rendering using donor-acceptor criteria from the API payload
+
 - `dashboard_mol3d_viewer.js`
-  - 3Dmol viewer rendering and playback loop
+  - 3Dmol viewer rendering, single-model frame switching, and `requestAnimationFrame` playback loop
   - Overlay labels/lines for highlighted measurements
-  - Delegates vector overlays to the vector-overlay module
+  - Delegates vector and hydrogen-bond overlays to dedicated modules
 
 - `dashboard_mol3d_io_transformers.js`
   - Pure payload/geometry transformation helpers for mol3d IO
-  - XYZ frame construction, payload normalization, NAC magnitude statistics
+  - Renderable trajectory sanitization, on-demand XYZ export helpers, payload normalization, and NAC magnitude statistics
 
 - `dashboard_mol3d_io_network.js`
   - URL construction + fetch wrappers for trajectory/NAC/dE/dE-NAC API endpoints
@@ -75,7 +86,7 @@ This folder is organized as small, dependency-ordered modules that all attach to
   - dE color/auto-scale mapping prefers trajectory-global quantiles (`de_global_norm_*`) so state-pair changes remain comparable
 
 - `dashboard_mol3d_io_app.js`
-  - Application orchestration for trajectory loading, GIF export, and file downloads
+  - Application orchestration for trajectory loading, GIF/WebM export, and file downloads
   - Delegates NAC/dE/dE-NAC vector flows to `root.ioVectorOps`
 
 - `dashboard_mol3d_io.js`
@@ -93,5 +104,7 @@ This folder is organized as small, dependency-ordered modules that all attach to
   avoid breaking cross-module calls.
 - Stage-1 store integration intentionally targets playback/NAC/GIF UI sync
   paths; measurement and IO remain largely direct-state for compatibility.
+- Frame rendering now keeps a persistent 3Dmol model and switches frames via
+  `setFrame()` instead of rebuilding the scene from XYZ text on each tick.
 - Prefer extracting repeated sequences into small helpers
   (for example refresh/render paths and timer restart paths).

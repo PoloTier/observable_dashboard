@@ -12,6 +12,23 @@
   const VIDEO_EXPORT_CANCELED_ERROR = '__video_export_canceled__';
   const VIDEO_EXPORT_UNAVAILABLE_MESSAGE = 'Video export is unavailable in this browser. Please use GIF export.';
 
+  function getFrameCount() {
+    return typeof shared.getCurrentFrameCount === 'function'
+      ? shared.getCurrentFrameCount()
+      : (Array.isArray(state.currentCoords) ? state.currentCoords.length : 0);
+  }
+
+  function buildCurrentTrajectoryRecord() {
+    const frame0 = Array.isArray(state.currentCoords) ? state.currentCoords[0] : null;
+    const atomCount = Array.isArray(frame0) ? frame0.length : 0;
+    return {
+      coords: Array.isArray(state.currentCoords) ? state.currentCoords : [],
+      time: Array.isArray(state.currentTimes) ? state.currentTimes : [],
+      atom_numbers: Array.isArray(state.atomNumbers) ? state.atomNumbers : [],
+      n_atoms: atomCount,
+    };
+  }
+
   function setSourcePklInfo() {
     if (!dom.sourcePklEl) return;
     const sourcePkl = String(meta?.source_pkl || '');
@@ -43,7 +60,7 @@
   }
 
   function saveCurrentFrameXyz() {
-    if (!state.currentTrajId || !state.xyzFrames.length) {
+    if (!state.currentTrajId || getFrameCount() <= 0) {
       shared.setStatus('No frame available to save.', true);
       return;
     }
@@ -51,7 +68,12 @@
       const trajPart = shared.sanitizeFilenamePart(state.currentTrajId);
       const frameNumber = state.currentFrame + 1;
       const filename = `traj_${trajPart}_frame_${frameNumber}.xyz`;
-      downloadTextFile(state.xyzFrames[state.currentFrame], filename);
+      const xyzText = transformers.buildXyzFrame(buildCurrentTrajectoryRecord(), state.currentFrame);
+      if (!xyzText) {
+        shared.setStatus('Failed to build XYZ text for the current frame.', true);
+        return;
+      }
+      downloadTextFile(xyzText, filename);
       shared.setStatus(`Saved current frame to ${filename}`);
     } catch (err) {
       shared.setStatus(`Failed to save current frame: ${err}`, true);
@@ -59,14 +81,19 @@
   }
 
   function saveTrajectoryXyz() {
-    if (!state.currentTrajId || !state.xyzFrames.length) {
+    if (!state.currentTrajId || getFrameCount() <= 0) {
       shared.setStatus('No trajectory available to save.', true);
       return;
     }
     try {
       const trajPart = shared.sanitizeFilenamePart(state.currentTrajId);
       const filename = `traj_${trajPart}_all_frames.xyz`;
-      downloadTextFile(state.xyzFrames.join('\n'), filename);
+      const xyzText = transformers.buildTrajectoryXyz(buildCurrentTrajectoryRecord());
+      if (!xyzText) {
+        shared.setStatus('Failed to build XYZ text for the trajectory.', true);
+        return;
+      }
+      downloadTextFile(xyzText, filename);
       shared.setStatus(`Saved trajectory to ${filename}`);
     } catch (err) {
       shared.setStatus(`Failed to save trajectory: ${err}`, true);
@@ -74,14 +101,14 @@
   }
 
   function resetGifExportRangeToFullTrajectory() {
-    const frameCount = state.xyzFrames.length;
+    const frameCount = getFrameCount();
     const end = frameCount > 0 ? frameCount - 1 : 0;
     shared.dispatch(shared.actions.setGifExportRange(0, end, frameCount));
     shared.syncGifExportRangeUi();
   }
 
   function syncGifExportRangeFromInputs(notifyAdjust = false) {
-    const frameCount = state.xyzFrames.length;
+    const frameCount = getFrameCount();
     if (frameCount <= 0) {
       shared.dispatch(shared.actions.setGifExportRange(0, 0, 0));
       shared.syncGifExportRangeUi();
@@ -226,7 +253,7 @@
       shared.setStatus('GIF encoder is unavailable. Please verify assets/vendor/gif.min.js.', true);
       return;
     }
-    if (!state.currentTrajId || !state.xyzFrames.length) {
+    if (!state.currentTrajId || getFrameCount() <= 0) {
       shared.setStatus('No trajectory available to export GIF.', true);
       return;
     }
@@ -274,7 +301,7 @@
           throw new Error(GIF_EXPORT_CANCELED_ERROR);
         }
         // Render -> capture -> decode image in order for deterministic GIF frames.
-        viewer.renderFrame(frameIndex);
+        await viewer.renderFrame(frameIndex);
         await sleepToNextFrame();
         const dataUri = captureViewerFrameDataUri();
         const image = await loadImageFromDataUri(dataUri);
@@ -330,7 +357,7 @@
   async function exportTrajectoryVideo() {
     const viewer = root.viewer;
     if (!viewer || typeof viewer.renderFrame !== 'function') return;
-    if (!state.currentTrajId || !state.xyzFrames.length) {
+    if (!state.currentTrajId || getFrameCount() <= 0) {
       shared.setStatus('No trajectory available to export video.', true);
       return;
     }
@@ -436,7 +463,7 @@
         if (state.gifExportCancelRequested) {
           throw new Error(VIDEO_EXPORT_CANCELED_ERROR);
         }
-        viewer.renderFrame(frameIndex);
+        await viewer.renderFrame(frameIndex);
         await sleepToNextFrame();
 
         rendered += 1;
@@ -563,6 +590,8 @@
     state.currentCoords = [];
     state.currentTimes = [];
     state.currentModel = null;
+    state.currentModelRenderMode = '';
+    state.atomNumbers = [];
     shared.dispatch(shared.actions.setGifExportRange(0, 0, 0));
     vectorOps.clearVectorViewState();
     shared.setDownloadButtonsEnabled(false);
@@ -575,6 +604,8 @@
       dom.frameSlider.max = '0';
       dom.frameSlider.value = '0';
     }
+    if (dom.framePrevBtn) dom.framePrevBtn.disabled = true;
+    if (dom.frameNextBtn) dom.frameNextBtn.disabled = true;
     const viewer = root.viewer;
     if (viewer && typeof viewer.clearScene === 'function') {
       viewer.clearScene();
@@ -623,9 +654,13 @@
       return;
     }
 
-    state.currentCoords = Array.isArray(rec.coords) ? rec.coords : [];
-    state.currentTimes = Array.isArray(rec.time) ? rec.time : [];
-    state.atomNumbers = Array.isArray(rec.atom_numbers) ? rec.atom_numbers : [];
+    const preparedTrajectory = typeof transformers.prepareRenderableTrajectory === 'function'
+      ? transformers.prepareRenderableTrajectory(rec)
+      : rec;
+
+    state.currentCoords = Array.isArray(preparedTrajectory?.coords) ? preparedTrajectory.coords : [];
+    state.currentTimes = Array.isArray(preparedTrajectory?.time) ? preparedTrajectory.time : [];
+    state.atomNumbers = Array.isArray(preparedTrajectory?.atom_numbers) ? preparedTrajectory.atom_numbers : [];
     state.hbondCache = null;
 
     console.log('Loaded trajectory:', {
@@ -634,31 +669,67 @@
       atomNumbers: state.atomNumbers
     });
 
-    state.xyzFrames = transformers.buildXyzFrames(rec);
+    state.xyzFrames = [];
     state.currentTrajId = selectedTrajId;
     state.currentModel = null;
+    state.currentModelRenderMode = '';
     state.currentFrame = 0;
     measurement.syncMeasurementStateForTrajectoryChange();
-    vectorOps.applyTrajectoryNacMeta(rec);
+    vectorOps.applyTrajectoryNacMeta(preparedTrajectory);
 
-    if (!state.xyzFrames.length) {
+    const frameCount = getFrameCount();
+    if (frameCount <= 0) {
       clearLoadedTrajectoryView();
       measurement.syncMeasurementStateForTrajectoryChange();
       shared.setStatus(`Trajectory ${selectedTrajId} has no valid coordinate frames.`, true);
       return;
     }
 
+    const firstFrameXyz = typeof transformers.buildXyzFrame === 'function'
+      ? transformers.buildXyzFrame(preparedTrajectory, 0)
+      : '';
+    if (!firstFrameXyz || typeof viewer.initializeTrajectoryModel !== 'function') {
+      clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
+      shared.setStatus(`Trajectory ${selectedTrajId} could not initialize the 3D viewer.`, true);
+      return;
+    }
+
+    const initialized = viewer.initializeTrajectoryModel(firstFrameXyz, state.currentCoords);
+    if (!initialized) {
+      clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
+      shared.setStatus(`Trajectory ${selectedTrajId} could not initialize the 3D viewer.`, true);
+      return;
+    }
+
     if (dom.frameSlider) {
       dom.frameSlider.min = '0';
-      dom.frameSlider.max = String(state.xyzFrames.length - 1);
+      dom.frameSlider.max = String(frameCount - 1);
       dom.frameSlider.step = '1';
     }
     resetGifExportRangeToFullTrajectory();
     shared.setDownloadButtonsEnabled(true);
     shared.setGifExportUiState(false);
+    const restoredVectors = typeof vectorOps.restoreDesiredVectorVisibility === 'function'
+      ? await vectorOps.restoreDesiredVectorVisibility()
+      : null;
 
-    shared.setStatus(`Loaded trajectory ${selectedTrajId} (${state.xyzFrames.length} frames).`);
-    viewer.renderFrame(0, true);
+    let statusMessage = `Loaded trajectory ${selectedTrajId} (${frameCount} frames).`;
+    let statusIsError = false;
+    if (Array.isArray(restoredVectors?.restored) && restoredVectors.restored.length) {
+      statusMessage += ` Restored vectors: ${restoredVectors.restored.join(', ')}.`;
+    }
+    if (Array.isArray(restoredVectors?.unavailable) && restoredVectors.unavailable.length) {
+      statusMessage += ` Unavailable here: ${restoredVectors.unavailable.join(', ')}.`;
+    }
+    if (Array.isArray(restoredVectors?.failed) && restoredVectors.failed.length) {
+      statusMessage += ` Failed to restore: ${restoredVectors.failed.join('; ')}.`;
+      statusIsError = true;
+    }
+
+    shared.setStatus(statusMessage, statusIsError);
+    await viewer.renderFrame(0, true);
   }
 
   vectorOps.registerVectorSources();

@@ -55,6 +55,7 @@
   const trajIds = Array.isArray(bootstrap.traj_ids)
     ? bootstrap.traj_ids.map((v) => String(v))
     : (Array.isArray(meta?.traj_ids) ? meta.traj_ids.map((v) => String(v)) : []);
+  const datasetLoaded = !!meta?.dataset_loaded;
   const apiBase = typeof bootstrap.api_base === 'string' && bootstrap.api_base.trim()
     ? bootstrap.api_base
     : '/api';
@@ -67,6 +68,107 @@
     'bond', 'angle', 'dihedral', 'etot', 'eig', 'nac', 'de_nac', 'state', '|c|^2', 'raw_key', 'expression'
   ];
   const ensembleStatModes = ['mean_ci95_bootstrap', 'median_iqr', 'renorm_mean_ci95_bootstrap'];
+  const hoppingAlgorithmOptions = ['max_abs_c'];
+  const hoppingTimeRuleOptions = ['arrival_frame'];
+  const hoppingColorPalette = ['#d62728', '#1f77b4', '#2ca02c', '#ff7f0e', '#9467bd', '#17becf'];
+
+  function nStatesMax() {
+    const value = Number.parseInt(meta?.n_states, 10);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  function normalizeHexColor(value, fallback) {
+    const text = String(value || '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(text) ? text.toLowerCase() : String(fallback || '#d62728');
+  }
+
+  function defaultHoppingPairForIndex(index) {
+    const stateCount = nStatesMax();
+    const fallback = { fromState: 1, toState: 0 };
+    if (stateCount < 2) return fallback;
+
+    const pairs = [];
+    for (let fromState = 1; fromState < stateCount; fromState++) {
+      for (let toState = 0; toState < stateCount; toState++) {
+        if (fromState === toState) continue;
+        pairs.push({ fromState, toState });
+      }
+    }
+    if (!pairs.length) return fallback;
+    const normalizedIndex = Math.max(0, Number.parseInt(index, 10) || 0);
+    return pairs[normalizedIndex % pairs.length];
+  }
+
+  function defaultHoppingGroupForIndex(index) {
+    const pair = defaultHoppingPairForIndex(index);
+    return {
+      id: `hop_${Math.max(0, Number.parseInt(index, 10) || 0)}_${pair.fromState}_${pair.toState}`,
+      fromState: pair.fromState,
+      toState: pair.toState,
+      color: hoppingColorPalette[Math.max(0, Number.parseInt(index, 10) || 0) % hoppingColorPalette.length],
+      enabled: true,
+    };
+  }
+
+  function normalizeHoppingGroup(group, fallbackIndex) {
+    const fallback = defaultHoppingGroupForIndex(fallbackIndex);
+    let fromState = Number.parseInt(group?.fromState ?? group?.from_state ?? fallback.fromState, 10);
+    let toState = Number.parseInt(group?.toState ?? group?.to_state ?? fallback.toState, 10);
+    if (!Number.isFinite(fromState) || fromState < 0) fromState = fallback.fromState;
+    if (!Number.isFinite(toState) || toState < 0) toState = fallback.toState;
+
+    const stateCount = nStatesMax();
+    if (stateCount > 0) {
+      fromState = Math.min(fromState, stateCount - 1);
+      toState = Math.min(toState, stateCount - 1);
+    }
+    if (fromState === toState) {
+      if (stateCount >= 2) {
+        toState = fromState > 0 ? fromState - 1 : 1;
+      } else {
+        fromState = fallback.fromState;
+        toState = fallback.toState;
+      }
+    }
+
+    const idCandidate = String(group?.id || '').trim();
+    return {
+      id: idCandidate || `hop_${Math.max(0, Number.parseInt(fallbackIndex, 10) || 0)}_${fromState}_${toState}`,
+      fromState,
+      toState,
+      color: normalizeHexColor(group?.color, fallback.color),
+      enabled: group?.enabled !== false,
+    };
+  }
+
+  function buildDefaultHoppingConfig() {
+    return {
+      algorithm: 'max_abs_c',
+      timeRule: 'arrival_frame',
+      groups: nStatesMax() >= 2 ? [defaultHoppingGroupForIndex(0)] : [],
+    };
+  }
+
+  function normalizeHoppingConfig(rawHopping) {
+    const fallback = buildDefaultHoppingConfig();
+    const algorithmCandidate = String(rawHopping?.algorithm || fallback.algorithm);
+    const timeRuleCandidate = String(rawHopping?.timeRule ?? rawHopping?.time_rule ?? fallback.timeRule);
+    const rawGroups = Array.isArray(rawHopping?.groups) ? rawHopping.groups : [];
+    const groups = [];
+    const seenPairs = new Set();
+    for (let i = 0; i < rawGroups.length; i++) {
+      const group = normalizeHoppingGroup(rawGroups[i], i);
+      const pairKey = `${group.fromState}->${group.toState}`;
+      if (seenPairs.has(pairKey)) continue;
+      seenPairs.add(pairKey);
+      groups.push(group);
+    }
+    return {
+      algorithm: hoppingAlgorithmOptions.includes(algorithmCandidate) ? algorithmCandidate : fallback.algorithm,
+      timeRule: hoppingTimeRuleOptions.includes(timeRuleCandidate) ? timeRuleCandidate : fallback.timeRule,
+      groups,
+    };
+  }
 
   function normalizeRawKeyAliases(rawAliases) {
     const out = {};
@@ -167,6 +269,7 @@
       rawKey: '',
       expression: '',
       expressionLabel: '',
+      showHoppingOverlay: !!(panel?.showHoppingOverlay ?? fallback?.showHoppingOverlay ?? false),
       ensembleStatMode: ensembleStatModes.includes(modeCandidate) ? modeCandidate : 'mean_ci95_bootstrap',
     };
 
@@ -231,6 +334,7 @@
       showEnsemble: !!defaults?.plot?.show_ensemble_by_default,
       showAllTraces: !!defaults?.plot?.show_all_traces_in_all_mode,
       panels: makeDefaultPanels(),
+      hopping: buildDefaultHoppingConfig(),
       rawKeyAliases: normalizeRawKeyAliases(bootstrap?.raw_key_aliases),
       dataMode: 'api',
     };
@@ -255,6 +359,9 @@
       }
       if (typeof parsed.showEnsemble === 'boolean') baseState.showEnsemble = parsed.showEnsemble;
       if (typeof parsed.showAllTraces === 'boolean') baseState.showAllTraces = parsed.showAllTraces;
+      if (parsed.hopping && typeof parsed.hopping === 'object') {
+        baseState.hopping = normalizeHoppingConfig(parsed.hopping);
+      }
 
       if (Array.isArray(parsed.panels)) {
         const panelCount = Math.max(MIN_PANELS, parsed.panels.length);
@@ -281,6 +388,7 @@
         selectedTraj: state.selectedTraj,
         showEnsemble: state.showEnsemble,
         showAllTraces: state.showAllTraces,
+        hopping: state.hopping,
         panels: state.panels,
       }));
     } catch {
@@ -296,6 +404,7 @@
     meta,
     defaults,
     trajIds,
+    datasetLoaded,
     dataMode: 'api',
     apiBase,
     STORAGE_KEY,
@@ -304,6 +413,9 @@
     RAW_ALIAS_PREFIX,
     observableOptions,
     ensembleStatModes,
+    hoppingAlgorithmOptions,
+    hoppingTimeRuleOptions,
+    hoppingColorPalette,
     normalizeRawKeyAliases,
     parseRawAliasObservable,
     isRawAliasObservable,
@@ -316,6 +428,10 @@
     defaultPanelForIndex,
     normalizePanel,
     makeDefaultPanels,
+    defaultHoppingGroupForIndex,
+    normalizeHoppingGroup,
+    buildDefaultHoppingConfig,
+    normalizeHoppingConfig,
     state,
     saveStateToStorage,
     setGlobalStatus,

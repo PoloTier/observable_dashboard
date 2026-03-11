@@ -13,7 +13,7 @@ from backend.dataset import flatten_time_array, prepare_dataset, reshape_coords
 
 @dataclass(slots=True)
 class DatasetLoadOptions:
-    input_path: Path
+    input_path: Path | None
     config_path: Path
     time_key: str = "_.0.record.time"
     coord_key: str = "_.0.record.x"
@@ -58,6 +58,106 @@ class RawFrameMeta:
 
 HBOND_DONOR_ACCEPTOR_ATOMIC_NUMBERS = (7, 8, 9)
 HBOND_NEIGHBOR_SKIN = 1.0
+HOPPING_ALGORITHM_MAX_ABS_C = "max_abs_c"
+HOPPING_TIME_RULE_ARRIVAL_FRAME = "arrival_frame"
+
+
+def _normalize_hopping_transitions(
+    transitions: list[dict[str, Any]],
+    *,
+    n_states_limit: int = 0,
+) -> list[dict[str, Any]]:
+    raw_items = transitions if isinstance(transitions, list) else []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    state_limit = int(n_states_limit)
+
+    for item in raw_items:
+        if not isinstance(item, dict):
+            raise ValueError("Each hopping transition must be an object with from_state and to_state.")
+
+        try:
+            from_state = int(item.get("from_state"))
+            to_state = int(item.get("to_state"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Each hopping transition must use integer from_state and to_state.") from exc
+
+        if from_state < 0 or to_state < 0:
+            raise ValueError("Hopping transition states must be >= 0.")
+        if from_state == to_state:
+            raise ValueError("Hopping transition requires from_state != to_state.")
+        if state_limit > 0 and (from_state >= state_limit or to_state >= state_limit):
+            raise ValueError(
+                f"Hopping transition state out of bounds: expected 0 <= state < {state_limit}, "
+                f"got {from_state}->{to_state}."
+            )
+
+        pair = (from_state, to_state)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append(
+            {
+                "transition_key": f"{from_state}->{to_state}",
+                "from_state": from_state,
+                "to_state": to_state,
+            }
+        )
+
+    if not out:
+        raise ValueError("At least one hopping transition is required.")
+    return out
+
+
+def _compute_hopping_events_for_trajectory(
+    traj: TrajectoryRecord,
+    transitions: list[dict[str, Any]],
+    *,
+    time_rule: str,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    if str(time_rule) != HOPPING_TIME_RULE_ARRIVAL_FRAME:
+        raise ValueError(f"Unsupported hopping time_rule: {time_rule}")
+
+    transition_lookup = {
+        (int(item["from_state"]), int(item["to_state"])): item
+        for item in transitions
+    }
+    counts = {str(item["transition_key"]): 0 for item in transitions}
+
+    time_axis = np.asarray(traj.state_time, dtype=float).reshape(-1)
+    state_axis = np.asarray(traj.state, dtype=int).reshape(-1)
+    frame_count = int(min(time_axis.size, state_axis.size))
+    if frame_count < 2:
+        return [], counts
+
+    time_axis = time_axis[:frame_count]
+    state_axis = state_axis[:frame_count]
+    events: list[dict[str, Any]] = []
+
+    for frame_idx in range(frame_count - 1):
+        from_state = int(state_axis[frame_idx])
+        to_state = int(state_axis[frame_idx + 1])
+        transition = transition_lookup.get((from_state, to_state))
+        if transition is None:
+            continue
+
+        event_time = float(time_axis[frame_idx + 1])
+        if not np.isfinite(event_time):
+            continue
+
+        events.append(
+            {
+                "transition_key": str(transition["transition_key"]),
+                "from_state": from_state,
+                "to_state": to_state,
+                "frame_from": int(frame_idx),
+                "frame_to": int(frame_idx + 1),
+                "time": event_time,
+            }
+        )
+        counts[str(transition["transition_key"])] += 1
+
+    return events, counts
 
 
 def _build_hbond_candidate_table(distance_matrix: np.ndarray, cutoff: float) -> tuple[np.ndarray, np.ndarray]:
@@ -152,6 +252,8 @@ def _collect_frame_hbonds(
     donor_choice_positions = np.full(h_count, -1, dtype=int)
     donor_choice_positions[donor_has_match] = donor_safe_positions[row_indices[donor_has_match], donor_first_slots[donor_has_match]]
 
+    donor_coords = np.zeros((h_count, 3), dtype=float)
+    donor_coords[donor_has_match] = donor_candidate_coords[row_indices[donor_has_match], donor_first_slots[donor_has_match]]
     donor_direction = np.zeros((h_count, 3), dtype=float)
     donor_direction[donor_has_match] = donor_vectors[row_indices[donor_has_match], donor_first_slots[donor_has_match]]
     donor_norms = np.linalg.norm(donor_direction, axis=1)
@@ -164,6 +266,8 @@ def _collect_frame_hbonds(
     acceptor_vectors = acceptor_candidate_coords - hydrogen_coords[:, None, :]
     acceptor_distances = np.linalg.norm(acceptor_vectors, axis=2)
     acceptor_norms = acceptor_distances
+    donor_acceptor_vectors = acceptor_candidate_coords - donor_coords[:, None, :]
+    donor_acceptor_distances = np.linalg.norm(donor_acceptor_vectors, axis=2)
 
     dot_products = np.einsum("hkc,hc->hk", acceptor_vectors, donor_direction)
     denom = acceptor_norms * donor_norms[:, None]
@@ -175,8 +279,8 @@ def _collect_frame_hbonds(
     hit_mask = (
         donor_ready[:, None]
         & acceptor_candidate_valid
-        & np.isfinite(acceptor_distances)
-        & (acceptor_distances < float(hbond_distance_cutoff))
+        & np.isfinite(donor_acceptor_distances)
+        & (donor_acceptor_distances < float(hbond_distance_cutoff))
         & np.isfinite(angles)
         & (angles >= float(hbond_angle_cutoff))
         & (acceptor_safe_positions != donor_choice_positions[:, None])
@@ -198,7 +302,7 @@ def _collect_frame_hbonds(
                 "donor_idx": int(donor_abs_indices[hit_idx]),
                 "h_idx": int(hydrogen_indices[row]),
                 "acceptor_idx": int(acceptor_abs_indices[hit_idx]),
-                "distance": float(acceptor_distances[row, slot]),
+                "distance": float(donor_acceptor_distances[row, slot]),
                 "angle": float(angles[row, slot]),
             }
         )
@@ -219,7 +323,10 @@ class DatasetStore:
         time_key: str = "_.0.record.time",
     ) -> None:
         self.input_path = Path(input_path)
-        self.meta = meta
+        meta_payload = dict(meta)
+        meta_payload.setdefault("source_pkl", str(self.input_path) if trajectories else "")
+        meta_payload.setdefault("dataset_loaded", bool(trajectories))
+        self.meta = meta_payload
         self.defaults = defaults
         self.trajectories = trajectories
         self.raw_key_previews = raw_key_previews or {}
@@ -239,7 +346,7 @@ class DatasetStore:
         traj_id: str,
         *,
         hbond_distance_cutoff: float = 3.5,
-        hbond_angle_cutoff: float = 120.0,
+        hbond_angle_cutoff: float = 150.0,
         dh_bond_length: float = 1.3,
     ) -> dict[str, Any] | None:
         traj = self.get_trajectory(traj_id)
@@ -302,7 +409,9 @@ class DatasetStore:
             relevant_atom_indices = np.unique(np.concatenate([hydrogen_indices, donor_acceptor_indices])).astype(int)
             displacement_limit = float(HBOND_NEIGHBOR_SKIN) * 0.5
             donor_candidate_cutoff = float(dh_bond_length) + float(HBOND_NEIGHBOR_SKIN)
-            acceptor_candidate_cutoff = float(hbond_distance_cutoff) + float(HBOND_NEIGHBOR_SKIN)
+            acceptor_candidate_cutoff = (
+                float(hbond_distance_cutoff) + float(dh_bond_length) + float(HBOND_NEIGHBOR_SKIN)
+            )
 
             frame_idx = 0
             while frame_idx < n_frames:
@@ -903,6 +1012,85 @@ class DatasetStore:
             "broken_trajs": broken_trajs,
         }
 
+    def build_hopping_events(
+        self,
+        traj_ids: list[str],
+        *,
+        algorithm: str,
+        time_rule: str,
+        transitions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if str(algorithm) != HOPPING_ALGORITHM_MAX_ABS_C:
+            raise ValueError(f"Unsupported hopping algorithm: {algorithm}")
+        if str(time_rule) != HOPPING_TIME_RULE_ARRIVAL_FRAME:
+            raise ValueError(f"Unsupported hopping time_rule: {time_rule}")
+
+        requested_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for raw_traj_id in traj_ids:
+            traj_id = str(raw_traj_id).strip()
+            if not traj_id or traj_id in seen_ids:
+                continue
+            if self.get_trajectory(traj_id) is None:
+                raise KeyError(f"Trajectory not found: {traj_id}")
+            requested_ids.append(traj_id)
+            seen_ids.add(traj_id)
+
+        if not requested_ids:
+            raise ValueError("At least one traj_id is required for hopping detection.")
+
+        n_states_limit = int(self.meta.get("n_states", 0) or 0)
+        normalized_transitions = _normalize_hopping_transitions(transitions, n_states_limit=n_states_limit)
+        totals_by_key = {str(item["transition_key"]): 0 for item in normalized_transitions}
+        events_by_traj: dict[str, list[dict[str, Any]]] = {}
+        counts_by_traj: list[dict[str, Any]] = []
+
+        for traj_id in requested_ids:
+            traj = self.get_trajectory(traj_id)
+            if traj is None:
+                raise KeyError(f"Trajectory not found: {traj_id}")
+
+            events, counts = _compute_hopping_events_for_trajectory(
+                traj,
+                normalized_transitions,
+                time_rule=str(time_rule),
+            )
+            events_by_traj[traj_id] = events
+
+            for transition in normalized_transitions:
+                transition_key = str(transition["transition_key"])
+                count = int(counts.get(transition_key, 0))
+                counts_by_traj.append(
+                    {
+                        "traj_id": traj_id,
+                        "transition_key": transition_key,
+                        "from_state": int(transition["from_state"]),
+                        "to_state": int(transition["to_state"]),
+                        "count": count,
+                    }
+                )
+                totals_by_key[transition_key] += count
+
+        totals_by_transition = [
+            {
+                "transition_key": str(transition["transition_key"]),
+                "from_state": int(transition["from_state"]),
+                "to_state": int(transition["to_state"]),
+                "count": int(totals_by_key[str(transition["transition_key"])]),
+            }
+            for transition in normalized_transitions
+        ]
+
+        return {
+            "traj_ids": requested_ids,
+            "algorithm": str(algorithm),
+            "time_rule": str(time_rule),
+            "transitions": normalized_transitions,
+            "events_by_traj": events_by_traj,
+            "counts_by_traj": counts_by_traj,
+            "totals_by_transition": totals_by_transition,
+        }
+
     def to_bootstrap(self, api_base: str = "/api") -> dict[str, Any]:
         meta_payload = dict(self.meta)
         meta_payload["trajectory_break_summary"] = self.build_trajectory_break_summary()
@@ -1416,13 +1604,16 @@ def _build_trajectory(traj_id: str, record: dict[str, Any]) -> TrajectoryRecord:
 
 
 def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
+    if options.input_path is None:
+        raise ValueError("input_path is required to load a dataset store.")
+
     input_path = Path(options.input_path)
     config_path = Path(options.config_path)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    cfg = load_config(config_path)
+    defaults = _load_defaults(config_path)
 
     with open(input_path, "rb") as f:
         master_dataset = pickle.load(f)
@@ -1443,13 +1634,7 @@ def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
 
     meta = dict(prepared["meta"])
     meta["source_pkl"] = str(input_path.resolve())
-
-    defaults = {
-        "panels": cfg["panels"],
-        "plot": cfg["plot"],
-        "nac": cfg["nac"],
-        "ui": cfg["ui"],
-    }
+    meta["dataset_loaded"] = True
 
     trajectories_raw = prepared.get("trajectories", {})
     trajectories = {
@@ -1476,4 +1661,41 @@ def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
         raw_records_by_traj=raw_records_by_traj,
         raw_frame_meta_by_traj=raw_frame_meta_by_traj,
         time_key=options.time_key,
+    )
+
+
+def _load_defaults(config_path: Path) -> dict[str, Any]:
+    cfg = load_config(config_path)
+    return {
+        "panels": cfg["panels"],
+        "plot": cfg["plot"],
+        "nac": cfg["nac"],
+        "ui": cfg["ui"],
+    }
+
+
+def build_empty_dataset_store(config_path: Path) -> DatasetStore:
+    config_path = Path(config_path)
+    defaults = _load_defaults(config_path)
+    meta = {
+        "traj_ids": [],
+        "n_atoms": 0,
+        "n_states": 0,
+        "time_unit": "fs",
+        "length_unit": "angstrom",
+        "coord_unit": "angstrom",
+        "etot_unit": "hartree",
+        "etot_reference": "raw_frame0",
+        "state_definition": "argmax(|c|^2)",
+        "state_source_key": "_.0.record.c",
+        "state_index_base": 0,
+        "state_component_count": 0,
+        "source_pkl": "",
+        "dataset_loaded": False,
+    }
+    return DatasetStore(
+        input_path=config_path,
+        meta=meta,
+        defaults=defaults,
+        trajectories={},
     )

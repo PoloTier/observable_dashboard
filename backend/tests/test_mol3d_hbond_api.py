@@ -24,7 +24,7 @@ def _slow_reference_hbonds(
     atom_numbers: np.ndarray,
     *,
     hbond_distance_cutoff: float = 3.5,
-    hbond_angle_cutoff: float = 120.0,
+    hbond_angle_cutoff: float = 150.0,
     dh_bond_length: float = 1.3,
 ) -> list[dict[str, float | int]]:
     hydrogen_indices = [int(idx) for idx, atom_number in enumerate(atom_numbers.tolist()) if int(atom_number) == 1]
@@ -64,10 +64,10 @@ def _slow_reference_hbonds(
 
                 acceptor_coord = frame_coords[acceptor_idx]
                 vec_ha = np.asarray(acceptor_coord - h_coord, dtype=float)
-                ha_dist = float(np.linalg.norm(vec_ha))
-                if not np.isfinite(ha_dist):
+                da_dist = float(np.linalg.norm(acceptor_coord - donor_coord))
+                if not np.isfinite(da_dist):
                     continue
-                if ha_dist >= float(hbond_distance_cutoff):
+                if da_dist >= float(hbond_distance_cutoff):
                     continue
 
                 vec_ha_norm = float(np.linalg.norm(vec_ha))
@@ -88,7 +88,7 @@ def _slow_reference_hbonds(
                         "donor_idx": int(donor_idx),
                         "h_idx": int(h_idx),
                         "acceptor_idx": int(acceptor_idx),
-                        "distance": float(ha_dist),
+                        "distance": float(da_dist),
                         "angle": float(angle),
                     }
                 )
@@ -98,7 +98,7 @@ def _slow_reference_hbonds(
 def _build_store() -> DatasetStore:
     # Frame 0 has one O-H...O hydrogen bond:
     # donor O(0) -- H(1) distance = 1.0
-    # H(1) ... acceptor O(2) distance = 1.8
+    # donor O(0) ... acceptor O(2) distance = 2.8
     # angle O(0)-H(1)-O(2) = 180 degrees
     # Frame 1 breaks angle criterion (90 degrees).
     coords = np.asarray(
@@ -175,7 +175,7 @@ def test_build_mol3d_hbond_payload_detects_expected_pair() -> None:
     assert payload["n_atoms"] == 3
     assert payload["donor_acceptor_atomic_numbers"] == [7, 8, 9]
     assert payload["hbond_distance_cutoff"] == 3.5
-    assert payload["hbond_angle_cutoff"] == 120.0
+    assert payload["hbond_angle_cutoff"] == 150.0
     assert payload["dh_bond_length"] == 1.3
 
     hbonds = payload["hbonds"]
@@ -186,8 +186,58 @@ def test_build_mol3d_hbond_payload_detects_expected_pair() -> None:
     assert hb["donor_idx"] == 0
     assert hb["h_idx"] == 1
     assert hb["acceptor_idx"] == 2
-    assert hb["distance"] == pytest.approx(1.8, abs=1e-12)
+    assert hb["distance"] == pytest.approx(2.8, abs=1e-12)
     assert hb["angle"] == pytest.approx(180.0, abs=1e-12)
+
+
+def test_build_mol3d_hbond_payload_requires_donor_acceptor_distance_cutoff() -> None:
+    coords = np.asarray(
+        [
+            [
+                [0.0, 0.0, 0.0],  # O donor
+                [1.0, 0.0, 0.0],  # H bonded to donor
+                [4.0, 0.0, 0.0],  # O acceptor: H...A=3.0 but D...A=4.0
+            ],
+        ],
+        dtype=float,
+    )
+    traj = TrajectoryRecord(
+        traj_id="0",
+        n_atoms=3,
+        atom_numbers=[8, 1, 8],
+        time=np.asarray([0.0], dtype=float),
+        coords=coords,
+        etot_time=np.asarray([], dtype=float),
+        etot=np.asarray([], dtype=float),
+        eig_time=np.asarray([], dtype=float),
+        eig=np.empty((0, 0), dtype=float),
+        nac_time=np.asarray([], dtype=float),
+        nac_norm=np.asarray([], dtype=float),
+        nac_components=np.empty((0, 0, 0, 0), dtype=float),
+        nac_state_count=0,
+        nac_component_count=0,
+        de_nac_time=np.asarray([], dtype=float),
+        de_nac_norm=np.asarray([], dtype=float),
+        de_nac_components=np.empty((0, 0, 0, 0), dtype=float),
+        de_nac_state_count=0,
+        de_nac_component_count=0,
+        state_time=np.asarray([], dtype=float),
+        state=np.asarray([], dtype=int),
+        c_prob_time=np.asarray([], dtype=float),
+        c_prob=np.empty((0, 0), dtype=float),
+    )
+    store = DatasetStore(
+        input_path=Path("/tmp/mol3d_hbond_da_distance_test.pkl"),
+        meta={},
+        defaults={},
+        trajectories={"0": traj},
+        raw_records_by_traj={},
+        raw_frame_meta_by_traj={"0": RawFrameMeta(base_len=1, valid_indices=[0])},
+    )
+
+    payload = store.build_mol3d_hbond_payload("0")
+    assert payload is not None
+    assert payload["hbonds"] == []
 
 
 def test_build_mol3d_hbond_payload_matches_reference_with_large_motion() -> None:
