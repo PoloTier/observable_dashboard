@@ -119,6 +119,7 @@ def test_normal_modes_page_includes_upload_controls_and_assets() -> None:
     assert "observable_dashboard_theme_v1" in text
     assert 'id="normal-modes-config-json"' in text
     assert 'id="nm-file-input"' in text
+    assert 'id="nm-open-sampling-settings-btn"' in text
     assert 'id="nm-mode-list"' in text
     assert 'id="nm-mode-table-scroll"' in text
     assert 'class="mode-table-header"' in text
@@ -126,12 +127,28 @@ def test_normal_modes_page_includes_upload_controls_and_assets() -> None:
     assert '>Frequency</div>' in text
     assert '>Type</div>' in text
     assert '>IR</div>' in text
-    assert 'id="nm-viewer"' in text
+    assert 'id="nm-workspace-modes-btn"' in text
+    assert 'id="nm-workspace-sampling-btn"' in text
+    assert 'id="nm-modes-viewer-card"' in text
+    assert 'id="nm-modes-viewer"' in text
+    assert 'id="nm-modes-status"' in text
+    assert 'id="nm-sampling-viewer-card"' in text
+    assert 'id="nm-sampling-viewer"' in text
+    assert 'id="nm-sampling-status"' in text
+    assert 'id="nm-sampling-summary-card"' in text
+    assert 'id="nm-export-bundle-btn"' in text
+    assert 'id="nm-export-status"' in text
     assert 'id="nm-spectrum-plot"' in text
     assert 'id="nm-spectrum-width-slider"' in text
     assert 'id="nm-spectrum-status"' in text
+    assert 'id="nm-distribution-card"' in text
+    assert 'id="nm-measurement-plot"' in text
+    assert 'id="nm-measurement-atom-3"' in text
     assert 'id="nm-speed-slider"' in text
     assert 'id="nm-speed-label"' in text
+    assert 'id="nm-show-atom-index"' in text
+    assert 'id="nm-sampling-modal"' in text
+    assert 'id="nm-sampling-plan-preview-body"' in text
     assert 'data-appearance-control' in text
     assert 'assets/vendor/plotly-2.35.2.min.js' in text
     assert 'src="assets/normal_modes/normal_modes_page.js"' in text
@@ -162,6 +179,9 @@ def test_normal_modes_page_script_reads_injected_api_base() -> None:
     assert "normal-modes-config-json" in text
     assert "getApiBase()" in text
     assert "fetch(`${getApiBase()}/normal-modes/parse-text`" in text
+    assert "fetch(`${getApiBase()}/normal-modes/sample-text`" in text
+    assert "/normal-modes/sample-batches/${encodeURIComponent(state.samplingResult.batch_id)}/measurements" in text
+    assert "/normal-modes/sample-batches/${encodeURIComponent(batchId)}/export" in text
 
 
 def test_theme_asset_exists_and_exports_public_api() -> None:

@@ -137,6 +137,25 @@
       align-items: flex-start;
       gap: 12px;
     }
+    .toolbar-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text-soft);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .toolbar-btn:hover {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
     .file-picker {
       display: inline-flex;
       align-items: center;
@@ -463,13 +482,105 @@
     }
     .main {
       display: grid;
-      grid-template-rows: auto auto;
+      grid-template-rows: auto minmax(0, 1fr);
       gap: 14px;
       min-height: 0;
       align-content: start;
     }
+    .workspace-panel {
+      display: grid;
+      gap: 14px;
+      min-height: 0;
+      align-content: start;
+    }
+    .workspace-panel[hidden] {
+      display: none !important;
+    }
+    .workspace-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+    }
+    .workspace-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+    }
+    .workspace-tab {
+      min-height: 38px;
+      padding: 0 16px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .workspace-tab:hover {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .workspace-tab.is-active {
+      background: var(--accent);
+      color: #ffffff;
+    }
+    .workspace-hint {
+      color: var(--muted);
+      font-size: 13px;
+    }
     .controls-card {
       padding: 16px;
+    }
+    .sampling-summary-card,
+    .sampling-card {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .summary-item {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      min-width: 0;
+    }
+    .summary-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .summary-value {
+      display: block;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .summary-empty,
+    .distribution-empty,
+    .modal-empty {
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px dashed var(--border);
+      background: var(--panel-soft);
+      color: var(--muted);
+      line-height: 1.5;
     }
     .controls-row {
       display: flex;
@@ -506,6 +617,17 @@
     .controls-card label {
       color: var(--muted);
       font-size: 14px;
+    }
+    .controls-card .check-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .controls-card .check-label input {
+      margin: 0;
+      accent-color: var(--accent);
     }
     .value-label {
       min-width: 72px;
@@ -570,7 +692,7 @@
       min-height: 0;
       height: min(calc(100vh - 176px), 720px);
     }
-    #nm-viewer {
+    .viewer-surface {
       width: 100%;
       min-height: 0;
       height: 100%;
@@ -588,8 +710,250 @@
     .status.error {
       color: var(--danger);
     }
+    .distribution-controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+    .field-group {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .field-group label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .field-group input,
+    .field-group select {
+      min-height: 40px;
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text);
+    }
+    .field-group input::placeholder {
+      color: var(--muted);
+    }
+    .distribution-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .distribution-plot {
+      width: 100%;
+      min-height: 320px;
+      height: 340px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      overflow: hidden;
+    }
+    .distribution-plot .distribution-empty {
+      height: calc(100% - 24px);
+      margin: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(15, 23, 42, 0.48);
+      backdrop-filter: blur(6px);
+    }
+    .modal-backdrop[hidden] {
+      display: none;
+    }
+    .modal-shell {
+      width: min(1100px, 100%);
+      max-height: min(calc(100vh - 36px), 920px);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .modal-header,
+    .modal-footer {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .modal-footer {
+      border-top: 1px solid var(--border);
+      border-bottom: 0;
+      align-items: center;
+    }
+    .modal-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    .modal-subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+    .modal-close-btn,
+    .modal-action-btn,
+    .rule-remove-btn {
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--text-soft);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .modal-close-btn:hover,
+    .modal-action-btn:hover,
+    .rule-remove-btn:hover {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .modal-action-btn.primary {
+      border-color: var(--accent-border);
+      background: var(--accent);
+      color: #ffffff;
+    }
+    .modal-action-btn.primary:hover {
+      background: #0b51b7;
+      color: #ffffff;
+    }
+    .modal-body {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 18px;
+      min-height: 0;
+      overflow: auto;
+    }
+    .modal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .rules-card,
+    .plan-preview-card {
+      display: grid;
+      gap: 12px;
+    }
+    .section-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .rules-list {
+      display: grid;
+      gap: 12px;
+    }
+    .rule-row {
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      display: grid;
+      gap: 12px;
+    }
+    .rule-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+    .plan-preview-scroll {
+      max-height: 320px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-soft);
+    }
+    .plan-preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+    .plan-preview-table th,
+    .plan-preview-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .plan-preview-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--panel-strong);
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .plan-preview-table tr:last-child td {
+      border-bottom: 0;
+    }
+    .plan-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text-soft);
+    }
+    .plan-status.excluded {
+      color: var(--danger);
+      border-color: var(--danger-border);
+      background: var(--danger-soft);
+    }
+    .plan-status.included {
+      color: var(--accent);
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .status-inline {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .status-inline.error {
+      color: var(--danger);
+    }
+    .u-hidden {
+      display: none !important;
+    }
     button:focus-visible,
     input:focus-visible,
+    select:focus-visible,
     .appearance-trigger:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
@@ -643,6 +1007,7 @@
           <input id="nm-file-input" type="file" accept=".molden,.dat,.mol,.txt" />
         </label>
         <div id="nm-file-name" class="file-name">No file loaded.</div>
+        <button id="nm-open-sampling-settings-btn" class="toolbar-btn" type="button">Sampling Settings</button>
 
         <div class="appearance-control" data-appearance-control>
           <button
@@ -693,8 +1058,8 @@
       </div>
     </header>
 
-    <main class="layout">
-      <aside class="sidebar card">
+    <main id="nm-layout" class="layout">
+      <aside id="nm-modes-sidebar" class="sidebar card">
         <div class="section-title">
           <span>Modes</span>
           <span id="nm-mode-count" class="count-pill">0</span>
@@ -715,59 +1080,258 @@
       </aside>
 
       <section class="main">
-        <div class="controls-card card">
-          <div class="controls-row">
-            <button id="nm-prev-btn" type="button" disabled>Prev</button>
-            <button id="nm-play-btn" type="button" disabled>Play</button>
-            <button id="nm-next-btn" type="button" disabled>Next</button>
-            <label for="nm-amplitude-slider">Amplitude</label>
-            <input id="nm-amplitude-slider" type="range" min="0.1" max="4.0" step="0.1" value="1.0" />
-            <span id="nm-amplitude-label" class="value-label">1.0x</span>
+        <div class="workspace-toolbar card">
+          <div class="workspace-switch" role="tablist" aria-label="Normal mode workspace">
+            <button id="nm-workspace-modes-btn" class="workspace-tab is-active" type="button" role="tab" aria-selected="true">Modes</button>
+            <button id="nm-workspace-sampling-btn" class="workspace-tab" type="button" role="tab" aria-selected="false">Sampling</button>
           </div>
+          <div id="nm-workspace-hint" class="workspace-hint">
+            Switch between mode animation / IR and sampled-ensemble preview / distributions.
+          </div>
+        </div>
 
-          <div class="controls-row">
-            <label for="nm-speed-slider">Speed</label>
-            <input id="nm-speed-slider" type="range" min="0.5" max="4.0" step="0.25" value="1.0" />
-            <span id="nm-speed-label" class="value-label">1.0x</span>
-          </div>
+        <div id="nm-workspace-modes-panel" class="workspace-panel">
+          <div id="nm-modes-controls-card" class="controls-card card">
+            <div class="controls-row">
+              <button id="nm-prev-btn" type="button" disabled>Prev</button>
+              <button id="nm-play-btn" type="button" disabled>Play</button>
+              <button id="nm-next-btn" type="button" disabled>Next</button>
+              <label for="nm-amplitude-slider">Amplitude</label>
+              <input id="nm-amplitude-slider" type="range" min="0.1" max="4.0" step="0.1" value="1.0" />
+              <span id="nm-amplitude-label" class="value-label">1.0x</span>
+            </div>
+
+            <div class="controls-row">
+              <label for="nm-speed-slider">Speed</label>
+              <input id="nm-speed-slider" type="range" min="0.5" max="4.0" step="0.25" value="1.0" />
+              <span id="nm-speed-label" class="value-label">1.0x</span>
+            </div>
 
           <div class="controls-row">
             <label for="nm-frame-slider">Frame</label>
             <input id="nm-frame-slider" type="range" min="0" max="0" step="1" value="0" disabled />
             <span id="nm-frame-label" class="value-label">Frame 0/0</span>
+            <label class="check-label" for="nm-show-atom-index">
+              <input id="nm-show-atom-index" type="checkbox" />
+              Atom Indices
+            </label>
           </div>
 
-          <div id="nm-mode-detail" class="mode-detail">
-            No mode selected. The displayed displacement scale is a visualization factor, not a physical amplitude.
+            <div id="nm-mode-detail" class="mode-detail">
+              No mode selected. The displayed displacement scale is a visualization factor, not a physical amplitude.
+            </div>
+          </div>
+
+          <div id="nm-modes-viewer-card" class="viewer-card card">
+            <div id="nm-modes-viewer" class="viewer-surface"></div>
+            <div id="nm-modes-status" class="status">Choose a molden file to begin.</div>
+          </div>
+
+          <div id="nm-spectrum-card" class="spectrum-card card">
+            <div class="section-title">
+              <span>IR Spectrum</span>
+              <span id="nm-spectrum-mode-count" class="count-pill">0</span>
+            </div>
+
+            <div class="spectrum-toolbar">
+              <label for="nm-spectrum-width-slider">Broadening (Gaussian FWHM)</label>
+              <input id="nm-spectrum-width-slider" type="range" min="4" max="80" step="1" value="20" />
+              <span id="nm-spectrum-width-label" class="value-label">20 cm^-1</span>
+            </div>
+
+            <div id="nm-spectrum-plot" class="spectrum-plot">
+              <div class="mode-empty">Upload a <code>molden</code> file to render the IR spectrum.</div>
+            </div>
+            <div id="nm-spectrum-status" class="status">
+              IR spectrum rendering uses positive frequencies with finite intensities from <code>[INT]</code>.
+            </div>
           </div>
         </div>
 
-        <div class="viewer-card card">
-          <div id="nm-viewer"></div>
-          <div id="nm-status" class="status">Choose a molden file to begin.</div>
-        </div>
-
-        <div class="spectrum-card card">
-          <div class="section-title">
-            <span>IR Spectrum</span>
-            <span id="nm-spectrum-mode-count" class="count-pill">0</span>
+        <div id="nm-workspace-sampling-panel" class="workspace-panel" hidden>
+          <div id="nm-sampling-summary-card" class="sampling-summary-card card">
+            <div class="section-title">
+              <span>Current Sampling Plan</span>
+              <span id="nm-sampling-batch-pill" class="count-pill">0</span>
+            </div>
+            <div id="nm-sampling-summary-grid" class="summary-grid">
+              <div class="summary-empty">Run a normal-mode sampling job to populate the ensemble summary.</div>
+            </div>
+            <div class="distribution-actions">
+              <button id="nm-export-bundle-btn" class="toolbar-btn" type="button" disabled>Export Bundle</button>
+              <div id="nm-export-status" class="status-inline">
+                Export a reproducibility bundle after a sampling batch is available.
+              </div>
+            </div>
           </div>
 
-          <div class="spectrum-toolbar">
-            <label for="nm-spectrum-width-slider">Broadening (Gaussian FWHM)</label>
-            <input id="nm-spectrum-width-slider" type="range" min="4" max="80" step="1" value="20" />
-            <span id="nm-spectrum-width-label" class="value-label">20 cm^-1</span>
+          <div id="nm-sampling-viewer-card" class="viewer-card card">
+            <div id="nm-sampling-viewer" class="viewer-surface"></div>
+            <div id="nm-sampling-status" class="status">
+              Sampling view is ready. Open Sampling Settings to generate an ensemble.
+            </div>
           </div>
 
-          <div id="nm-spectrum-plot" class="spectrum-plot">
-            <div class="mode-empty">Upload a <code>molden</code> file to render the IR spectrum.</div>
-          </div>
-          <div id="nm-spectrum-status" class="status">
-            IR spectrum rendering uses positive frequencies with finite intensities from <code>[INT]</code>.
+          <div id="nm-distribution-card" class="sampling-card card">
+            <div class="section-title">
+              <span>Distribution</span>
+              <span id="nm-distribution-batch-pill" class="count-pill">0</span>
+            </div>
+            <div class="distribution-controls">
+              <div class="field-group">
+                <label for="nm-measurement-kind">Measurement</label>
+                <select id="nm-measurement-kind">
+                  <option value="bond">Bond</option>
+                  <option value="angle">Angle</option>
+                  <option value="dihedral">Dihedral</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="nm-measurement-atom-0">Atom i</label>
+                <input id="nm-measurement-atom-0" type="number" min="0" step="1" placeholder="0-based" />
+              </div>
+              <div class="field-group">
+                <label for="nm-measurement-atom-1">Atom j</label>
+                <input id="nm-measurement-atom-1" type="number" min="0" step="1" placeholder="0-based" />
+              </div>
+              <div id="nm-measurement-atom-2-group" class="field-group u-hidden">
+                <label for="nm-measurement-atom-2">Atom k</label>
+                <input id="nm-measurement-atom-2" type="number" min="0" step="1" placeholder="0-based" />
+              </div>
+              <div id="nm-measurement-atom-3-group" class="field-group u-hidden">
+                <label for="nm-measurement-atom-3">Atom l</label>
+                <input id="nm-measurement-atom-3" type="number" min="0" step="1" placeholder="0-based" />
+              </div>
+            </div>
+            <div class="distribution-actions">
+              <button id="nm-measurement-plot-btn" class="toolbar-btn" type="button">Plot Histogram</button>
+              <div id="nm-measurement-status" class="status-inline">
+                Pick a sampled batch, choose a geometry target, and plot its distribution.
+              </div>
+            </div>
+            <div id="nm-measurement-plot" class="distribution-plot">
+              <div class="distribution-empty">Run sampling and request a bond, angle, or dihedral histogram.</div>
+            </div>
           </div>
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="nm-sampling-modal" class="modal-backdrop" hidden>
+    <div class="modal-shell" role="dialog" aria-modal="true" aria-labelledby="nm-sampling-modal-title">
+      <div class="modal-header">
+        <div>
+          <h2 id="nm-sampling-modal-title" class="modal-title">Sampling Settings</h2>
+          <p class="modal-subtitle">
+            Configure position and momentum sampling in normal-mode space, preview the per-mode plan,
+            and launch a backend sample batch from the uploaded molden file.
+          </p>
+        </div>
+        <button id="nm-sampling-modal-close-btn" class="modal-close-btn" type="button">Close</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="modal-grid">
+          <div class="field-group">
+            <label for="nm-sampling-sample-count">Sample count</label>
+            <input id="nm-sampling-sample-count" type="number" min="1" step="1" value="2048" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-preview-count">Preview count</label>
+            <input id="nm-sampling-preview-count" type="number" min="1" step="1" value="64" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-temperature">Temperature (K)</label>
+            <input id="nm-sampling-temperature" type="number" min="0" step="1" value="300" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-seed">Seed</label>
+            <input id="nm-sampling-seed" type="number" min="0" step="1" placeholder="auto" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-freq-min">Freq min (cm^-1)</label>
+            <input id="nm-sampling-freq-min" type="number" step="0.0001" value="1.0" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-freq-max">Freq max (cm^-1)</label>
+            <input id="nm-sampling-freq-max" type="number" step="0.0001" placeholder="no upper limit" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-position-default">Position default</label>
+            <select id="nm-sampling-position-default">
+              <option value="wigner_zero_t">Wigner 0 K</option>
+              <option value="wigner_finite_t" selected>Wigner finite T</option>
+              <option value="classical_finite_t">Classical finite T</option>
+              <option value="frozen">Frozen</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-momentum-default">Momentum default</label>
+            <select id="nm-sampling-momentum-default">
+              <option value="frozen">Frozen</option>
+              <option value="wigner_zero_t">Wigner 0 K</option>
+              <option value="wigner_finite_t" selected>Wigner finite T</option>
+              <option value="classical_finite_t">Classical finite T</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="rules-card">
+          <div class="section-row">
+            <div class="section-title" style="margin-bottom: 0;">
+              <span>Rules</span>
+              <span id="nm-sampling-rules-count" class="count-pill">0</span>
+            </div>
+            <button id="nm-sampling-add-rule-btn" class="modal-action-btn" type="button">Add Rule</button>
+          </div>
+          <div id="nm-sampling-rules-list" class="rules-list">
+            <div class="modal-empty">No override rules yet. Use defaults or add a rule by frequency range or mode indices.</div>
+          </div>
+        </div>
+
+        <div class="plan-preview-card">
+          <div class="section-row">
+            <div class="section-title" style="margin-bottom: 0;">
+              <span>Mode Sampling Preview</span>
+              <span id="nm-sampling-plan-count" class="count-pill">0</span>
+            </div>
+            <div id="nm-sampling-modal-status" class="status-inline">
+              Upload a molden file to preview per-mode sampling decisions.
+            </div>
+          </div>
+          <div class="plan-preview-scroll">
+            <table class="plan-preview-table">
+              <thead>
+                <tr>
+                  <th>Mode</th>
+                  <th>Frequency</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Q</th>
+                  <th>P</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="nm-sampling-plan-preview-body">
+                <tr>
+                  <td colspan="7">
+                    <div class="modal-empty">Upload a molden file to populate the sampling preview table.</div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div id="nm-sampling-modal-footer-status" class="status-inline">
+          The preview table reflects the current settings; the backend response is the final source of truth.
+        </div>
+        <button id="nm-sampling-submit-btn" class="modal-action-btn primary" type="button">Sample</button>
+      </div>
+    </div>
   </div>
 
   <script id="normal-modes-config-json" type="application/json">{}</script>

@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import math
+import secrets
 from threading import Lock
+import time
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -22,6 +24,14 @@ from backend.server.compute import (
 from backend.server.dataset_store import DatasetStore
 from backend.server.expression import ExpressionEvaluationError, evaluate_expression_payload
 from backend.server.molden import parse_molden_normal_modes
+from backend.server.normal_modes_sampling import (
+    SAMPLE_CACHE_MAX_ENTRIES,
+    build_normal_modes_export_bundle,
+    compute_measurement_values_from_batch,
+    prepare_sampling_inputs,
+    sample_normal_modes,
+    utc_now_iso,
+)
 from backend.server.models import (
     BootstrapResponse,
     ExpressionEnsembleRequest,
@@ -44,8 +54,12 @@ from backend.server.models import (
     MoleculeHydrogenBondResponse,
     MoleculeNacResponse,
     MoleculeTrajectoryResponse,
+    NormalModesMeasurementRequest,
+    NormalModesMeasurementResponse,
     NormalModesParseTextRequest,
     NormalModesParseTextResponse,
+    NormalModesSampleTextRequest,
+    NormalModesSampleTextResponse,
     RawKeyAliasListResponse,
     RawKeyAliasUpsertRequest,
     RawKeySeriesRequest,
@@ -377,6 +391,7 @@ def create_app(
     api_base = api_base.rstrip("/") or "/api"
     if mol3d_cache is None:
         mol3d_cache = cache
+    normal_modes_sample_cache = SeriesLRUCache(max_entries=SAMPLE_CACHE_MAX_ENTRIES)
     browse_root_resolved = Path(browse_root).resolve() if browse_root is not None else None
 
     runtime_lock = Lock()
@@ -563,6 +578,104 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=f"Failed to parse molden content: {exc}") from exc
         return NormalModesParseTextResponse(**payload)
+
+    @app.post(f"{api_base}/normal-modes/sample-text", response_model=NormalModesSampleTextResponse)
+    def sample_normal_modes_text(req: NormalModesSampleTextRequest) -> NormalModesSampleTextResponse:
+        request_received_at_utc = utc_now_iso()
+        started_at = time.perf_counter()
+        try:
+            parsed_payload = parse_molden_normal_modes(req.content, source_name=req.filename)
+            preparation = prepare_sampling_inputs(parsed_payload)
+            sample_payload = sample_normal_modes(
+                preparation,
+                sample_count=int(req.sample_count),
+                preview_count=int(req.preview_count),
+                position_default=str(req.position_default),
+                momentum_default=str(req.momentum_default),
+                temperature_k=(None if req.temperature_k is None else float(req.temperature_k)),
+                seed=req.seed,
+                freq_min_cm1=(None if req.freq_min_cm1 is None else float(req.freq_min_cm1)),
+                freq_max_cm1=(None if req.freq_max_cm1 is None else float(req.freq_max_cm1)),
+                rules=[item.model_dump() for item in req.rules],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to sample normal modes: {exc}") from exc
+
+        sampling_completed_at_utc = utc_now_iso()
+        sampling_duration_ms = int(round((time.perf_counter() - started_at) * 1000.0))
+        batch_id = f"nm-sample-{secrets.token_urlsafe(12)}"
+        response_payload = dict(sample_payload["response_payload"])
+        normalized_request = req.model_dump(exclude={"content"})
+        normalized_request["filename"] = str(parsed_payload.get("source_name") or req.filename)
+        normalized_request["seed"] = int(response_payload["seed"])
+        normalized_request["preview_count_requested"] = int(req.preview_count)
+        normalized_request["preview_count_effective"] = int(response_payload["preview_count"])
+        batch_payload = dict(sample_payload["batch_payload"])
+        batch_payload["batch_id"] = str(batch_id)
+        batch_payload["source_content"] = str(req.content)
+        batch_payload["request_snapshot"] = normalized_request
+        batch_payload["request_received_at_utc"] = str(request_received_at_utc)
+        batch_payload["sampling_completed_at_utc"] = str(sampling_completed_at_utc)
+        batch_payload["sampling_duration_ms"] = int(sampling_duration_ms)
+        batch_payload["source_name"] = str(parsed_payload.get("source_name") or req.filename)
+        normal_modes_sample_cache.put(("normal_modes_sample_batch", batch_id), batch_payload)
+        response_payload["batch_id"] = str(batch_id)
+        response_payload["sampling_completed_at_utc"] = str(sampling_completed_at_utc)
+        return NormalModesSampleTextResponse(**response_payload)
+
+    @app.post(
+        f"{api_base}/normal-modes/sample-batches/{{batch_id}}/measurements",
+        response_model=NormalModesMeasurementResponse,
+    )
+    def measure_normal_modes_batch(
+        batch_id: str,
+        req: NormalModesMeasurementRequest,
+    ) -> NormalModesMeasurementResponse:
+        cache_key = ("normal_modes_sample_batch", str(batch_id))
+        batch_payload = normal_modes_sample_cache.get(cache_key)
+        if batch_payload is None:
+            raise HTTPException(status_code=404, detail=f"Normal-modes sample batch not found: {batch_id}")
+
+        try:
+            measurement_payload = compute_measurement_values_from_batch(
+                batch_payload,
+                measurement_kind=str(req.measurement_kind),
+                atom_indices=[int(v) for v in req.atom_indices],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to compute sample measurement: {exc}") from exc
+
+        measurement_payload["batch_id"] = str(batch_id)
+        return NormalModesMeasurementResponse(**measurement_payload)
+
+    @app.get(f"{api_base}/normal-modes/sample-batches/{{batch_id}}/export")
+    def export_normal_modes_batch(batch_id: str) -> Response:
+        cache_key = ("normal_modes_sample_batch", str(batch_id))
+        batch_payload = normal_modes_sample_cache.get(cache_key)
+        if batch_payload is None:
+            raise HTTPException(status_code=404, detail=f"Normal-modes sample batch not found: {batch_id}")
+
+        try:
+            file_name, archive_bytes = build_normal_modes_export_bundle(
+                batch_id=str(batch_id),
+                batch_payload=batch_payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to export sample batch: {exc}") from exc
+
+        return Response(
+            content=archive_bytes,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_name}"',
+            },
+        )
 
     @app.get(f"{api_base}/files", response_model=FileBrowserResponse)
     def list_files(path: str | None = None) -> FileBrowserResponse:

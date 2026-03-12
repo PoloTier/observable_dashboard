@@ -38,11 +38,44 @@ class NormalModesParseTextRequest(BaseModel):
     content: str = Field(..., min_length=1)
 
 
+NormalModeSampler = Literal["wigner_finite_t", "wigner_zero_t", "classical_finite_t", "frozen"]
+NormalModeRuleSelectorType = Literal["freq_range", "mode_indices"]
+NormalModeMeasurementKind = Literal["bond", "angle", "dihedral"]
+
+
+class NormalModesSamplingRuleRequest(BaseModel):
+    selector_type: NormalModeRuleSelectorType
+    mode_indices: list[int] = Field(default_factory=list)
+    freq_min_cm1: float | None = None
+    freq_max_cm1: float | None = None
+    position_sampler: NormalModeSampler | None = None
+    momentum_sampler: NormalModeSampler | None = None
+
+
+class NormalModesSampleTextRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1)
+    sample_count: int = Field(..., ge=1)
+    preview_count: int = Field(..., ge=1)
+    position_default: NormalModeSampler
+    momentum_default: NormalModeSampler
+    temperature_k: float | None = None
+    seed: int | None = Field(default=None, ge=0)
+    freq_min_cm1: float | None = None
+    freq_max_cm1: float | None = None
+    rules: list[NormalModesSamplingRuleRequest] = Field(default_factory=list)
+
+
 class FileBrowserEntry(BaseModel):
     name: str
     relative_path: str
     kind: Literal["directory", "file"]
     loadable: bool = False
+
+
+class NormalModesMeasurementRequest(BaseModel):
+    measurement_kind: NormalModeMeasurementKind
+    atom_indices: list[int] = Field(default_factory=list)
 
 
 class FileBrowserResponse(BaseModel):
@@ -285,6 +318,44 @@ class NormalModesParseTextResponse(BaseModel):
     mode_summaries: list[NormalModeSummary]
     mode_vectors_ang: list[list[list[float]]]
     default_mode_index: int
+
+
+class NormalModesSamplingModePlanItem(BaseModel):
+    mode_index: int
+    frequency_cm1: float
+    kind: Literal["positive", "zero", "imaginary"]
+    included: bool
+    position_sampler: NormalModeSampler
+    momentum_sampler: NormalModeSampler
+    reason: str
+
+
+class NormalModesSampleTextResponse(BaseModel):
+    batch_id: str
+    source_name: str
+    n_atoms: int
+    atom_numbers: list[int]
+    equilibrium_coords_ang: list[list[float]]
+    preview_coords_ang: list[list[list[float]]]
+    preview_indices: list[int]
+    sample_count: int
+    preview_count: int
+    seed: int
+    sampling_completed_at_utc: str
+    mode_sampling_plan: list[NormalModesSamplingModePlanItem]
+
+
+class NormalModesMeasurementResponse(BaseModel):
+    batch_id: str
+    measurement_kind: NormalModeMeasurementKind
+    atom_indices: list[int]
+    unit: str
+    values: list[float]
+    sample_count: int
+    min: float
+    max: float
+    mean: float
+    std: float
 
 
 class MoleculeTrajectoryResponse(BaseModel):
