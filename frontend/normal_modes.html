@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Normal Modes Viewer</title>
+  <script>
+    (function () {
+      const storageKey = 'observable_dashboard_theme_v1';
+      let mode = 'light';
+      try {
+        const savedMode = localStorage.getItem(storageKey);
+        if (savedMode === 'light' || savedMode === 'dark') mode = savedMode;
+      } catch {
+        // ignore storage failures
+      }
+      document.documentElement.setAttribute('data-theme', mode);
+      document.documentElement.style.colorScheme = mode;
+    })();
+  </script>
+  <script src="assets/vendor/plotly-2.35.2.min.js"></script>
+  <script src="assets/vendor/3Dmol-min.js"></script>
+  <style>
+    html {
+      min-height: 100%;
+      color-scheme: light;
+    }
+    :root {
+      --bg: #eef4fb;
+      --bg-ambient: radial-gradient(circle at 12% 18%, rgba(14, 165, 233, 0.18), transparent 34%),
+        radial-gradient(circle at 84% 10%, rgba(2, 132, 199, 0.12), transparent 28%),
+        linear-gradient(180deg, #f8fbff 0%, #edf4fb 100%);
+      --panel: rgba(255, 255, 255, 0.84);
+      --panel-strong: #ffffff;
+      --panel-soft: #f4f8fc;
+      --border: #d7dee8;
+      --border-strong: #c6d3e2;
+      --text: #172033;
+      --text-soft: #334155;
+      --muted: #64748b;
+      --accent: #0f5dcf;
+      --accent-soft: #eaf3ff;
+      --accent-soft-hover: #d8e9ff;
+      --accent-border: #bfd5f4;
+      --danger: #b42318;
+      --danger-soft: #fff5f4;
+      --danger-border: #f1c7c3;
+      --shadow: 0 24px 48px rgba(15, 23, 42, 0.08);
+      --viewer-bg: rgba(255, 255, 255, 0.92);
+    }
+    html[data-theme='dark'] {
+      color-scheme: dark;
+      --bg: #07111e;
+      --bg-ambient: radial-gradient(circle at 16% 18%, rgba(14, 165, 233, 0.22), transparent 36%),
+        radial-gradient(circle at 82% 10%, rgba(34, 197, 94, 0.16), transparent 30%),
+        linear-gradient(180deg, #06111e 0%, #091523 58%, #050b15 100%);
+      --panel: rgba(8, 16, 30, 0.82);
+      --panel-strong: rgba(10, 18, 36, 0.95);
+      --panel-soft: rgba(14, 23, 42, 0.94);
+      --border: rgba(148, 163, 184, 0.22);
+      --border-strong: rgba(148, 163, 184, 0.3);
+      --text: #e6eef8;
+      --text-soft: #d8e3f0;
+      --muted: #93a4bd;
+      --accent: #8bc1ff;
+      --accent-soft: rgba(59, 130, 246, 0.16);
+      --accent-soft-hover: rgba(96, 165, 250, 0.24);
+      --accent-border: rgba(96, 165, 250, 0.3);
+      --danger: #f7a39a;
+      --danger-soft: rgba(127, 29, 29, 0.24);
+      --danger-border: rgba(247, 163, 154, 0.24);
+      --shadow: 0 30px 64px rgba(2, 6, 23, 0.44);
+      --viewer-bg: rgba(6, 12, 24, 0.84);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      position: relative;
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: var(--bg-ambient);
+      z-index: -1;
+    }
+    .page {
+      width: 100%;
+      padding: 18px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+    .header {
+      position: relative;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+    }
+    .eyebrow {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .title {
+      font-size: 28px;
+      font-weight: 700;
+      margin: 0 0 6px;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      max-width: 72ch;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .file-picker {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 999px;
+      border: 1px solid var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .file-picker:hover {
+      background: var(--accent-soft-hover);
+    }
+    .file-picker input {
+      display: none;
+    }
+    .file-name {
+      min-width: 220px;
+      max-width: 320px;
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--text-soft);
+      font-size: 14px;
+      line-height: 1.4;
+      display: flex;
+      align-items: center;
+    }
+    .appearance-control {
+      margin-left: auto;
+      position: relative;
+    }
+    .appearance-trigger {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text-soft);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+    }
+    .appearance-trigger:hover {
+      transform: translateY(-1px);
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .appearance-trigger svg {
+      width: 18px;
+      height: 18px;
+    }
+    .appearance-popover {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: min(220px, calc(100vw - 28px));
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-strong);
+      backdrop-filter: blur(20px);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 30;
+    }
+    .appearance-popover[hidden] {
+      display: none;
+    }
+    .appearance-popover-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .appearance-option {
+      display: grid;
+      grid-template-columns: auto 32px minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      padding: 7px 8px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      cursor: pointer;
+    }
+    .appearance-option:hover,
+    .appearance-option.is-selected {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .appearance-option input {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+    .appearance-swatch {
+      width: 36px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    }
+    .appearance-swatch.light {
+      background: linear-gradient(135deg, #f9fcff 0%, #dbeafe 54%, #eef2ff 100%);
+    }
+    .appearance-swatch.dark {
+      background: linear-gradient(135deg, #0b1220 0%, #13213f 52%, #1f3d74 100%);
+    }
+    .appearance-option-copy {
+      display: block;
+      min-width: 0;
+    }
+    .appearance-option-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .appearance-option-desc {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .layout {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .sidebar {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      height: min(calc(100vh - 176px), 720px);
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-weight: 700;
+    }
+    .count-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 30px;
+      min-height: 24px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .mode-table-shell {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+    }
+    .mode-table-scroll {
+      --mode-col-index: 78px;
+      --mode-col-frequency: 138px;
+      --mode-col-kind: 92px;
+      --mode-col-ir: 88px;
+      --mode-table-min-width: calc(
+        var(--mode-col-index) +
+        var(--mode-col-frequency) +
+        var(--mode-col-kind) +
+        var(--mode-col-ir)
+      );
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-soft);
+      scrollbar-gutter: stable both-edges;
+    }
+    .mode-table-header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns:
+        var(--mode-col-index)
+        var(--mode-col-frequency)
+        var(--mode-col-kind)
+        var(--mode-col-ir);
+      min-width: var(--mode-table-min-width);
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .mode-table-header-cell {
+      padding: 10px 12px;
+      white-space: nowrap;
+    }
+    .mode-list {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: var(--mode-table-min-width);
+    }
+    .mode-empty {
+      margin: 12px;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px dashed var(--border);
+      background: var(--panel-strong);
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .mode-item {
+      width: 100%;
+      min-width: var(--mode-table-min-width);
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .mode-item:last-child {
+      border-bottom: 0;
+    }
+    .mode-item:hover {
+      background: var(--accent-soft);
+    }
+    .mode-item.is-active {
+      background: linear-gradient(180deg, var(--accent-soft) 0%, rgba(255, 255, 255, 0) 100%);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .mode-item-row {
+      display: grid;
+      grid-template-columns:
+        var(--mode-col-index)
+        var(--mode-col-frequency)
+        var(--mode-col-kind)
+        var(--mode-col-ir);
+      min-width: var(--mode-table-min-width);
+      align-items: center;
+    }
+    .mode-cell {
+      min-width: 0;
+      padding: 9px 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mode-cell-index {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .mode-cell-frequency {
+      font-variant-numeric: tabular-nums;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-soft);
+    }
+    .mode-cell-kind,
+    .mode-cell-ir {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .mode-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 18px;
+      padding: 0 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .mode-ir {
+      white-space: nowrap;
+    }
+    .mode-tag.imaginary {
+      color: var(--danger);
+      border-color: var(--danger-border);
+      background: var(--danger-soft);
+    }
+    .mode-tag.zero {
+      color: var(--muted);
+    }
+    .mode-tag.positive {
+      color: var(--accent);
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .mode-ir-empty {
+      color: var(--muted);
+      opacity: 0.72;
+    }
+    .main {
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 14px;
+      min-height: 0;
+      align-content: start;
+    }
+    .controls-card {
+      padding: 16px;
+    }
+    .controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .controls-row + .controls-row {
+      margin-top: 12px;
+    }
+    .controls-card button {
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border-strong);
+      background: var(--panel-strong);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+    }
+    .controls-card button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+    .controls-card button:not(:disabled):hover {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .controls-card input[type="range"] {
+      flex: 1 1 220px;
+      min-width: 180px;
+    }
+    .controls-card label {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .value-label {
+      min-width: 72px;
+      font-variant-numeric: tabular-nums;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-soft);
+    }
+    .mode-detail {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--text-soft);
+      line-height: 1.5;
+      margin-top: 12px;
+    }
+    .mode-detail strong {
+      color: var(--text);
+    }
+    .spectrum-card {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .spectrum-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .spectrum-toolbar input[type="range"] {
+      flex: 1 1 220px;
+      min-width: 180px;
+    }
+    .spectrum-toolbar label {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .spectrum-plot {
+      width: 100%;
+      min-height: 320px;
+      height: 340px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      overflow: hidden;
+    }
+    .spectrum-plot .mode-empty {
+      height: calc(100% - 24px);
+      margin: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .viewer-card {
+      padding: 14px;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 12px;
+      min-height: 0;
+      height: min(calc(100vh - 176px), 720px);
+    }
+    #nm-viewer {
+      width: 100%;
+      min-height: 0;
+      height: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--viewer-bg);
+      overflow: hidden;
+    }
+    .status {
+      min-height: 24px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .status.error {
+      color: var(--danger);
+    }
+    button:focus-visible,
+    input:focus-visible,
+    .appearance-trigger:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (max-width: 980px) {
+      .header,
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .toolbar {
+        justify-content: flex-start;
+      }
+      .file-name {
+        max-width: none;
+      }
+      .layout {
+        min-height: auto;
+      }
+      .sidebar,
+      .viewer-card {
+        height: auto;
+      }
+      .mode-table-scroll {
+        max-height: min(42vh, 420px);
+      }
+      .spectrum-plot {
+        min-height: 280px;
+        height: 300px;
+      }
+      .appearance-popover {
+        right: -4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="header card">
+      <div>
+        <div class="eyebrow">Molden Normal Modes</div>
+        <h1 class="title">Normal Modes Viewer</h1>
+        <p class="subtitle">
+          Upload a single <code>molden</code> file, parse frequencies and mode vectors, and preview one vibrational
+          mode at a time as a synthetic oscillation around the equilibrium structure.
+        </p>
+      </div>
+
+      <div class="toolbar">
+        <label class="file-picker" for="nm-file-input">
+          <span>Open Molden</span>
+          <input id="nm-file-input" type="file" accept=".molden,.dat,.mol,.txt" />
+        </label>
+        <div id="nm-file-name" class="file-name">No file loaded.</div>
+
+        <div class="appearance-control" data-appearance-control>
+          <button
+            class="appearance-trigger"
+            id="normal-modes-appearance-toggle"
+            type="button"
+            aria-label="Open appearance settings"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="normal-modes-appearance-panel"
+            data-appearance-trigger
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5c0-.73-.59-1.32-1.32-1.32h-1.26a2.22 2.22 0 0 1 0-4.43h1.26c.73 0 1.32-.59 1.32-1.32A8.5 8.5 0 0 0 12 3.5Z"
+                fill="currentColor"
+              />
+              <circle cx="8.1" cy="10.2" r="1.1" fill="currentColor" />
+              <circle cx="10.7" cy="7.2" r="1.1" fill="currentColor" />
+              <circle cx="14.3" cy="7.5" r="1.1" fill="currentColor" />
+            </svg>
+          </button>
+          <div
+            class="appearance-popover"
+            id="normal-modes-appearance-panel"
+            role="dialog"
+            aria-label="Appearance settings"
+            hidden
+            data-appearance-panel
+          >
+            <div class="appearance-popover-title">Appearance</div>
+            <label class="appearance-option" title="Bright cards with a neutral viewer backdrop.">
+              <input type="radio" name="appearance-mode" value="light" />
+              <span class="appearance-swatch light" aria-hidden="true"></span>
+              <span class="appearance-option-copy">
+                <span class="appearance-option-name">Light</span>
+              </span>
+            </label>
+            <label class="appearance-option" title="Night-mode viewer and low-glare controls.">
+              <input type="radio" name="appearance-mode" value="dark" />
+              <span class="appearance-swatch dark" aria-hidden="true"></span>
+              <span class="appearance-option-copy">
+                <span class="appearance-option-name">Dark</span>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar card">
+        <div class="section-title">
+          <span>Modes</span>
+          <span id="nm-mode-count" class="count-pill">0</span>
+        </div>
+        <div class="mode-table-shell">
+          <div id="nm-mode-table-scroll" class="mode-table-scroll">
+            <div class="mode-table-header">
+              <div class="mode-table-header-cell">Mode</div>
+              <div class="mode-table-header-cell">Frequency</div>
+              <div class="mode-table-header-cell">Type</div>
+              <div class="mode-table-header-cell">IR</div>
+            </div>
+            <div id="nm-mode-list" class="mode-list">
+              <div class="mode-empty">Upload a <code>molden</code> file to populate normal modes.</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="main">
+        <div class="controls-card card">
+          <div class="controls-row">
+            <button id="nm-prev-btn" type="button" disabled>Prev</button>
+            <button id="nm-play-btn" type="button" disabled>Play</button>
+            <button id="nm-next-btn" type="button" disabled>Next</button>
+            <label for="nm-amplitude-slider">Amplitude</label>
+            <input id="nm-amplitude-slider" type="range" min="0.1" max="4.0" step="0.1" value="1.0" />
+            <span id="nm-amplitude-label" class="value-label">1.0x</span>
+          </div>
+
+          <div class="controls-row">
+            <label for="nm-speed-slider">Speed</label>
+            <input id="nm-speed-slider" type="range" min="0.5" max="4.0" step="0.25" value="1.0" />
+            <span id="nm-speed-label" class="value-label">1.0x</span>
+          </div>
+
+          <div class="controls-row">
+            <label for="nm-frame-slider">Frame</label>
+            <input id="nm-frame-slider" type="range" min="0" max="0" step="1" value="0" disabled />
+            <span id="nm-frame-label" class="value-label">Frame 0/0</span>
+          </div>
+
+          <div id="nm-mode-detail" class="mode-detail">
+            No mode selected. The displayed displacement scale is a visualization factor, not a physical amplitude.
+          </div>
+        </div>
+
+        <div class="viewer-card card">
+          <div id="nm-viewer"></div>
+          <div id="nm-status" class="status">Choose a molden file to begin.</div>
+        </div>
+
+        <div class="spectrum-card card">
+          <div class="section-title">
+            <span>IR Spectrum</span>
+            <span id="nm-spectrum-mode-count" class="count-pill">0</span>
+          </div>
+
+          <div class="spectrum-toolbar">
+            <label for="nm-spectrum-width-slider">Broadening (Gaussian FWHM)</label>
+            <input id="nm-spectrum-width-slider" type="range" min="4" max="80" step="1" value="20" />
+            <span id="nm-spectrum-width-label" class="value-label">20 cm^-1</span>
+          </div>
+
+          <div id="nm-spectrum-plot" class="spectrum-plot">
+            <div class="mode-empty">Upload a <code>molden</code> file to render the IR spectrum.</div>
+          </div>
+          <div id="nm-spectrum-status" class="status">
+            IR spectrum rendering uses positive frequencies with finite intensities from <code>[INT]</code>.
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script id="normal-modes-config-json" type="application/json">{}</script>
+  <script src="assets/mol3d/dashboard_mol3d_constants.js"></script>
+  <script src="assets/dashboard/dashboard_appearance.js"></script>
+  <script src="assets/normal_modes/normal_modes_page.js"></script>
+</body>
+</html>

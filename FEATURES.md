@@ -4,6 +4,7 @@
 
 - 主页面入口：`http://127.0.0.1:8000/`（默认）
 - 3D 页面入口：`http://127.0.0.1:8000/molecule3d.html`
+- Normal modes 页面入口：`http://127.0.0.1:8000/normal_modes.html`
 - API 基址：`/api`
 
 ---
@@ -30,6 +31,7 @@ python main.py \
 
 - `GET /api/healthz`
 - `GET /api/bootstrap`
+- `POST /api/normal-modes/parse-text`
 - `POST /api/inspect-keys`
 - `POST /api/raw-key-series`
 - `POST /api/series`
@@ -218,6 +220,21 @@ python main.py \
   - 3D 模型中：仅高亮项显示虚线和当前帧数值标签
     - bond：两点连线 + `Å`
     - angle：两段连线 + `°`
+
+---
+
+## Normal Modes 页面功能（normal_modes.html）
+
+- 通过浏览器本地上传单个 `molden` 文件
+- 解析并展示 `frequency` 列表，支持 mode 选择
+- 使用平衡构型 + 单个 mode 位移生成合成振动帧，在 3Dmol.js 中播放
+- 当前第一版只解析：
+  - `[Atoms]`
+  - `[FR-COORD]`
+  - `[FREQ]`
+  - `[FR-NORM-COORD]`
+  - 可选 `[INT]`
+- 动画 `Amplitude` 仅为可视化比例，不代表真实振动振幅
     - dihedral：三段连线 + `°`
   - 下方子图：叠加当前类型所有已跟踪项的时间曲线（高亮项加粗，非高亮项淡化）
   - 子图中竖虚线始终指向当前帧时间

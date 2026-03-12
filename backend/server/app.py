@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 from threading import Lock
@@ -20,6 +21,7 @@ from backend.server.compute import (
 )
 from backend.server.dataset_store import DatasetStore
 from backend.server.expression import ExpressionEvaluationError, evaluate_expression_payload
+from backend.server.molden import parse_molden_normal_modes
 from backend.server.models import (
     BootstrapResponse,
     ExpressionEnsembleRequest,
@@ -42,6 +44,8 @@ from backend.server.models import (
     MoleculeHydrogenBondResponse,
     MoleculeNacResponse,
     MoleculeTrajectoryResponse,
+    NormalModesParseTextRequest,
+    NormalModesParseTextResponse,
     RawKeyAliasListResponse,
     RawKeyAliasUpsertRequest,
     RawKeySeriesRequest,
@@ -103,6 +107,10 @@ def _build_bootstrap_payload(
     payload = dict(store.to_bootstrap(api_base=api_base))
     payload["raw_key_aliases"] = _build_raw_key_alias_items(raw_key_aliases)
     return payload
+
+
+def _json_script_text(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":")).replace("</", "<\\/")
 
 
 def _dataset_is_loaded(store: DatasetStore) -> bool:
@@ -510,6 +518,20 @@ def create_app(
             return HTMLResponse(mol3d_file.read_text())
         return HTMLResponse("<h1>Molecule3D page not found</h1>", status_code=404)
 
+    @app.get("/normal_modes.html", response_class=HTMLResponse)
+    def normal_modes_page() -> HTMLResponse:
+        normal_modes_file = frontend_dir / "normal_modes.html"
+        if normal_modes_file.exists():
+            html = normal_modes_file.read_text()
+            config_json = _json_script_text({"api_base": api_base})
+            html = html.replace(
+                '<script id="normal-modes-config-json" type="application/json">{}</script>',
+                f'<script id="normal-modes-config-json" type="application/json">{config_json}</script>',
+                1,
+            )
+            return HTMLResponse(html)
+        return HTMLResponse("<h1>Normal Modes page not found</h1>", status_code=404)
+
     # Serve frontend source files (for development)
     @app.get("/src/{file_path:path}")
     def serve_src(file_path: str) -> FileResponse:
@@ -531,6 +553,16 @@ def create_app(
     def get_bootstrap() -> BootstrapResponse:
         _, bootstrap, _ = _get_runtime_snapshot()
         return BootstrapResponse(**bootstrap)
+
+    @app.post(f"{api_base}/normal-modes/parse-text", response_model=NormalModesParseTextResponse)
+    def parse_normal_modes_text(req: NormalModesParseTextRequest) -> NormalModesParseTextResponse:
+        try:
+            payload = parse_molden_normal_modes(req.content, source_name=req.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to parse molden content: {exc}") from exc
+        return NormalModesParseTextResponse(**payload)
 
     @app.get(f"{api_base}/files", response_model=FileBrowserResponse)
     def list_files(path: str | None = None) -> FileBrowserResponse:

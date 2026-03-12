@@ -58,6 +58,10 @@ def _make_app():
     return create_app(store=_build_store(), cache=SeriesLRUCache(max_entries=32))
 
 
+def _make_app_with_api_base(api_base: str):
+    return create_app(store=_build_store(), cache=SeriesLRUCache(max_entries=32), api_base=api_base)
+
+
 def _find_endpoint(app: object, path: str):
     for route in getattr(app, "routes", []):
         if getattr(route, "path", "") == path:
@@ -102,6 +106,62 @@ def test_molecule3d_page_includes_theme_bootstrap_and_control() -> None:
     assert 'id="dynamic-bonds"' in text
     assert "/assets/dashboard/dashboard_appearance.js" in text
     assert 'src="assets/mol3d/dashboard_mol3d_page.js"' not in text
+
+
+def test_normal_modes_page_includes_upload_controls_and_assets() -> None:
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/normal_modes.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert "observable_dashboard_theme_v1" in text
+    assert 'id="normal-modes-config-json"' in text
+    assert 'id="nm-file-input"' in text
+    assert 'id="nm-mode-list"' in text
+    assert 'id="nm-mode-table-scroll"' in text
+    assert 'class="mode-table-header"' in text
+    assert '>Mode</div>' in text
+    assert '>Frequency</div>' in text
+    assert '>Type</div>' in text
+    assert '>IR</div>' in text
+    assert 'id="nm-viewer"' in text
+    assert 'id="nm-spectrum-plot"' in text
+    assert 'id="nm-spectrum-width-slider"' in text
+    assert 'id="nm-spectrum-status"' in text
+    assert 'id="nm-speed-slider"' in text
+    assert 'id="nm-speed-label"' in text
+    assert 'data-appearance-control' in text
+    assert 'assets/vendor/plotly-2.35.2.min.js' in text
+    assert 'src="assets/normal_modes/normal_modes_page.js"' in text
+    assert 'src="assets/dashboard/dashboard_appearance.js"' in text
+
+
+def test_normal_modes_page_injects_configured_api_base() -> None:
+    app = _make_app_with_api_base("/custom-api")
+    endpoint = _find_endpoint(app, "/normal_modes.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert 'id="normal-modes-config-json"' in text
+    assert '{"api_base":"/custom-api"}' in text
+
+
+def test_normal_modes_page_script_reads_injected_api_base() -> None:
+    text = (
+        PKG_ROOT
+        / "frontend"
+        / "public"
+        / "assets"
+        / "normal_modes"
+        / "normal_modes_page.js"
+    ).read_text(encoding="utf-8")
+    assert "normal-modes-config-json" in text
+    assert "getApiBase()" in text
+    assert "fetch(`${getApiBase()}/normal-modes/parse-text`" in text
 
 
 def test_theme_asset_exists_and_exports_public_api() -> None:

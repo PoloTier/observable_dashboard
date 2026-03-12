@@ -6,6 +6,7 @@ A web-based dashboard for visualizing molecular dynamics observables and traject
 
 - **Interactive 2D Plots**: Visualize time-series data for bonds, angles, dihedrals, energies, eigenvalues, NAC, state populations, and raw keys
 - **3D Molecular Viewer**: WebGL-based playback with geometry measurements, hydrogen-bond overlays, NAC/dE/dE-NAC vectors, per-atom render rules, and GIF/WebM export
+- **Normal Modes Viewer**: Upload a single `molden` file, parse `frequency` / `FR-NORM-COORD`, and animate one normal mode at a time
 - **Ensemble Statistics**: Automatic calculation of mean/median with confidence intervals across multiple trajectories
 - **Custom Data Support**: Inspect and plot arbitrary keys from your pickle files
 - **Expression Engine**: Evaluate custom mathematical expressions on your data
@@ -53,6 +54,7 @@ If you are not using the example config next to this repository, replace `../viz
 
 - Main dashboard: `http://127.0.0.1:8000/`
 - 3D viewer: `http://127.0.0.1:8000/molecule3d.html`
+- Normal modes viewer: `http://127.0.0.1:8000/normal_modes.html`
 
 ## Usage
 
@@ -93,12 +95,19 @@ The server provides a REST API:
 - `GET /api/molecule3d/de/{traj_id}` - Get dE vectors for a state pair
 - `GET /api/molecule3d/de_nac/{traj_id}` - Get dE*NAC vectors for a state pair
 - `GET /api/molecule3d/hbonds/{traj_id}` - Get cached hydrogen-bond detections
+- `POST /api/normal-modes/parse-text` - Parse uploaded molden text into equilibrium coords, frequencies, and mode vectors
 
 ## Molecule3D Notes
 
 - Trajectory playback is optimized around a single reusable 3Dmol model instead of rebuilding the scene on every frame.
 - Hydrogen bonds are defined with `donor-acceptor distance < 3.5 Å` and `D-H-A angle > 150°`.
 - The returned hydrogen-bond `distance` field is the donor-acceptor distance.
+
+## Normal Modes Notes
+
+- The normal-modes page currently accepts one uploaded `molden` file at a time.
+- v1 parses `[Atoms]`, `[FR-COORD]`, `[FREQ]`, `[FR-NORM-COORD]`, and optional `[INT]`; other sections are ignored.
+- The vibration animation amplitude is a visualization scale, not a physical oscillation amplitude.
 
 ## Citation
 

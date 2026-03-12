@@ -33,6 +33,11 @@ class LoadDatasetResponse(BaseModel):
     dataset_revision: int
 
 
+class NormalModesParseTextRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1)
+
+
 class FileBrowserEntry(BaseModel):
     name: str
     relative_path: str
@@ -263,6 +268,23 @@ class ExpressionDatasetResponse(BaseModel):
     n_trajectories: int
     sample_count: list[int] | None = None
     cached: bool
+
+
+class NormalModeSummary(BaseModel):
+    mode_index: int
+    frequency_cm1: float
+    intensity: float | None = None
+    kind: Literal["positive", "zero", "imaginary"]
+
+
+class NormalModesParseTextResponse(BaseModel):
+    source_name: str
+    n_atoms: int
+    atom_numbers: list[int]
+    coords_ang: list[list[float]]
+    mode_summaries: list[NormalModeSummary]
+    mode_vectors_ang: list[list[list[float]]]
+    default_mode_index: int
 
 
 class MoleculeTrajectoryResponse(BaseModel):

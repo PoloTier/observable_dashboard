@@ -657,16 +657,18 @@ body::after {
 }
 .panel-head-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding-right: 34px;
+  padding-right: 48px;
   margin-bottom: 4px;
 }
 .panel-title {
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 0;
+  min-width: 0;
 }
 .panel-subtitle {
   display: none;
@@ -708,10 +710,20 @@ body::after {
   gap: 8px;
   align-items: center;
 }
+.panel-controls > * {
+  min-width: 0;
+  max-width: 100%;
+}
 .panel-controls .indices-wrap {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  max-width: 100%;
+}
+.panel-controls .indices-wrap input[type='number'] {
+  width: 3.2rem;
+  min-width: 3.2rem;
 }
 .panel-controls .expr-wrap {
   display: none;
