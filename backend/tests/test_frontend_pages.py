@@ -136,6 +136,7 @@ def test_normal_modes_page_includes_upload_controls_and_assets() -> None:
     assert 'id="nm-sampling-viewer"' in text
     assert 'id="nm-sampling-status"' in text
     assert 'id="nm-sampling-summary-card"' in text
+    assert 'id="nm-export-geometry-btn"' in text
     assert 'id="nm-export-bundle-btn"' in text
     assert 'id="nm-export-status"' in text
     assert 'id="nm-spectrum-plot"' in text
@@ -148,6 +149,14 @@ def test_normal_modes_page_includes_upload_controls_and_assets() -> None:
     assert 'id="nm-speed-label"' in text
     assert 'id="nm-show-atom-index"' in text
     assert 'id="nm-sampling-modal"' in text
+    assert 'id="nm-sampling-charge"' in text
+    assert 'id="nm-sampling-multiplicity"' in text
+    assert 'id="nm-geometry-export-modal"' in text
+    assert 'id="nm-geometry-export-file-name"' in text
+    assert 'id="nm-geometry-export-directory"' in text
+    assert 'id="nm-geometry-export-directory-browse-btn"' in text
+    assert 'id="nm-geometry-directory-browser-modal"' in text
+    assert 'id="nm-geometry-directory-browser-select-btn"' in text
     assert 'id="nm-sampling-plan-preview-body"' in text
     assert 'data-appearance-control' in text
     assert 'assets/vendor/plotly-2.35.2.min.js' in text
@@ -182,6 +191,100 @@ def test_normal_modes_page_script_reads_injected_api_base() -> None:
     assert "fetch(`${getApiBase()}/normal-modes/sample-text`" in text
     assert "/normal-modes/sample-batches/${encodeURIComponent(state.samplingResult.batch_id)}/measurements" in text
     assert "/normal-modes/sample-batches/${encodeURIComponent(batchId)}/export" in text
+    assert "/normal-modes/sample-batches/${encodeURIComponent(batchId)}/export-geometry" in text
+    assert "/normal-modes/sample-batches/${encodeURIComponent(batchId)}/export-geometry/save" in text
+    assert "new URL(`${getApiBase()}/files`, window.location.origin)" in text
+    assert "samplingCharge" in text
+    assert "samplingMultiplicity" in text
+    assert "nm-geometry-export-modal" in text
+    assert "nm-geometry-directory-browser-modal" in text
+    assert "DEFAULT_GEOMETRY_EXPORT_DIRECTORY" in text
+
+
+def test_distribution_compare_page_includes_upload_controls_and_assets() -> None:
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/distribution_compare.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert "observable_dashboard_theme_v1" in text
+    assert 'id="distribution-compare-config-json"' in text
+    assert 'id="dc-upload-input"' in text
+    assert 'id="dc-open-server-bundle-btn"' in text
+    assert 'id="dc-refresh-btn"' in text
+    assert 'id="dc-distribution-count"' in text
+    assert 'id="dc-active-count"' in text
+    assert 'id="dc-distribution-list"' in text
+    assert 'id="dc-file-browser-modal"' in text
+    assert 'id="dc-workspace-overlay-btn"' in text
+    assert 'id="dc-workspace-summary-btn"' in text
+    assert 'id="dc-workspace-spectrum-btn"' in text
+    assert 'id="dc-workspace-overlay-panel"' in text
+    assert 'id="dc-workspace-summary-panel"' in text
+    assert 'id="dc-workspace-spectrum-panel"' in text
+    assert 'id="dc-measurement-kind"' in text
+    assert 'id="dc-measurement-atom-2-group"' in text
+    assert 'id="dc-measurement-atom-3-group"' in text
+    assert 'id="dc-histogram-bins"' in text
+    assert 'id="dc-compare-btn"' in text
+    assert 'id="dc-compare-status"' in text
+    assert 'id="dc-plot-active-pill"' in text
+    assert 'id="dc-plot"' in text
+    assert 'id="dc-summary-meta"' in text
+    assert 'id="dc-summary-grid"' in text
+    assert 'id="dc-spectrum-delta-ev"' in text
+    assert 'id="dc-spectrum-x-unit"' in text
+    assert 'id="dc-spectrum-pair-status"' in text
+    assert 'id="dc-spectrum-pair-panel"' in text
+    assert 'id="dc-spectrum-status"' in text
+    assert 'id="dc-spectrum-active-pill"' in text
+    assert 'id="dc-spectrum-plot"' in text
+    assert 'id="dc-spectrum-compare-btn"' not in text
+    assert "Compare Spectrum" not in text
+    assert "Transition Pairs" in text
+    assert "Import Bundle Directory From Server" in text
+    assert "Browse Server Directories" in text
+    assert "Import TAR.GZ From Server" not in text
+    assert 'data-appearance-control' in text
+    assert 'assets/vendor/plotly-2.35.2.min.js' in text
+    assert 'src="assets/distributions/distribution_compare_page.js"' in text
+    assert 'src="assets/dashboard/dashboard_appearance.js"' in text
+
+
+def test_distribution_compare_page_injects_configured_api_base() -> None:
+    app = _make_app_with_api_base("/custom-api")
+    endpoint = _find_endpoint(app, "/distribution_compare.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert 'id="distribution-compare-config-json"' in text
+    assert '{"api_base":"/custom-api"}' in text
+
+
+def test_distribution_compare_page_script_reads_injected_api_base() -> None:
+    text = (
+        PKG_ROOT
+        / "frontend"
+        / "public"
+        / "assets"
+        / "distributions"
+        / "distribution_compare_page.js"
+    ).read_text(encoding="utf-8")
+    assert "distribution-compare-config-json" in text
+    assert "state.endpoints.load" in text
+    assert "state.endpoints.loadByPath" in text
+    assert "state.endpoints.browseFiles" in text
+    assert "?filename=${encodeURIComponent(file.name)}" in text
+    assert "payload.bins = measurement.histogramBins" in text
+    assert "state.endpoints.compareGeometry" in text
+    assert "state.endpoints.compareSpectrum" in text
+    assert "buildSpectrumPayload" in text
+    assert "renderSpectrumPlot" in text
+    assert "buildDeleteUrl" in text
 
 
 def test_theme_asset_exists_and_exports_public_api() -> None:

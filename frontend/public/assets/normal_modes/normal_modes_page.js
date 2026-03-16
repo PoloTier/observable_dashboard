@@ -45,6 +45,9 @@
   const DEFAULT_PREVIEW_COUNT = 64;
   const DEFAULT_TEMPERATURE_K = 300;
   const DEFAULT_FREQ_MIN_CM1 = 1.0;
+  const DEFAULT_GEOMETRY_EXPORT_DIRECTORY = 'exports/normal_modes';
+  const GEOMETRY_EXPORT_MODE_FRONTEND = 'frontend-download';
+  const GEOMETRY_EXPORT_MODE_BACKEND = 'backend-save';
 
   const SAMPLER_OPTIONS = [
     { value: SAMPLER_WIGNER_FINITE_T, label: 'Wigner finite T' },
@@ -86,6 +89,7 @@
     samplingSummaryCard: document.getElementById('nm-sampling-summary-card'),
     samplingSummaryGrid: document.getElementById('nm-sampling-summary-grid'),
     samplingBatchPill: document.getElementById('nm-sampling-batch-pill'),
+    exportGeometryBtn: document.getElementById('nm-export-geometry-btn'),
     exportBundleBtn: document.getElementById('nm-export-bundle-btn'),
     exportStatus: document.getElementById('nm-export-status'),
     distributionCard: document.getElementById('nm-distribution-card'),
@@ -114,8 +118,31 @@
     samplingStatusEl: document.getElementById('nm-sampling-status'),
     samplingModal: document.getElementById('nm-sampling-modal'),
     samplingModalCloseBtn: document.getElementById('nm-sampling-modal-close-btn'),
+    geometryExportModal: document.getElementById('nm-geometry-export-modal'),
+    geometryExportModalCloseBtn: document.getElementById('nm-geometry-export-modal-close-btn'),
+    geometryExportModalCancelBtn: document.getElementById('nm-geometry-export-cancel-btn'),
+    geometryExportModeFrontend: document.getElementById('nm-geometry-export-mode-frontend'),
+    geometryExportModeBackend: document.getElementById('nm-geometry-export-mode-backend'),
+    geometryExportModeInputs: Array.from(document.querySelectorAll('input[name="nm-geometry-export-mode"]')),
+    geometryExportFileNameLabel: document.getElementById('nm-geometry-export-file-name-label'),
+    geometryExportFileName: document.getElementById('nm-geometry-export-file-name'),
+    geometryExportDirectoryGroup: document.getElementById('nm-geometry-export-directory-group'),
+    geometryExportDirectory: document.getElementById('nm-geometry-export-directory'),
+    geometryExportDirectoryBrowseBtn: document.getElementById('nm-geometry-export-directory-browse-btn'),
+    geometryExportModalStatus: document.getElementById('nm-geometry-export-modal-status'),
+    geometryExportSubmitBtn: document.getElementById('nm-geometry-export-submit-btn'),
+    geometryDirectoryBrowserModal: document.getElementById('nm-geometry-directory-browser-modal'),
+    geometryDirectoryBrowserCloseBtn: document.getElementById('nm-geometry-directory-browser-close-btn'),
+    geometryDirectoryBrowserUpBtn: document.getElementById('nm-geometry-directory-browser-up-btn'),
+    geometryDirectoryBrowserSelectBtn: document.getElementById('nm-geometry-directory-browser-select-btn'),
+    geometryDirectoryBrowserRoot: document.getElementById('nm-geometry-directory-browser-root'),
+    geometryDirectoryBrowserPath: document.getElementById('nm-geometry-directory-browser-path'),
+    geometryDirectoryBrowserStatus: document.getElementById('nm-geometry-directory-browser-status'),
+    geometryDirectoryBrowserList: document.getElementById('nm-geometry-directory-browser-list'),
     samplingSampleCount: document.getElementById('nm-sampling-sample-count'),
     samplingPreviewCount: document.getElementById('nm-sampling-preview-count'),
+    samplingCharge: document.getElementById('nm-sampling-charge'),
+    samplingMultiplicity: document.getElementById('nm-sampling-multiplicity'),
     samplingTemperature: document.getElementById('nm-sampling-temperature'),
     samplingSeed: document.getElementById('nm-sampling-seed'),
     samplingFreqMin: document.getElementById('nm-sampling-freq-min'),
@@ -160,6 +187,10 @@
     samplingResult: null,
     samplingJobInFlight: false,
     exportJobInFlight: false,
+    exportGeometryJobInFlight: false,
+    geometryDirectoryBrowserCurrentPath: '',
+    geometryDirectoryBrowserParentPath: null,
+    geometryDirectoryBrowserBusy: false,
     lastMeasurementPayload: null,
   };
 
@@ -184,6 +215,18 @@
     if (!dom.samplingModalFooterStatus) return;
     dom.samplingModalFooterStatus.textContent = String(message || '');
     dom.samplingModalFooterStatus.classList.toggle('error', !!isError);
+  }
+
+  function setGeometryExportModalStatus(message, isError = false) {
+    if (!dom.geometryExportModalStatus) return;
+    dom.geometryExportModalStatus.textContent = String(message || '');
+    dom.geometryExportModalStatus.classList.toggle('error', !!isError);
+  }
+
+  function setGeometryDirectoryBrowserStatus(message, isError = false) {
+    if (!dom.geometryDirectoryBrowserStatus) return;
+    dom.geometryDirectoryBrowserStatus.textContent = String(message || '');
+    dom.geometryDirectoryBrowserStatus.classList.toggle('error', !!isError);
   }
 
   function setMeasurementStatus(message, isError = false) {
@@ -312,6 +355,115 @@
       return match[1];
     }
     return String(fallback || 'normal_modes_sampling_bundle.tar.gz');
+  }
+
+  function sanitizeArchiveFileNameText(rawValue, fallback) {
+    const fallbackValue = String(fallback || 'normal_modes_geometry_bundle.tar.gz').trim() || 'normal_modes_geometry_bundle.tar.gz';
+    let text = String(rawValue || '').trim() || fallbackValue;
+    text = text.replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_').trim();
+    if (!text || text === '.' || text === '..') {
+      text = fallbackValue;
+    }
+    if (text.toLowerCase().endsWith('.tar.gz')) {
+      return text;
+    }
+    if (text.toLowerCase().endsWith('.tgz')) {
+      return `${text.slice(0, -4)}.tar.gz`;
+    }
+    if (text.toLowerCase().endsWith('.tar')) {
+      return `${text}.gz`;
+    }
+    if (text.toLowerCase().endsWith('.gz')) {
+      return `${text.slice(0, -3)}.tar.gz`;
+    }
+    return `${text}.tar.gz`;
+  }
+
+  function stripArchiveSuffix(text) {
+    const normalized = String(text || '').trim();
+    const lower = normalized.toLowerCase();
+    if (lower.endsWith('.tar.gz')) return normalized.slice(0, -7);
+    if (lower.endsWith('.tgz')) return normalized.slice(0, -4);
+    if (lower.endsWith('.tar')) return normalized.slice(0, -4);
+    if (lower.endsWith('.gz')) return normalized.slice(0, -3);
+    return normalized;
+  }
+
+  function sanitizeDirectoryNameText(rawValue, fallback) {
+    const fallbackValue = stripArchiveSuffix(String(fallback || 'normal_modes_geometry_bundle').trim()) || 'normal_modes_geometry_bundle';
+    let text = String(rawValue || '').trim() || fallbackValue;
+    text = text.replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_').trim();
+    text = stripArchiveSuffix(text).trim();
+    if (!text || text === '.' || text === '..') {
+      text = fallbackValue;
+    }
+    return text;
+  }
+
+  function sanitizeFilenamePart(rawValue, fallback = 'normal_modes') {
+    const text = String(rawValue || '').trim();
+    const sanitized = text.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '');
+    return sanitized || String(fallback || 'normal_modes');
+  }
+
+  function defaultGeometryExportFileName() {
+    const batchId = sanitizeFilenamePart(state.samplingResult?.batch_id || 'batch');
+    const sourceName = String(state.samplingResult?.source_name || state.fileName || 'uploaded.molden').trim();
+    const sourceBaseRaw = sourceName.replace(/\.[^.]+$/, '');
+    const sourceBase = sanitizeFilenamePart(sourceBaseRaw, 'normal_modes');
+    return `normal_modes_geometry_${sourceBase}_${batchId}.tar.gz`;
+  }
+
+  function defaultGeometryExportDirectoryName() {
+    return stripArchiveSuffix(defaultGeometryExportFileName());
+  }
+
+  function normalizeRelativeDirectory(rawValue, fallback = DEFAULT_GEOMETRY_EXPORT_DIRECTORY) {
+    const fallbackValue = String(fallback || DEFAULT_GEOMETRY_EXPORT_DIRECTORY).trim() || DEFAULT_GEOMETRY_EXPORT_DIRECTORY;
+    const text = String(rawValue || '').trim();
+    if (!text) return fallbackValue;
+    return text.replace(/\\/g, '/');
+  }
+
+  function currentGeometryExportMode() {
+    if (dom.geometryExportModeBackend?.checked) return GEOMETRY_EXPORT_MODE_BACKEND;
+    return GEOMETRY_EXPORT_MODE_FRONTEND;
+  }
+
+  async function listBrowseRootFiles(path = '') {
+    const normalizedPath = String(path || '').trim();
+    const url = new URL(`${getApiBase()}/files`, window.location.origin);
+    if (normalizedPath) {
+      url.searchParams.set('path', normalizedPath);
+    }
+
+    const response = await fetch(url.toString(), { method: 'GET' });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const payload = await response.json();
+        if (payload && typeof payload.detail === 'string' && payload.detail.trim()) {
+          detail = payload.detail.trim();
+        }
+      } catch (_) {
+        // Best-effort error parsing.
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json();
+    return {
+      rootLabel: String(payload?.root_label || ''),
+      currentPath: String(payload?.current_path || ''),
+      parentPath: payload?.parent_path == null ? null : String(payload.parent_path || ''),
+      entries: Array.isArray(payload?.entries)
+        ? payload.entries.map((entry) => ({
+            name: String(entry?.name || ''),
+            relativePath: String(entry?.relative_path || ''),
+            kind: entry?.kind === 'directory' ? 'directory' : 'file',
+          }))
+        : [],
+    };
   }
 
   function atomicNumberToElement(rawValue) {
@@ -1364,6 +1516,16 @@
     return Number.isFinite(parsed) ? parsed : null;
   }
 
+  function parseIntegerField(rawValue) {
+    const text = String(rawValue ?? '').trim();
+    if (!text) return { empty: true, valid: true, value: null };
+    const parsed = Number(text);
+    if (!Number.isInteger(parsed)) {
+      return { empty: false, valid: false, value: null };
+    }
+    return { empty: false, valid: true, value: parsed };
+  }
+
   function formatOptionalNumber(value, fallback = '—') {
     if (!Number.isFinite(Number(value))) return fallback;
     return String(value);
@@ -1372,6 +1534,8 @@
   function buildSamplingConfigFromForm() {
     const sampleCount = Number.parseInt(String(dom.samplingSampleCount?.value || DEFAULT_SAMPLE_COUNT), 10);
     const previewCountRaw = Number.parseInt(String(dom.samplingPreviewCount?.value || DEFAULT_PREVIEW_COUNT), 10);
+    const chargeField = parseIntegerField(dom.samplingCharge?.value);
+    const multiplicityField = parseIntegerField(dom.samplingMultiplicity?.value);
     const temperature = parseOptionalNumber(dom.samplingTemperature?.value);
     const seed = parseOptionalNumber(dom.samplingSeed?.value);
     const freqMin = parseOptionalNumber(dom.samplingFreqMin?.value);
@@ -1384,6 +1548,12 @@
     }
     if (!Number.isFinite(previewCountRaw) || previewCountRaw <= 0) {
       errors.push('Preview count must be a positive integer.');
+    }
+    if (!chargeField.valid) {
+      errors.push('Charge must be an integer.');
+    }
+    if (!multiplicityField.valid || multiplicityField.empty || multiplicityField.value < 1) {
+      errors.push('Multiplicity must be an integer greater than or equal to 1.');
     }
     if (temperature != null && temperature <= 0) {
       errors.push('Temperature must be positive when provided.');
@@ -1437,6 +1607,8 @@
       payload: {
         sample_count: Number.isFinite(sampleCount) ? sampleCount : DEFAULT_SAMPLE_COUNT,
         preview_count: previewCount,
+        charge: chargeField.valid && !chargeField.empty ? chargeField.value : 0,
+        multiplicity: multiplicityField.valid && !multiplicityField.empty ? multiplicityField.value : 1,
         position_default: positionDefault,
         momentum_default: momentumDefault,
         ...(temperature != null ? { temperature_k: temperature } : {}),
@@ -1774,18 +1946,22 @@
   function renderSamplingSummary() {
     if (!dom.samplingSummaryGrid || !dom.samplingBatchPill || !dom.distributionBatchPill) return;
     const sample = state.samplingResult;
+    const exportBusy = state.exportJobInFlight || state.exportGeometryJobInFlight;
     dom.samplingBatchPill.textContent = sample?.preview_count != null ? String(sample.preview_count) : '0';
     dom.distributionBatchPill.textContent = sample?.sample_count != null ? String(sample.sample_count) : '0';
     dom.samplingSummaryGrid.innerHTML = '';
+    if (dom.exportGeometryBtn) {
+      dom.exportGeometryBtn.disabled = !sample?.batch_id || exportBusy;
+    }
     if (dom.exportBundleBtn) {
-      dom.exportBundleBtn.disabled = !sample?.batch_id || state.exportJobInFlight;
+      dom.exportBundleBtn.disabled = !sample?.batch_id || exportBusy;
     }
     if (!sample) {
       const empty = document.createElement('div');
       empty.className = 'summary-empty';
       empty.textContent = 'Run a normal-mode sampling job to populate the ensemble summary.';
       dom.samplingSummaryGrid.appendChild(empty);
-      setExportStatus('Export a reproducibility bundle after a sampling batch is available.', false);
+      setExportStatus('Export a reproducibility bundle or geometry bundle after a sampling batch is available.', false);
       return;
     }
 
@@ -1798,6 +1974,8 @@
     dom.samplingSummaryGrid.appendChild(summaryItem('Batch ID', sample.batch_id || 'n/a'));
     dom.samplingSummaryGrid.appendChild(summaryItem('Sample Count', `${sample.sample_count || 0}`));
     dom.samplingSummaryGrid.appendChild(summaryItem('Preview Count', `${sample.preview_count || 0}`));
+    dom.samplingSummaryGrid.appendChild(summaryItem('Charge', `${sample.charge}`));
+    dom.samplingSummaryGrid.appendChild(summaryItem('Multiplicity', `${sample.multiplicity}`));
     dom.samplingSummaryGrid.appendChild(summaryItem('Temperature', `${formatOptionalNumber(sample.temperature_k ?? parseOptionalNumber(dom.samplingTemperature?.value), 'n/a')} K`));
     dom.samplingSummaryGrid.appendChild(summaryItem('Seed', `${sample.seed}`));
     dom.samplingSummaryGrid.appendChild(summaryItem('Completed At', sample.sampling_completed_at_utc || 'n/a'));
@@ -1806,8 +1984,8 @@
     dom.samplingSummaryGrid.appendChild(summaryItem('Modes', `${includedCount} included · ${excludedCount} excluded`));
     dom.samplingSummaryGrid.appendChild(summaryItem('Q Mix', summarizeSamplerCounts(plan, 'position_sampler')));
     dom.samplingSummaryGrid.appendChild(summaryItem('P Mix', summarizeSamplerCounts(plan, 'momentum_sampler')));
-    if (!state.exportJobInFlight) {
-      setExportStatus(`Export ready for batch ${sample.batch_id}.`, false);
+    if (!exportBusy) {
+      setExportStatus(`Exports ready for batch ${sample.batch_id}.`, false);
     }
   }
 
@@ -1982,6 +2160,182 @@
     dom.samplingModal.hidden = true;
   }
 
+  function syncGeometryExportModalUi() {
+    const mode = currentGeometryExportMode();
+    const inFlight = !!state.exportGeometryJobInFlight;
+    if (dom.geometryExportDirectoryGroup) {
+      dom.geometryExportDirectoryGroup.classList.toggle('u-hidden', mode !== GEOMETRY_EXPORT_MODE_BACKEND);
+    }
+    if (dom.geometryExportFileNameLabel) {
+      dom.geometryExportFileNameLabel.textContent =
+        mode === GEOMETRY_EXPORT_MODE_BACKEND ? 'Folder name' : 'Archive name';
+    }
+    if (dom.geometryExportFileName) {
+      dom.geometryExportFileName.placeholder =
+        mode === GEOMETRY_EXPORT_MODE_BACKEND
+          ? defaultGeometryExportDirectoryName()
+          : defaultGeometryExportFileName();
+      dom.geometryExportFileName.disabled = inFlight;
+    }
+    if (dom.geometryExportDirectory) {
+      dom.geometryExportDirectory.disabled = inFlight || mode !== GEOMETRY_EXPORT_MODE_BACKEND;
+    }
+    if (dom.geometryExportDirectoryBrowseBtn) {
+      dom.geometryExportDirectoryBrowseBtn.disabled =
+        inFlight || mode !== GEOMETRY_EXPORT_MODE_BACKEND || state.geometryDirectoryBrowserBusy;
+    }
+    for (const input of dom.geometryExportModeInputs) {
+      if (input) input.disabled = inFlight;
+    }
+    if (dom.geometryExportModalCloseBtn) {
+      dom.geometryExportModalCloseBtn.disabled = inFlight;
+    }
+    if (dom.geometryExportModalCancelBtn) {
+      dom.geometryExportModalCancelBtn.disabled = inFlight;
+    }
+    if (dom.geometryExportSubmitBtn) {
+      dom.geometryExportSubmitBtn.disabled = inFlight;
+      dom.geometryExportSubmitBtn.textContent =
+        mode === GEOMETRY_EXPORT_MODE_BACKEND ? 'Save to Server' : 'Download';
+    }
+  }
+
+  function syncGeometryDirectoryBrowserUi() {
+    const busy = !!state.geometryDirectoryBrowserBusy;
+    if (dom.geometryDirectoryBrowserUpBtn) {
+      dom.geometryDirectoryBrowserUpBtn.disabled = busy || state.geometryDirectoryBrowserParentPath == null;
+    }
+    if (dom.geometryDirectoryBrowserSelectBtn) {
+      dom.geometryDirectoryBrowserSelectBtn.disabled = busy;
+    }
+    if (dom.geometryDirectoryBrowserCloseBtn) {
+      dom.geometryDirectoryBrowserCloseBtn.disabled = busy;
+    }
+    syncGeometryExportModalUi();
+  }
+
+  function openGeometryExportModal() {
+    const batchId = String(state.samplingResult?.batch_id || '').trim();
+    if (!batchId || !dom.geometryExportModal) {
+      setExportStatus('Run sampling first to create an exportable geometry batch.', true);
+      return;
+    }
+    if (dom.geometryExportModeFrontend) {
+      dom.geometryExportModeFrontend.checked = true;
+    }
+    if (dom.geometryExportFileName) {
+      dom.geometryExportFileName.value = defaultGeometryExportFileName();
+    }
+    if (dom.geometryExportDirectory) {
+      dom.geometryExportDirectory.value = DEFAULT_GEOMETRY_EXPORT_DIRECTORY;
+    }
+    setGeometryExportModalStatus('Choose an export mode and confirm the output name.', false);
+    dom.geometryExportModal.hidden = false;
+    syncGeometryExportModalUi();
+  }
+
+  function closeGeometryExportModal({ force = false } = {}) {
+    if (!dom.geometryExportModal) return;
+    if (state.exportGeometryJobInFlight && !force) return;
+    closeGeometryDirectoryBrowser({ force: true });
+    dom.geometryExportModal.hidden = true;
+  }
+
+  function renderGeometryDirectoryBrowserEntries(entries) {
+    if (!dom.geometryDirectoryBrowserList) return;
+    dom.geometryDirectoryBrowserList.innerHTML = '';
+    const directories = Array.isArray(entries) ? entries.filter((entry) => entry && entry.kind === 'directory') : [];
+    if (!directories.length) {
+      const empty = document.createElement('div');
+      empty.className = 'modal-empty';
+      empty.textContent = 'No subdirectories are available here. You can still use the current directory.';
+      dom.geometryDirectoryBrowserList.appendChild(empty);
+      return;
+    }
+
+    for (const entry of directories) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'directory-browser-item';
+
+      const main = document.createElement('div');
+      main.className = 'directory-browser-item-main';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'directory-browser-item-name';
+      nameEl.textContent = entry.name || entry.relativePath || '(directory)';
+      const metaEl = document.createElement('div');
+      metaEl.className = 'directory-browser-item-meta';
+      metaEl.textContent = entry.relativePath ? `/${entry.relativePath}` : '/';
+      main.appendChild(nameEl);
+      main.appendChild(metaEl);
+
+      const actionEl = document.createElement('div');
+      actionEl.className = 'directory-browser-item-meta';
+      actionEl.textContent = 'Open';
+
+      button.appendChild(main);
+      button.appendChild(actionEl);
+      button.addEventListener('click', () => {
+        if (state.geometryDirectoryBrowserBusy) return;
+        void loadGeometryDirectoryBrowserPath(entry.relativePath);
+      });
+      dom.geometryDirectoryBrowserList.appendChild(button);
+    }
+  }
+
+  async function loadGeometryDirectoryBrowserPath(path, { fallbackToRoot = false } = {}) {
+    if (!dom.geometryDirectoryBrowserRoot || !dom.geometryDirectoryBrowserPath) return;
+    state.geometryDirectoryBrowserBusy = true;
+    syncGeometryDirectoryBrowserUi();
+    setGeometryDirectoryBrowserStatus('Loading directories...', false);
+    try {
+      const payload = await listBrowseRootFiles(path);
+      state.geometryDirectoryBrowserCurrentPath = payload.currentPath || '';
+      state.geometryDirectoryBrowserParentPath = payload.parentPath == null ? null : payload.parentPath;
+      dom.geometryDirectoryBrowserRoot.textContent = `Root: ${payload.rootLabel || ''}`;
+      dom.geometryDirectoryBrowserPath.textContent = `Current path: ${payload.currentPath ? `/${payload.currentPath}` : '/'}`;
+      renderGeometryDirectoryBrowserEntries(payload.entries);
+      setGeometryDirectoryBrowserStatus('', false);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (fallbackToRoot && String(path || '').trim()) {
+        state.geometryDirectoryBrowserBusy = false;
+        syncGeometryDirectoryBrowserUi();
+        await loadGeometryDirectoryBrowserPath('', { fallbackToRoot: false });
+        setGeometryDirectoryBrowserStatus(
+          `Could not open ${path}. Showing the browse root instead.`,
+          true
+        );
+        return;
+      }
+      renderGeometryDirectoryBrowserEntries([]);
+      setGeometryDirectoryBrowserStatus(`Failed to load directories: ${detail}`, true);
+    } finally {
+      state.geometryDirectoryBrowserBusy = false;
+      syncGeometryDirectoryBrowserUi();
+    }
+  }
+
+  function openGeometryDirectoryBrowser() {
+    if (!dom.geometryDirectoryBrowserModal) return;
+    dom.geometryDirectoryBrowserModal.hidden = false;
+    const initialPath = normalizeRelativeDirectory(dom.geometryExportDirectory?.value, DEFAULT_GEOMETRY_EXPORT_DIRECTORY);
+    void loadGeometryDirectoryBrowserPath(initialPath === '.' ? '' : initialPath, { fallbackToRoot: true });
+  }
+
+  function closeGeometryDirectoryBrowser({ force = false } = {}) {
+    if (!dom.geometryDirectoryBrowserModal) return;
+    if (state.geometryDirectoryBrowserBusy && !force) return;
+    dom.geometryDirectoryBrowserModal.hidden = true;
+  }
+
+  function applyGeometryDirectorySelection() {
+    if (dom.geometryExportDirectory) {
+      dom.geometryExportDirectory.value = state.geometryDirectoryBrowserCurrentPath || '.';
+    }
+    closeGeometryDirectoryBrowser({ force: true });
+  }
+
   async function parseUploadedFile(file) {
     const content = await file.text();
     const response = await fetch(`${getApiBase()}/normal-modes/parse-text`, {
@@ -2013,7 +2367,13 @@
   function resetSamplingState() {
     state.samplingResult = null;
     state.exportJobInFlight = false;
+    state.exportGeometryJobInFlight = false;
+    state.geometryDirectoryBrowserCurrentPath = '';
+    state.geometryDirectoryBrowserParentPath = null;
+    state.geometryDirectoryBrowserBusy = false;
     state.lastMeasurementPayload = null;
+    closeGeometryExportModal({ force: true });
+    closeGeometryDirectoryBrowser({ force: true });
     renderSamplingSummary();
     clearMeasurementPlot('Run sampling and request a bond, angle, or dihedral histogram.');
     setMeasurementStatus('Pick a sampled batch, choose a geometry target, and plot its distribution.', false);
@@ -2173,6 +2533,130 @@
     }
   }
 
+  async function downloadSamplingGeometryBundle(fileName) {
+    const batchId = String(state.samplingResult?.batch_id || '').trim();
+    if (!batchId) {
+      setExportStatus('Run sampling first to create an exportable geometry batch.', true);
+      return;
+    }
+
+    const response = await fetch(
+      `${getApiBase()}/normal-modes/sample-batches/${encodeURIComponent(batchId)}/export-geometry`
+    );
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const payload = await response.json();
+        if (payload && typeof payload.detail === 'string' && payload.detail.trim()) {
+          detail = payload.detail.trim();
+        }
+      } catch (_) {
+        // Best-effort error parsing.
+      }
+      throw new Error(detail);
+    }
+
+    const archiveBlob = await response.blob();
+    triggerBlobDownload(fileName, archiveBlob);
+    return `Downloaded ${fileName}.`;
+  }
+
+  async function saveSamplingGeometryBundleToServer(directoryName, directory) {
+    const batchId = String(state.samplingResult?.batch_id || '').trim();
+    if (!batchId) {
+      setExportStatus('Run sampling first to create an exportable geometry batch.', true);
+      return;
+    }
+
+    const response = await fetch(
+      `${getApiBase()}/normal-modes/sample-batches/${encodeURIComponent(batchId)}/export-geometry/save`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          directory,
+          filename: directoryName,
+        }),
+      }
+    );
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const payload = await response.json();
+        if (payload && typeof payload.detail === 'string' && payload.detail.trim()) {
+          detail = payload.detail.trim();
+        }
+      } catch (_) {
+        // Best-effort error parsing.
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json();
+    const savedPath = String(payload?.saved_relative_path || payload?.saved_absolute_path || directoryName);
+    return `Saved geometry bundle directory to ${savedPath}.`;
+  }
+
+  async function submitGeometryExport() {
+    const batchId = String(state.samplingResult?.batch_id || '').trim();
+    if (!batchId) {
+      setExportStatus('Run sampling first to create an exportable geometry batch.', true);
+      return;
+    }
+
+    const mode = currentGeometryExportMode();
+    const outputName =
+      mode === GEOMETRY_EXPORT_MODE_BACKEND
+        ? sanitizeDirectoryNameText(dom.geometryExportFileName?.value, defaultGeometryExportDirectoryName())
+        : sanitizeArchiveFileNameText(dom.geometryExportFileName?.value, defaultGeometryExportFileName());
+    if (dom.geometryExportFileName) {
+      dom.geometryExportFileName.value = outputName;
+    }
+    const directory = normalizeRelativeDirectory(dom.geometryExportDirectory?.value, DEFAULT_GEOMETRY_EXPORT_DIRECTORY);
+    if (dom.geometryExportDirectory) {
+      dom.geometryExportDirectory.value = directory;
+    }
+
+    state.exportGeometryJobInFlight = true;
+    syncGeometryExportModalUi();
+    renderSamplingSummary();
+    setGeometryExportModalStatus(
+      mode === GEOMETRY_EXPORT_MODE_BACKEND
+        ? `Saving geometry bundle directory to ${directory} on the server...`
+        : `Downloading geometry bundle for ${batchId}...`,
+      false
+    );
+    setExportStatus(
+      mode === GEOMETRY_EXPORT_MODE_BACKEND
+        ? `Saving geometry bundle directory for ${batchId} to ${directory}...`
+        : `Downloading geometry bundle for ${batchId}...`,
+      false
+    );
+
+    let finalStatusMessage = '';
+    let finalStatusIsError = false;
+    try {
+      finalStatusMessage =
+        mode === GEOMETRY_EXPORT_MODE_BACKEND
+          ? await saveSamplingGeometryBundleToServer(outputName, directory)
+          : await downloadSamplingGeometryBundle(outputName);
+      closeGeometryExportModal({ force: true });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      finalStatusMessage = `Failed to export geometry bundle: ${detail}`;
+      finalStatusIsError = true;
+      setGeometryExportModalStatus(finalStatusMessage, true);
+    } finally {
+      state.exportGeometryJobInFlight = false;
+      syncGeometryExportModalUi();
+      renderSamplingSummary();
+      setExportStatus(finalStatusMessage || `Geometry export ready for batch ${batchId}.`, finalStatusIsError);
+      if (!finalStatusIsError && !dom.geometryExportModal?.hidden) {
+        setGeometryExportModalStatus(finalStatusMessage || 'Geometry export completed.', false);
+      }
+    }
+  }
+
   async function plotMeasurementHistogram() {
     if (!state.samplingResult?.batch_id) {
       setMeasurementStatus('Run sampling first to create a sample batch.', true);
@@ -2258,8 +2742,57 @@
         }
       });
     }
+    if (dom.geometryExportModalCloseBtn) {
+      dom.geometryExportModalCloseBtn.addEventListener('click', () => {
+        closeGeometryExportModal();
+      });
+    }
+    if (dom.geometryExportModalCancelBtn) {
+      dom.geometryExportModalCancelBtn.addEventListener('click', () => {
+        closeGeometryExportModal();
+      });
+    }
+    if (dom.geometryExportModal) {
+      dom.geometryExportModal.addEventListener('click', (event) => {
+        if (event.target === dom.geometryExportModal) {
+          closeGeometryExportModal();
+        }
+      });
+    }
+    if (dom.geometryDirectoryBrowserCloseBtn) {
+      dom.geometryDirectoryBrowserCloseBtn.addEventListener('click', () => {
+        closeGeometryDirectoryBrowser();
+      });
+    }
+    if (dom.geometryDirectoryBrowserUpBtn) {
+      dom.geometryDirectoryBrowserUpBtn.addEventListener('click', () => {
+        if (state.geometryDirectoryBrowserBusy || state.geometryDirectoryBrowserParentPath == null) return;
+        void loadGeometryDirectoryBrowserPath(state.geometryDirectoryBrowserParentPath);
+      });
+    }
+    if (dom.geometryDirectoryBrowserSelectBtn) {
+      dom.geometryDirectoryBrowserSelectBtn.addEventListener('click', () => {
+        applyGeometryDirectorySelection();
+      });
+    }
+    if (dom.geometryDirectoryBrowserModal) {
+      dom.geometryDirectoryBrowserModal.addEventListener('click', (event) => {
+        if (event.target === dom.geometryDirectoryBrowserModal) {
+          closeGeometryDirectoryBrowser();
+        }
+      });
+    }
     window.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && dom.samplingModal && !dom.samplingModal.hidden) {
+      if (event.key !== 'Escape') return;
+      if (dom.geometryDirectoryBrowserModal && !dom.geometryDirectoryBrowserModal.hidden) {
+        closeGeometryDirectoryBrowser();
+        return;
+      }
+      if (dom.geometryExportModal && !dom.geometryExportModal.hidden) {
+        closeGeometryExportModal();
+        return;
+      }
+      if (dom.samplingModal && !dom.samplingModal.hidden) {
         closeSamplingModal();
       }
     });
@@ -2360,6 +2893,8 @@
     const previewInputs = [
       dom.samplingSampleCount,
       dom.samplingPreviewCount,
+      dom.samplingCharge,
+      dom.samplingMultiplicity,
       dom.samplingTemperature,
       dom.samplingSeed,
       dom.samplingFreqMin,
@@ -2391,9 +2926,37 @@
       });
     }
 
+    for (const input of dom.geometryExportModeInputs) {
+      if (!input) continue;
+      input.addEventListener('change', () => {
+        syncGeometryExportModalUi();
+        setGeometryExportModalStatus(
+          currentGeometryExportMode() === GEOMETRY_EXPORT_MODE_BACKEND
+            ? 'Backend save writes a bundle directory below the current browse root.'
+            : 'Frontend download fetches a tar archive in the browser and saves it with your chosen file name.',
+          false
+        );
+      });
+    }
+    if (dom.geometryExportSubmitBtn) {
+      dom.geometryExportSubmitBtn.addEventListener('click', () => {
+        void submitGeometryExport();
+      });
+    }
+    if (dom.geometryExportDirectoryBrowseBtn) {
+      dom.geometryExportDirectoryBrowseBtn.addEventListener('click', () => {
+        openGeometryDirectoryBrowser();
+      });
+    }
+
     if (dom.exportBundleBtn) {
       dom.exportBundleBtn.addEventListener('click', () => {
         void exportSamplingBundle();
+      });
+    }
+    if (dom.exportGeometryBtn) {
+      dom.exportGeometryBtn.addEventListener('click', () => {
+        openGeometryExportModal();
       });
     }
 
@@ -2456,6 +3019,8 @@
     syncPlaybackRateUi();
     syncSpectrumWidthUi();
     syncMeasurementKindUi();
+    syncGeometryExportModalUi();
+    syncGeometryDirectoryBrowserUi();
     syncWorkspaceUi();
     syncFrameUi();
     renderModeDetail();

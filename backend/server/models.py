@@ -57,6 +57,8 @@ class NormalModesSampleTextRequest(BaseModel):
     content: str = Field(..., min_length=1)
     sample_count: int = Field(..., ge=1)
     preview_count: int = Field(..., ge=1)
+    charge: int = 0
+    multiplicity: int = Field(default=1, ge=1)
     position_default: NormalModeSampler
     momentum_default: NormalModeSampler
     temperature_k: float | None = None
@@ -78,11 +80,142 @@ class NormalModesMeasurementRequest(BaseModel):
     atom_indices: list[int] = Field(default_factory=list)
 
 
+class NormalModesGeometrySaveRequest(BaseModel):
+    directory: str = Field(..., min_length=1)
+    filename: str = Field(..., min_length=1)
+
+
+class NormalModesGeometrySaveResponse(BaseModel):
+    status: Literal["ok"]
+    saved_relative_path: str
+    saved_absolute_path: str
+
+
+DistributionMeasurementKind = Literal["bond", "angle", "dihedral"]
+
+
 class FileBrowserResponse(BaseModel):
     root_label: str
     current_path: str
     parent_path: str | None = None
     entries: list[FileBrowserEntry]
+
+
+class DistributionListItem(BaseModel):
+    distribution_id: str
+    label: str
+    source_name: str
+    created_at_utc: str
+    n_samples: int
+    n_atoms: int
+    topology_signature: str
+    available_channels: list[str] = Field(default_factory=list)
+    has_electronics: bool = False
+    default_electronic_profile_id: str | None = None
+    electronic_profiles: list["DistributionElectronicProfileItem"] = Field(default_factory=list)
+
+
+class DistributionElectronicProfileItem(BaseModel):
+    profile_id: str
+    label: str
+    engine: str
+    method: str
+    reference: str
+    xc: str
+    basis: str
+    n_excited_states: int
+    n_states: int
+    n_transition: int
+    success_count: int = 0
+    failed_count: int = 0
+
+
+class DistributionListResponse(BaseModel):
+    distributions: list[DistributionListItem]
+
+
+class DistributionDeleteResponse(BaseModel):
+    status: str
+    distribution_id: str
+
+
+class LoadDistributionPathRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+
+
+class DistributionCompareGeometryRequest(BaseModel):
+    distribution_ids: list[str] = Field(default_factory=list)
+    measurement_kind: DistributionMeasurementKind
+    atom_indices: list[int] = Field(default_factory=list)
+    bins: int = Field(default=60, ge=5, le=400)
+
+
+class DistributionGeometrySeries(BaseModel):
+    distribution_id: str
+    label: str
+    source_name: str
+    values: list[float]
+    sample_count: int
+    min: float
+    max: float
+    mean: float
+    std: float
+
+
+class DistributionCompareGeometryResponse(BaseModel):
+    measurement_kind: DistributionMeasurementKind
+    atom_indices: list[int]
+    unit: str
+    bins: int
+    topology_signature: str
+    series: list[DistributionGeometrySeries]
+
+
+class DistributionSpectrumPairOption(BaseModel):
+    pair: list[int] = Field(default_factory=list)
+    label: str
+
+
+class DistributionSpectrumSeriesRequestItem(BaseModel):
+    distribution_id: str = Field(..., min_length=1)
+    profile_id: str = Field(..., min_length=1)
+
+
+class DistributionCompareSpectrumRequest(BaseModel):
+    series: list[DistributionSpectrumSeriesRequestItem] = Field(default_factory=list)
+    delta_ev: float = Field(default=0.05, gt=0.0, le=1.0)
+
+
+class DistributionSpectrumPairCurve(BaseModel):
+    pair: list[int] = Field(default_factory=list)
+    y_normalized: list[float]
+
+
+class DistributionSpectrumSeries(BaseModel):
+    distribution_id: str
+    distribution_label: str
+    source_name: str
+    profile_id: str
+    profile_label: str
+    series_label: str
+    total_y_normalized: list[float]
+    pair_curves: list[DistributionSpectrumPairCurve] = Field(default_factory=list)
+
+
+class DistributionSpectrumSkippedItem(BaseModel):
+    distribution_id: str
+    distribution_label: str
+    profile_id: str | None = None
+    profile_label: str | None = None
+    reason: str
+
+
+class DistributionCompareSpectrumResponse(BaseModel):
+    delta_ev: float
+    x_energy_ev: list[float]
+    available_pairs: list[DistributionSpectrumPairOption] = Field(default_factory=list)
+    series: list[DistributionSpectrumSeries]
+    skipped: list[DistributionSpectrumSkippedItem] = Field(default_factory=list)
 
 
 class RawKeyAliasItem(BaseModel):
@@ -335,6 +468,8 @@ class NormalModesSampleTextResponse(BaseModel):
     source_name: str
     n_atoms: int
     atom_numbers: list[int]
+    charge: int
+    multiplicity: int
     equilibrium_coords_ang: list[list[float]]
     preview_coords_ang: list[list[list[float]]]
     preview_indices: list[int]

@@ -6,6 +6,7 @@ import math
 import re
 import secrets
 import tarfile
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -24,6 +25,9 @@ SAMPLE_CACHE_MAX_BYTES = 96 * 1024 * 1024
 MAX_PREVIEW_COUNT = 256
 ORTHONORMALITY_TOL = 5e-2
 NORMAL_MODES_EXPORT_SCHEMA_VERSION = 1
+NORMAL_MODES_GEOMETRY_EXPORT_SCHEMA_VERSION = 4
+NORMAL_MODES_GEOMETRY_BUNDLE_KIND = "normal_modes_sampling"
+NORMAL_MODES_GEOMETRY_METHOD_HARMONIC = "normal_modes_harmonic"
 SAMPLER_WIGNER_FINITE_T = "wigner_finite_t"
 SAMPLER_WIGNER_ZERO_T = "wigner_zero_t"
 SAMPLER_CLASSICAL_FINITE_T = "classical_finite_t"
@@ -468,9 +472,27 @@ def _coords_from_q_samples(
     modal_matrix_au: np.ndarray,
     n_atoms: int,
 ) -> np.ndarray:
+    coords_bohr = _coords_bohr_from_q_samples(q_samples, coords0_bohr, modal_matrix_au, n_atoms)
+    return np.asarray(coords_bohr * float(BOHR_TO_ANG), dtype=float)
+
+
+def _coords_bohr_from_q_samples(
+    q_samples: np.ndarray,
+    coords0_bohr: np.ndarray,
+    modal_matrix_au: np.ndarray,
+    n_atoms: int,
+) -> np.ndarray:
     coords_flat_bohr = np.asarray(coords0_bohr[None, :] + q_samples @ modal_matrix_au.T, dtype=float)
-    coords_flat_ang = coords_flat_bohr * float(BOHR_TO_ANG)
-    return coords_flat_ang.reshape(int(q_samples.shape[0]), int(n_atoms), 3)
+    return coords_flat_bohr.reshape(int(q_samples.shape[0]), int(n_atoms), 3)
+
+
+def _velocities_bohr_per_au_time_from_p_samples(
+    p_samples: np.ndarray,
+    modal_matrix_au: np.ndarray,
+    n_atoms: int,
+) -> np.ndarray:
+    velocities_flat = np.asarray(p_samples @ modal_matrix_au.T, dtype=float)
+    return velocities_flat.reshape(int(p_samples.shape[0]), int(n_atoms), 3)
 
 
 def sample_normal_modes(
@@ -478,6 +500,8 @@ def sample_normal_modes(
     *,
     sample_count: int,
     preview_count: int,
+    charge: int = 0,
+    multiplicity: int = 1,
     position_default: str,
     momentum_default: str,
     temperature_k: float | None = None,
@@ -549,7 +573,10 @@ def sample_normal_modes(
     return {
         "batch_payload": {
             "source_name": str(preparation.source_name),
+            "sampling_method": NORMAL_MODES_GEOMETRY_METHOD_HARMONIC,
             "atom_numbers": [int(v) for v in preparation.atom_numbers],
+            "charge": int(charge),
+            "multiplicity": int(multiplicity),
             "coords0_bohr": np.asarray(preparation.coords0_bohr, dtype=float),
             "modal_matrix_au": np.asarray(preparation.modal_matrix_au, dtype=float),
             "masses_au_per_atom": np.asarray(preparation.masses_au_per_atom, dtype=float),
@@ -571,6 +598,8 @@ def sample_normal_modes(
             "source_name": str(preparation.source_name),
             "n_atoms": int(preparation.n_atoms),
             "atom_numbers": [int(v) for v in preparation.atom_numbers],
+            "charge": int(charge),
+            "multiplicity": int(multiplicity),
             "equilibrium_coords_ang": [[float(x), float(y), float(z)] for x, y, z in preparation.coords_ang],
             "preview_coords_ang": preview_coords_list,
             "preview_indices": [int(v) for v in preview_indices.tolist()],
@@ -726,6 +755,7 @@ def _xyz_trajectory_text(
     atom_numbers: list[int],
     *,
     batch_id: str,
+    sample_ids: list[str] | None = None,
 ) -> str:
     coords = np.asarray(coords_all_ang, dtype=float)
     if coords.ndim != 3 or coords.shape[2] != 3:
@@ -735,11 +765,18 @@ def _xyz_trajectory_text(
         raise ValueError(
             f"XYZ export atom count mismatch: coords have {atom_count}, atom_numbers have {len(atom_numbers)}."
         )
+    if sample_ids is not None and len(sample_ids) != int(coords.shape[0]):
+        raise ValueError(
+            f"XYZ export sample-id count mismatch: coords have {coords.shape[0]}, sample_ids have {len(sample_ids)}."
+        )
 
     lines: list[str] = []
     for sample_index in range(int(coords.shape[0])):
         lines.append(str(atom_count))
-        lines.append(f"batch_id={batch_id} sample_index={sample_index}")
+        comment = f"batch_id={batch_id} sample_idx={sample_index}"
+        if sample_ids is not None:
+            comment = f"{comment} sample_id={sample_ids[sample_index]}"
+        lines.append(comment)
         frame = coords[sample_index]
         for atom_index, atomic_number in enumerate(atom_numbers):
             x, y, z = frame[atom_index]
@@ -748,6 +785,64 @@ def _xyz_trajectory_text(
                 f"{float(x):.8f} {float(y):.8f} {float(z):.8f}"
             )
     return "\n".join(lines) + "\n"
+
+
+def _xyz_frame_text(
+    coords_ang: np.ndarray,
+    atom_numbers: list[int],
+    *,
+    comment_line: str,
+) -> str:
+    frame = np.asarray(coords_ang, dtype=float)
+    if frame.ndim != 2 or frame.shape[1] != 3:
+        raise ValueError(f"Expected coords_ang with shape (n_atoms, 3), got {frame.shape}.")
+    atom_count = int(frame.shape[0])
+    if atom_count != len(atom_numbers):
+        raise ValueError(
+            f"XYZ export atom count mismatch: coords have {atom_count}, atom_numbers have {len(atom_numbers)}."
+        )
+    lines = [str(atom_count), str(comment_line)]
+    for atom_index, atomic_number in enumerate(atom_numbers):
+        x, y, z = frame[atom_index]
+        lines.append(
+            f"{_atom_symbol(int(atomic_number))} "
+            f"{float(x):.8f} {float(y):.8f} {float(z):.8f}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _sample_id(batch_id: str, sample_index: int) -> str:
+    return f"{str(batch_id)}_sample_{int(sample_index):06d}"
+
+
+def _topology_signature(atom_numbers: list[int] | np.ndarray) -> str:
+    values = np.asarray(atom_numbers, dtype=int).reshape(-1)
+    joined = ",".join(str(int(value)) for value in values.tolist())
+    digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()  # noqa: S324
+    return f"atoms-{values.shape[0]}-{digest[:16]}"
+
+
+def _geometry_channel_entries(*, include_velocities: bool) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = [
+        {"name": "atom_numbers", "unit": None, "group": "sampling"},
+        {"name": "atom_masses_amu", "unit": "amu", "group": "sampling"},
+        {"name": "coords_bohr", "unit": "bohr", "group": "sampling"},
+    ]
+    if include_velocities:
+        entries.append({"name": "velocities_bohr_per_au_time", "unit": "bohr/au_time", "group": "sampling"})
+    return entries
+
+
+def _tar_gz_bytes_from_entries(entries: list[tuple[str, bytes]]) -> bytes:
+    tar_buffer = io.BytesIO()
+    modified_at = datetime.now(timezone.utc)
+    with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+        for archive_path, content_bytes in entries:
+            info = tarfile.TarInfo(name=archive_path)
+            info.size = len(content_bytes)
+            info.mtime = modified_at.timestamp()
+            tar.addfile(info, io.BytesIO(content_bytes))
+    return tar_buffer.getvalue()
 
 
 def reconstruct_cartesian_hessian_au(batch_payload: dict[str, Any]) -> np.ndarray:
@@ -788,6 +883,10 @@ def reconstruct_cartesian_hessian_au(batch_payload: dict[str, Any]) -> np.ndarra
 
 
 def _coords_all_ang_from_batch(batch_payload: dict[str, Any]) -> np.ndarray:
+    return np.asarray(_coords_all_bohr_from_batch(batch_payload) * float(BOHR_TO_ANG), dtype=float)
+
+
+def _coords_all_bohr_from_batch(batch_payload: dict[str, Any]) -> np.ndarray:
     q_samples = np.asarray(batch_payload.get("q_samples"), dtype=float)
     coords0_bohr = np.asarray(batch_payload.get("coords0_bohr"), dtype=float).reshape(-1)
     modal_matrix_au = np.asarray(batch_payload.get("modal_matrix_au"), dtype=float)
@@ -796,7 +895,25 @@ def _coords_all_ang_from_batch(batch_payload: dict[str, Any]) -> np.ndarray:
         raise ValueError("Sample batch does not contain a valid atom count.")
     if q_samples.ndim != 2:
         raise ValueError(f"q_samples must be rank-2, got shape {q_samples.shape}.")
-    return _coords_from_q_samples(q_samples, coords0_bohr, modal_matrix_au, n_atoms)
+    return _coords_bohr_from_q_samples(q_samples, coords0_bohr, modal_matrix_au, n_atoms)
+
+
+def _velocities_all_bohr_per_au_time_from_batch(batch_payload: dict[str, Any]) -> np.ndarray:
+    p_samples = np.asarray(batch_payload.get("p_samples"), dtype=float)
+    modal_matrix_au = np.asarray(batch_payload.get("modal_matrix_au"), dtype=float)
+    n_atoms = int(batch_payload.get("n_atoms") or 0)
+    if n_atoms <= 0:
+        raise ValueError("Sample batch does not contain a valid atom count.")
+    if p_samples.ndim != 2:
+        raise ValueError(f"p_samples must be rank-2, got shape {p_samples.shape}.")
+    if modal_matrix_au.ndim != 2:
+        raise ValueError(f"modal_matrix_au must be rank-2, got shape {modal_matrix_au.shape}.")
+    if p_samples.shape[1] != modal_matrix_au.shape[1]:
+        raise ValueError(
+            "p_samples must align with modal_matrix_au columns: "
+            f"p_samples={p_samples.shape}, modal_matrix_au={modal_matrix_au.shape}."
+        )
+    return _velocities_bohr_per_au_time_from_p_samples(p_samples, modal_matrix_au, n_atoms)
 
 
 def build_normal_modes_export_bundle(
@@ -1038,3 +1155,91 @@ def build_normal_modes_export_bundle(
     source_base = _sanitize_filename_part(source_name.rsplit(".", 1)[0])
     file_name = f"normal_modes_sampling_{source_base}_{_sanitize_filename_part(batch_id)}.tar.gz"
     return file_name, tar_buffer.getvalue()
+
+
+def build_normal_modes_geometry_export_entries(
+    *,
+    batch_id: str,
+    batch_payload: dict[str, Any],
+) -> tuple[str, list[tuple[str, bytes]]]:
+    sampling_method = str(batch_payload.get("sampling_method") or NORMAL_MODES_GEOMETRY_METHOD_HARMONIC).strip()
+    source_name = str(batch_payload.get("source_name") or "uploaded.molden")
+    atom_numbers = [int(value) for value in list(batch_payload.get("atom_numbers", []) or [])]
+    seed = int(batch_payload.get("seed") or 0)
+    charge = int(batch_payload.get("charge") or 0)
+    multiplicity = int(batch_payload.get("multiplicity") or 1)
+
+    coords_bohr = np.asarray(_coords_all_bohr_from_batch(batch_payload), dtype=float)
+    velocities_bohr_per_au_time = np.asarray(_velocities_all_bohr_per_au_time_from_batch(batch_payload), dtype=float)
+    coords_ang = np.asarray(coords_bohr * float(BOHR_TO_ANG), dtype=float)
+    atom_masses_amu = np.asarray([atomic_mass_amu(value) for value in atom_numbers], dtype=float)
+
+    sample_count = int(coords_bohr.shape[0])
+    n_atoms = int(coords_bohr.shape[1])
+    if len(atom_numbers) != n_atoms:
+        raise ValueError(
+            f"Sample batch atom-number count mismatch: expected {n_atoms}, found {len(atom_numbers)}."
+        )
+
+    sample_ids = [_sample_id(batch_id, sample_index) for sample_index in range(sample_count)]
+    created_at_utc = utc_now_iso()
+    topology_signature = _topology_signature(atom_numbers)
+    all_structures_xyz = _xyz_trajectory_text(
+        coords_ang,
+        atom_numbers,
+        batch_id=str(batch_id),
+        sample_ids=sample_ids,
+    )
+    label_source = str(source_name or "").strip()
+    if label_source:
+        label = f"{label_source} normal modes samples"
+    else:
+        label = f"normal_modes_samples_{_sanitize_filename_part(batch_id)}"
+
+    manifest = {
+        "kind": NORMAL_MODES_GEOMETRY_BUNDLE_KIND,
+        "schema_version": NORMAL_MODES_GEOMETRY_EXPORT_SCHEMA_VERSION,
+        "label": label,
+        "source_name": source_name,
+        "created_at_utc": created_at_utc,
+        "n_samples": sample_count,
+        "n_atoms": n_atoms,
+        "topology_signature": topology_signature,
+        "sampling_channels": _geometry_channel_entries(include_velocities=velocities_bohr_per_au_time.size > 0),
+        "electronics": {
+            "default_profile_id": None,
+            "profiles": [],
+        },
+        "batch_id": str(batch_id),
+        "sampling_method": sampling_method,
+        "charge": charge,
+        "multiplicity": multiplicity,
+        "seed": seed,
+    }
+
+    entries: list[tuple[str, bytes]] = [
+        ("manifest.json", _json_text(manifest).encode("utf-8")),
+        ("meta/sample_ids.json", _json_text(sample_ids).encode("utf-8")),
+        ("sampling/atom_numbers.npy", _npy_bytes(np.asarray(atom_numbers, dtype=int))),
+        ("sampling/atom_masses_amu.npy", _npy_bytes(atom_masses_amu)),
+        ("sampling/coords_bohr.npy", _npy_bytes(coords_bohr)),
+        ("sampling/all_structures.xyz", all_structures_xyz.encode("utf-8")),
+    ]
+    if velocities_bohr_per_au_time.size > 0:
+        entries.append(("sampling/velocities_bohr_per_au_time.npy", _npy_bytes(velocities_bohr_per_au_time)))
+
+    source_base = _sanitize_filename_part(source_name.rsplit(".", 1)[0])
+    file_name = f"normal_modes_geometry_{source_base}_{_sanitize_filename_part(batch_id)}.tar.gz"
+    return file_name, entries
+
+
+def build_normal_modes_geometry_export_bundle(
+    *,
+    batch_id: str,
+    batch_payload: dict[str, Any],
+) -> tuple[str, bytes]:
+    file_name, entries = build_normal_modes_geometry_export_entries(
+        batch_id=batch_id,
+        batch_payload=batch_payload,
+    )
+    return file_name, _tar_gz_bytes_from_entries(entries)

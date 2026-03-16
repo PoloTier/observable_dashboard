@@ -787,6 +787,9 @@
       box-shadow: var(--shadow);
       overflow: hidden;
     }
+    .modal-shell.modal-shell-compact {
+      width: min(720px, 100%);
+    }
     .modal-header,
     .modal-footer {
       padding: 16px 18px;
@@ -851,6 +854,130 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
+    }
+    .radio-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .radio-card {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      cursor: pointer;
+    }
+    .radio-card:hover {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+    }
+    .radio-card-top {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .radio-card input[type="radio"] {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+    .radio-card-title {
+      color: var(--text);
+      font-weight: 700;
+    }
+    .radio-card-copy {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .field-with-action {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .field-with-action .field-group {
+      min-width: 0;
+    }
+    .field-with-action .modal-action-btn {
+      min-height: 40px;
+    }
+    .directory-browser-header {
+      display: grid;
+      gap: 6px;
+    }
+    .directory-browser-root,
+    .directory-browser-path {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .directory-browser-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .directory-browser-status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .directory-browser-status.error {
+      color: var(--danger);
+    }
+    .directory-browser-list {
+      min-height: 240px;
+      max-height: min(48vh, 420px);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-soft);
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+    .directory-browser-item {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+    }
+    .directory-browser-item:hover {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .directory-browser-item-main {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .directory-browser-item-name {
+      color: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .directory-browser-item-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
     }
     .rules-card,
     .plan-preview-card {
@@ -1158,9 +1285,10 @@
               <div class="summary-empty">Run a normal-mode sampling job to populate the ensemble summary.</div>
             </div>
             <div class="distribution-actions">
+              <button id="nm-export-geometry-btn" class="toolbar-btn" type="button" disabled>Export Geometry Bundle</button>
               <button id="nm-export-bundle-btn" class="toolbar-btn" type="button" disabled>Export Bundle</button>
               <div id="nm-export-status" class="status-inline">
-                Export a reproducibility bundle after a sampling batch is available.
+                Export a reproducibility bundle or geometry bundle after a sampling batch is available.
               </div>
             </div>
           </div>
@@ -1240,6 +1368,14 @@
           <div class="field-group">
             <label for="nm-sampling-preview-count">Preview count</label>
             <input id="nm-sampling-preview-count" type="number" min="1" step="1" value="64" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-charge">Charge</label>
+            <input id="nm-sampling-charge" type="number" step="1" value="0" />
+          </div>
+          <div class="field-group">
+            <label for="nm-sampling-multiplicity">Multiplicity</label>
+            <input id="nm-sampling-multiplicity" type="number" min="1" step="1" value="1" />
           </div>
           <div class="field-group">
             <label for="nm-sampling-temperature">Temperature (K)</label>
@@ -1330,6 +1466,93 @@
           The preview table reflects the current settings; the backend response is the final source of truth.
         </div>
         <button id="nm-sampling-submit-btn" class="modal-action-btn primary" type="button">Sample</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="nm-geometry-export-modal" class="modal-backdrop" hidden>
+    <div class="modal-shell modal-shell-compact" role="dialog" aria-modal="true" aria-labelledby="nm-geometry-export-modal-title">
+      <div class="modal-header">
+        <div>
+          <h2 id="nm-geometry-export-modal-title" class="modal-title">Export Geometry Bundle</h2>
+          <p class="modal-subtitle">
+            Download the geometry bundle as a tar archive in the browser or ask the server to create a bundle directory under the current browse root.
+          </p>
+        </div>
+        <button id="nm-geometry-export-modal-close-btn" class="modal-close-btn" type="button">Close</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="radio-grid">
+          <label class="radio-card" for="nm-geometry-export-mode-frontend">
+            <div class="radio-card-top">
+              <input id="nm-geometry-export-mode-frontend" type="radio" name="nm-geometry-export-mode" value="frontend-download" checked />
+              <span class="radio-card-title">Frontend Download</span>
+            </div>
+            <div class="radio-card-copy">
+              Fetch the geometry bundle in the browser and download a tar archive with the name you choose here.
+            </div>
+          </label>
+          <label class="radio-card" for="nm-geometry-export-mode-backend">
+            <div class="radio-card-top">
+              <input id="nm-geometry-export-mode-backend" type="radio" name="nm-geometry-export-mode" value="backend-save" />
+              <span class="radio-card-title">Backend Save</span>
+            </div>
+            <div class="radio-card-copy">
+              Ask the server to create a bundle directory below the current browse root instead of downloading it locally.
+            </div>
+          </label>
+        </div>
+
+        <div class="modal-grid">
+          <div class="field-group">
+            <label id="nm-geometry-export-file-name-label" for="nm-geometry-export-file-name">Archive name</label>
+            <input id="nm-geometry-export-file-name" type="text" placeholder="normal_modes_geometry_batch.tar.gz" />
+          </div>
+          <div id="nm-geometry-export-directory-group" class="u-hidden">
+            <label for="nm-geometry-export-directory">Server directory</label>
+            <div class="field-with-action">
+              <div class="field-group">
+                <input id="nm-geometry-export-directory" type="text" placeholder="exports/normal_modes" />
+              </div>
+              <button id="nm-geometry-export-directory-browse-btn" class="modal-action-btn" type="button">Browse</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div id="nm-geometry-export-modal-status" class="status-inline">
+          Choose an export mode and confirm the output name.
+        </div>
+        <div class="controls-row">
+          <button id="nm-geometry-export-cancel-btn" class="modal-action-btn" type="button">Cancel</button>
+          <button id="nm-geometry-export-submit-btn" class="modal-action-btn primary" type="button">Download</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="nm-geometry-directory-browser-modal" class="modal-backdrop" hidden>
+    <div class="modal-shell modal-shell-compact" role="dialog" aria-modal="true" aria-labelledby="nm-geometry-directory-browser-title">
+      <div class="modal-header">
+        <div class="directory-browser-header">
+          <h2 id="nm-geometry-directory-browser-title" class="modal-title">Choose Server Directory</h2>
+          <div id="nm-geometry-directory-browser-root" class="directory-browser-root">Root: ...</div>
+          <div id="nm-geometry-directory-browser-path" class="directory-browser-path">Current path: /</div>
+        </div>
+        <button id="nm-geometry-directory-browser-close-btn" class="modal-close-btn" type="button">Close</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="directory-browser-toolbar">
+          <button id="nm-geometry-directory-browser-up-btn" class="modal-action-btn" type="button">Up</button>
+          <button id="nm-geometry-directory-browser-select-btn" class="modal-action-btn primary" type="button">Use This Directory</button>
+        </div>
+        <div id="nm-geometry-directory-browser-status" class="directory-browser-status"></div>
+        <div id="nm-geometry-directory-browser-list" class="directory-browser-list">
+          <div class="modal-empty">Open the browser to load directories from the server.</div>
+        </div>
       </div>
     </div>
   </div>

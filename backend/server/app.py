@@ -4,14 +4,16 @@ import json
 import logging
 import math
 import secrets
+import shutil
 from threading import Lock
 import time
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import numpy as np
 
 from backend.config import ALLOWED_OBSERVABLES, required_index_count
 from backend.server.cache import SeriesLRUCache
@@ -21,12 +23,26 @@ from backend.server.compute import (
     aggregate_scalar_series_by_mode,
     compute_observable_series,
 )
+from backend.server.distribution_bundle import (
+    DistributionBundle,
+    ElectronicProfile,
+    collect_absorption_excitation_energies_ev,
+    collect_valid_absorption_transition_pairs,
+    compute_absorption_spectrum,
+    compute_geometry_distribution,
+    is_distribution_bundle_directory,
+    load_distribution_bundle,
+    load_distribution_bundle_from_directory,
+    make_distribution_id,
+)
 from backend.server.dataset_store import DatasetStore
 from backend.server.expression import ExpressionEvaluationError, evaluate_expression_payload
 from backend.server.molden import parse_molden_normal_modes
 from backend.server.normal_modes_sampling import (
     SAMPLE_CACHE_MAX_ENTRIES,
     build_normal_modes_export_bundle,
+    build_normal_modes_geometry_export_entries,
+    build_normal_modes_geometry_export_bundle,
     compute_measurement_values_from_batch,
     prepare_sampling_inputs,
     sample_normal_modes,
@@ -34,6 +50,19 @@ from backend.server.normal_modes_sampling import (
 )
 from backend.server.models import (
     BootstrapResponse,
+    DistributionCompareGeometryRequest,
+    DistributionCompareGeometryResponse,
+    DistributionCompareSpectrumRequest,
+    DistributionCompareSpectrumResponse,
+    DistributionDeleteResponse,
+    DistributionElectronicProfileItem,
+    DistributionListItem,
+    DistributionListResponse,
+    DistributionSpectrumPairCurve,
+    DistributionSpectrumPairOption,
+    DistributionSpectrumSeries,
+    DistributionSpectrumSeriesRequestItem,
+    DistributionSpectrumSkippedItem,
     ExpressionEnsembleRequest,
     ExpressionEnsembleResponse,
     ExpressionDatasetRequest,
@@ -48,12 +77,15 @@ from backend.server.models import (
     HoppingEventsResponse,
     LoadDatasetRequest,
     LoadDatasetResponse,
+    LoadDistributionPathRequest,
     MoleculeDeNacResponse,
     MoleculeDeResponse,
     HealthzResponse,
     MoleculeHydrogenBondResponse,
     MoleculeNacResponse,
     MoleculeTrajectoryResponse,
+    NormalModesGeometrySaveRequest,
+    NormalModesGeometrySaveResponse,
     NormalModesMeasurementRequest,
     NormalModesMeasurementResponse,
     NormalModesParseTextRequest,
@@ -127,6 +159,48 @@ def _json_script_text(value: Any) -> str:
     return json.dumps(value, separators=(",", ":")).replace("</", "<\\/")
 
 
+def _build_distribution_list_item_payload(
+    *,
+    distribution_id: str,
+    bundle: DistributionBundle,
+) -> dict[str, Any]:
+    electronic_profiles = sorted(
+        list((bundle.electronic_profiles or {}).values()),
+        key=lambda item: item.profile_id,
+    )
+    return {
+        "distribution_id": str(distribution_id),
+        "label": str(bundle.label),
+        "source_name": str(bundle.source_name),
+        "created_at_utc": str(bundle.created_at_utc),
+        "n_samples": int(bundle.n_samples),
+        "n_atoms": int(bundle.n_atoms),
+        "topology_signature": str(bundle.topology_signature),
+        "available_channels": [str(value) for value in bundle.available_channels],
+        "has_electronics": bool(bundle.has_electronics),
+        "default_electronic_profile_id": (
+            None if bundle.default_electronic_profile_id is None else str(bundle.default_electronic_profile_id)
+        ),
+        "electronic_profiles": [
+            DistributionElectronicProfileItem(
+                profile_id=str(profile.profile_id),
+                label=str(profile.label),
+                engine=str(profile.engine),
+                method=str(profile.method),
+                reference=str(profile.reference),
+                xc=str(profile.xc),
+                basis=str(profile.basis),
+                n_excited_states=int(profile.n_excited_states),
+                n_states=int(profile.n_states),
+                n_transition=int(profile.n_transition),
+                success_count=int(profile.success_count),
+                failed_count=int(profile.failed_count),
+            ).model_dump()
+            for profile in electronic_profiles
+        ],
+    }
+
+
 def _dataset_is_loaded(store: DatasetStore) -> bool:
     return bool(store.meta.get("dataset_loaded"))
 
@@ -134,6 +208,11 @@ def _dataset_is_loaded(store: DatasetStore) -> bool:
 def _relative_path_text(root: Path, target: Path) -> str:
     text = target.relative_to(root).as_posix()
     return "" if text == "." else text
+
+
+def _path_matches_suffixes(path: Path, suffixes: tuple[str, ...] | frozenset[str]) -> bool:
+    lower_name = path.name.lower()
+    return any(lower_name.endswith(str(suffix).lower()) for suffix in suffixes)
 
 
 def _raw_key_exists(store: DatasetStore, raw_key: str) -> bool:
@@ -392,6 +471,8 @@ def create_app(
     if mol3d_cache is None:
         mol3d_cache = cache
     normal_modes_sample_cache = SeriesLRUCache(max_entries=SAMPLE_CACHE_MAX_ENTRIES)
+    distribution_lock = Lock()
+    loaded_distributions: dict[str, DistributionBundle] = {}
     browse_root_resolved = Path(browse_root).resolve() if browse_root is not None else None
 
     runtime_lock = Lock()
@@ -442,6 +523,124 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=403, detail="Requested path is outside the browse root.") from exc
         return resolved
+
+    def _resolve_browse_output_directory(relative_path: str | None) -> Path:
+        if browse_root_resolved is None:
+            raise HTTPException(status_code=501, detail="Dataset browsing is not enabled on this server.")
+
+        raw_path = str(relative_path or "").strip()
+        if raw_path and Path(raw_path).is_absolute():
+            raise HTTPException(status_code=400, detail="Absolute paths are not allowed.")
+
+        candidate = browse_root_resolved if not raw_path else browse_root_resolved / raw_path
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to resolve path: {exc}") from exc
+
+        try:
+            resolved.relative_to(browse_root_resolved)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Requested path is outside the browse root.") from exc
+        return resolved
+
+    def _build_file_browser_response(
+        current_dir: Path,
+        *,
+        is_loadable: Callable[[Path, str], bool],
+    ) -> FileBrowserResponse:
+        entries: list[dict[str, Any]] = []
+        for child in current_dir.iterdir():
+            if child.name.startswith("."):
+                continue
+            try:
+                resolved_child = child.resolve(strict=True)
+                resolved_child.relative_to(browse_root_resolved)
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+
+            kind = "directory" if resolved_child.is_dir() else "file" if resolved_child.is_file() else ""
+            if not kind:
+                continue
+
+            entries.append(
+                {
+                    "name": child.name,
+                    "relative_path": _relative_path_text(browse_root_resolved, child),
+                    "kind": kind,
+                    "loadable": bool(is_loadable(child, kind)),
+                }
+            )
+
+        entries.sort(key=lambda item: (item["kind"] != "directory", str(item["name"]).lower()))
+        parent_path = None if current_dir == browse_root_resolved else _relative_path_text(browse_root_resolved, current_dir.parent)
+        return FileBrowserResponse(
+            root_label=str(browse_root_resolved),
+            current_path=_relative_path_text(browse_root_resolved, current_dir),
+            parent_path=parent_path,
+            entries=entries,
+        )
+
+    def _normalize_export_directory_name(raw_filename: str, *, fallback: str) -> str:
+        directory_name = str(raw_filename or "").strip() or str(fallback or "").strip()
+        if not directory_name:
+            raise HTTPException(status_code=422, detail="filename must not be empty.")
+        if Path(directory_name).name != directory_name or "/" in directory_name or "\\" in directory_name:
+            raise HTTPException(status_code=422, detail="filename must be a directory name, not a path.")
+        if directory_name in {".", ".."}:
+            raise HTTPException(status_code=422, detail="filename must be a valid directory name.")
+
+        directory_name_lower = directory_name.lower()
+        if directory_name_lower.endswith(".tar.gz"):
+            directory_name = directory_name[:-7]
+        elif directory_name_lower.endswith(".tgz"):
+            directory_name = directory_name[:-4]
+        elif directory_name_lower.endswith(".tar"):
+            directory_name = directory_name[:-4]
+        elif directory_name_lower.endswith(".gz"):
+            directory_name = directory_name[:-3]
+
+        directory_name = directory_name.strip()
+        if not directory_name or directory_name in {".", ".."}:
+            raise HTTPException(status_code=422, detail="filename must resolve to a valid directory name.")
+        return directory_name
+
+    def _write_bundle_entries_to_directory(
+        parent_dir: Path,
+        *,
+        directory_name: str,
+        entries: list[tuple[str, bytes]],
+    ) -> Path:
+        target_path = parent_dir / directory_name
+        if target_path.exists():
+            raise HTTPException(status_code=409, detail=f"Target path already exists: {target_path.name}")
+
+        temp_path = parent_dir / f".{directory_name}.tmp-{secrets.token_urlsafe(6)}"
+        while temp_path.exists():
+            temp_path = parent_dir / f".{directory_name}.tmp-{secrets.token_urlsafe(6)}"
+
+        try:
+            temp_path.mkdir(parents=False, exist_ok=False)
+            for relative_path, content_bytes in entries:
+                entry_relative_path = Path(relative_path)
+                if entry_relative_path.is_absolute() or any(part in {"", ".", ".."} for part in entry_relative_path.parts):
+                    raise HTTPException(status_code=500, detail=f"Invalid bundle entry path: {relative_path}")
+                entry_path = temp_path / entry_relative_path
+                entry_path.parent.mkdir(parents=True, exist_ok=True)
+                entry_path.write_bytes(content_bytes)
+
+            temp_path.rename(target_path)
+            return target_path
+        except HTTPException:
+            if temp_path.exists():
+                shutil.rmtree(temp_path, ignore_errors=True)
+            raise
+        except OSError as exc:
+            if temp_path.exists():
+                shutil.rmtree(temp_path, ignore_errors=True)
+            if target_path.exists():
+                raise HTTPException(status_code=409, detail=f"Target path already exists: {target_path.name}") from exc
+            raise HTTPException(status_code=500, detail=f"Failed to write geometry bundle directory: {exc}") from exc
 
     def _activate_store(new_store: DatasetStore, *, action_label: str, reset_aliases: bool) -> dict[str, Any]:
         try:
@@ -503,6 +702,146 @@ def create_app(
             "dataset_revision": dataset_revision,
         }
 
+    def _list_loaded_distribution_payloads() -> list[dict[str, Any]]:
+        with distribution_lock:
+            items = [
+                _build_distribution_list_item_payload(distribution_id=distribution_id, bundle=bundle)
+                for distribution_id, bundle in loaded_distributions.items()
+            ]
+        items.sort(key=lambda item: str(item.get("created_at_utc") or ""), reverse=True)
+        return items
+
+    def _get_distribution_or_404(distribution_id: str) -> DistributionBundle:
+        with distribution_lock:
+            bundle = loaded_distributions.get(str(distribution_id))
+        if bundle is None:
+            raise HTTPException(status_code=404, detail=f"Distribution not found: {distribution_id}")
+        return bundle
+
+    def _store_distribution(bundle: DistributionBundle) -> dict[str, Any]:
+        distribution_id = make_distribution_id()
+        with distribution_lock:
+            loaded_distributions[distribution_id] = bundle
+        return _build_distribution_list_item_payload(distribution_id=distribution_id, bundle=bundle)
+
+    def _delete_distribution(distribution_id: str) -> bool:
+        with distribution_lock:
+            return loaded_distributions.pop(str(distribution_id), None) is not None
+
+    def _normalize_distribution_ids(raw_distribution_ids: list[str]) -> list[str]:
+        distribution_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for raw_id in raw_distribution_ids:
+            distribution_id = str(raw_id).strip()
+            if not distribution_id or distribution_id in seen_ids:
+                continue
+            seen_ids.add(distribution_id)
+            distribution_ids.append(distribution_id)
+        return distribution_ids
+
+    def _normalize_spectrum_series_request_items(
+        raw_items: list[DistributionSpectrumSeriesRequestItem],
+    ) -> list[tuple[str, str]]:
+        series_items: list[tuple[str, str]] = []
+        seen_items: set[tuple[str, str]] = set()
+        for raw_item in raw_items:
+            distribution_id = str(raw_item.distribution_id).strip()
+            profile_id = str(raw_item.profile_id).strip()
+            if not distribution_id or not profile_id:
+                continue
+            key = (distribution_id, profile_id)
+            if key in seen_items:
+                continue
+            seen_items.add(key)
+            series_items.append(key)
+        return series_items
+
+    def _format_transition_pair(pair: tuple[int, int]) -> str:
+        return f"{int(pair[0])}->{int(pair[1])}"
+
+    def _build_series_label(*, bundle: DistributionBundle, profile: ElectronicProfile) -> str:
+        return f"{bundle.label} | {profile.label}"
+
+    def _build_transition_pair_options(pairs: list[tuple[int, int]]) -> list[DistributionSpectrumPairOption]:
+        return [
+            DistributionSpectrumPairOption(
+                pair=[int(pair[0]), int(pair[1])],
+                label=_format_transition_pair(pair),
+            )
+            for pair in pairs
+        ]
+
+    def _get_distribution_profile_or_422(
+        distribution_id: str,
+        profile_id: str,
+    ) -> tuple[DistributionBundle, ElectronicProfile]:
+        bundle = _get_distribution_or_404(distribution_id)
+        profile = (bundle.electronic_profiles or {}).get(str(profile_id))
+        if profile is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Distribution {distribution_id} does not contain electronic profile {profile_id}.",
+            )
+        return bundle, profile
+
+    def _collect_comparable_spectrum_series(
+        series_items: list[tuple[str, str]],
+    ) -> tuple[list[tuple[str, DistributionBundle, str, ElectronicProfile]], list[dict[str, str | None]], list[np.ndarray]]:
+        comparable_series: list[tuple[str, DistributionBundle, str, ElectronicProfile]] = []
+        skipped_payloads: list[dict[str, str | None]] = []
+        excitation_energy_sets_ev: list[np.ndarray] = []
+        for distribution_id, profile_id in series_items:
+            bundle, profile = _get_distribution_profile_or_422(distribution_id, profile_id)
+            excitation_energies_ev = collect_absorption_excitation_energies_ev(profile)
+            if excitation_energies_ev.size <= 0:
+                skipped_payloads.append(
+                    {
+                        "distribution_id": str(distribution_id),
+                        "distribution_label": str(bundle.label),
+                        "profile_id": str(profile_id),
+                        "profile_label": str(profile.label),
+                        "reason": "no valid electronic transitions",
+                    }
+                )
+                continue
+
+            comparable_series.append((distribution_id, bundle, profile_id, profile))
+            excitation_energy_sets_ev.append(np.asarray(excitation_energies_ev, dtype=float))
+        return comparable_series, skipped_payloads, excitation_energy_sets_ev
+
+    def _collect_common_spectrum_pairs(
+        comparable_series: list[tuple[str, DistributionBundle, str, ElectronicProfile]]
+    ) -> list[tuple[int, int]]:
+        if not comparable_series:
+            return []
+        common_pairs: set[tuple[int, int]] | None = None
+        for _, _, _, profile in comparable_series:
+            bundle_pairs = set(collect_valid_absorption_transition_pairs(profile))
+            if common_pairs is None:
+                common_pairs = bundle_pairs
+            else:
+                common_pairs &= bundle_pairs
+        return sorted(common_pairs or set())
+
+    def _build_absorption_energy_grid(
+        *,
+        excitation_energy_sets_ev: list[np.ndarray],
+        delta_ev: float,
+    ) -> np.ndarray:
+        non_empty_sets = [np.asarray(values, dtype=float).reshape(-1) for values in excitation_energy_sets_ev if values.size > 0]
+        if not non_empty_sets:
+            raise HTTPException(
+                status_code=422,
+                detail="No valid electronic transitions remain after filtering the selected spectrum series.",
+            )
+        all_excitation_energies_ev = np.concatenate(non_empty_sets)
+        min_energy_ev = float(np.min(all_excitation_energies_ev))
+        max_energy_ev = float(np.max(all_excitation_energies_ev))
+        margin_ev = max(0.25, 8.0 * float(delta_ev))
+        x_min_energy_ev = max(0.01, min_energy_ev - margin_ev)
+        x_max_energy_ev = max(x_min_energy_ev + 0.2, max_energy_ev + margin_ev)
+        return np.linspace(x_min_energy_ev, x_max_energy_ev, 800, dtype=float)
+
     app = FastAPI(title="Observable Dashboard API", version="1.0.0")
 
     # Determine frontend location
@@ -547,6 +886,20 @@ def create_app(
             return HTMLResponse(html)
         return HTMLResponse("<h1>Normal Modes page not found</h1>", status_code=404)
 
+    @app.get("/distribution_compare.html", response_class=HTMLResponse)
+    def distribution_compare_page() -> HTMLResponse:
+        compare_file = frontend_dir / "distribution_compare.html"
+        if compare_file.exists():
+            html = compare_file.read_text()
+            config_json = _json_script_text({"api_base": api_base})
+            html = html.replace(
+                '<script id="distribution-compare-config-json" type="application/json">{}</script>',
+                f'<script id="distribution-compare-config-json" type="application/json">{config_json}</script>',
+                1,
+            )
+            return HTMLResponse(html)
+        return HTMLResponse("<h1>Distribution Compare page not found</h1>", status_code=404)
+
     # Serve frontend source files (for development)
     @app.get("/src/{file_path:path}")
     def serve_src(file_path: str) -> FileResponse:
@@ -590,6 +943,8 @@ def create_app(
                 preparation,
                 sample_count=int(req.sample_count),
                 preview_count=int(req.preview_count),
+                charge=int(req.charge),
+                multiplicity=int(req.multiplicity),
                 position_default=str(req.position_default),
                 momentum_default=str(req.momentum_default),
                 temperature_k=(None if req.temperature_k is None else float(req.temperature_k)),
@@ -677,42 +1032,270 @@ def create_app(
             },
         )
 
+    @app.get(f"{api_base}/normal-modes/sample-batches/{{batch_id}}/export-geometry")
+    def export_normal_modes_geometry_batch(batch_id: str) -> Response:
+        cache_key = ("normal_modes_sample_batch", str(batch_id))
+        batch_payload = normal_modes_sample_cache.get(cache_key)
+        if batch_payload is None:
+            raise HTTPException(status_code=404, detail=f"Normal-modes sample batch not found: {batch_id}")
+
+        try:
+            file_name, archive_bytes = build_normal_modes_geometry_export_bundle(
+                batch_id=str(batch_id),
+                batch_payload=batch_payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to export geometry sample bundle: {exc}") from exc
+
+        return Response(
+            content=archive_bytes,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_name}"',
+            },
+        )
+
+    @app.post(
+        f"{api_base}/normal-modes/sample-batches/{{batch_id}}/export-geometry/save",
+        response_model=NormalModesGeometrySaveResponse,
+    )
+    def save_normal_modes_geometry_batch(
+        batch_id: str,
+        req: NormalModesGeometrySaveRequest,
+    ) -> NormalModesGeometrySaveResponse:
+        cache_key = ("normal_modes_sample_batch", str(batch_id))
+        batch_payload = normal_modes_sample_cache.get(cache_key)
+        if batch_payload is None:
+            raise HTTPException(status_code=404, detail=f"Normal-modes sample batch not found: {batch_id}")
+
+        try:
+            default_file_name, bundle_entries = build_normal_modes_geometry_export_entries(
+                batch_id=str(batch_id),
+                batch_payload=batch_payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to export geometry sample bundle: {exc}") from exc
+
+        target_dir = _resolve_browse_output_directory(req.directory)
+        directory_name = _normalize_export_directory_name(req.filename, fallback=default_file_name)
+        if target_dir.exists() and not target_dir.is_dir():
+            raise HTTPException(status_code=422, detail=f"Target directory is not a directory: {req.directory}")
+
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to create target directory: {exc}") from exc
+
+        try:
+            target_dir.relative_to(browse_root_resolved)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Requested path is outside the browse root.") from exc
+
+        target_path = _write_bundle_entries_to_directory(
+            target_dir,
+            directory_name=directory_name,
+            entries=bundle_entries,
+        )
+
+        return NormalModesGeometrySaveResponse(
+            status="ok",
+            saved_relative_path=_relative_path_text(browse_root_resolved, target_path),
+            saved_absolute_path=str(target_path),
+        )
+
+    @app.post(f"{api_base}/distributions/load", response_model=DistributionListItem)
+    async def load_distribution_via_upload(
+        bundle_bytes: bytes = Body(...),
+        filename: str = "distribution_bundle.tar.gz",
+    ) -> DistributionListItem:
+        try:
+            bundle = load_distribution_bundle(bundle_bytes, filename=str(filename))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to load distribution bundle: {exc}") from exc
+        return DistributionListItem(**_store_distribution(bundle))
+
+    @app.get(f"{api_base}/distributions/files", response_model=FileBrowserResponse)
+    def list_distribution_files(path: str | None = None) -> FileBrowserResponse:
+        current_dir = _resolve_browse_path(path)
+        if not current_dir.is_dir():
+            raise HTTPException(status_code=422, detail=f"Path is not a directory: {path or '.'}")
+        return _build_file_browser_response(
+            current_dir,
+            is_loadable=lambda child, kind: kind == "directory" and is_distribution_bundle_directory(child),
+        )
+
+    @app.post(f"{api_base}/distributions/load-path", response_model=DistributionListItem)
+    def load_distribution_from_path(req: LoadDistributionPathRequest) -> DistributionListItem:
+        target_path = _resolve_browse_path(req.path)
+        if not target_path.is_dir():
+            raise HTTPException(status_code=422, detail=f"Path is not a directory: {req.path}")
+
+        try:
+            bundle = load_distribution_bundle_from_directory(target_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to load distribution bundle: {exc}") from exc
+        return DistributionListItem(**_store_distribution(bundle))
+
+    @app.get(f"{api_base}/distributions", response_model=DistributionListResponse)
+    def list_loaded_distributions() -> DistributionListResponse:
+        return DistributionListResponse(distributions=_list_loaded_distribution_payloads())
+
+    @app.delete(f"{api_base}/distributions/{{distribution_id}}", response_model=DistributionDeleteResponse)
+    def delete_loaded_distribution(distribution_id: str) -> DistributionDeleteResponse:
+        deleted = _delete_distribution(str(distribution_id))
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Distribution not found: {distribution_id}")
+        return DistributionDeleteResponse(status="ok", distribution_id=str(distribution_id))
+
+    @app.post(f"{api_base}/distributions/compare-geometry", response_model=DistributionCompareGeometryResponse)
+    def compare_distribution_geometry(req: DistributionCompareGeometryRequest) -> DistributionCompareGeometryResponse:
+        distribution_ids = _normalize_distribution_ids(req.distribution_ids)
+        if not distribution_ids:
+            raise HTTPException(status_code=422, detail="distribution_ids must contain at least one valid item.")
+
+        bundles: list[tuple[str, DistributionBundle]] = []
+        topology_signature: str | None = None
+        for distribution_id in distribution_ids:
+            bundle = _get_distribution_or_404(distribution_id)
+            if topology_signature is None:
+                topology_signature = str(bundle.topology_signature)
+            elif str(bundle.topology_signature) != topology_signature:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Geometry comparison requires identical topology_signature across all active distributions."
+                    ),
+                )
+            bundles.append((distribution_id, bundle))
+
+        series_payloads: list[dict[str, Any]] = []
+        response_unit = ""
+        for distribution_id, bundle in bundles:
+            try:
+                measurement_payload = compute_geometry_distribution(
+                    bundle,
+                    measurement_kind=str(req.measurement_kind),
+                    atom_indices=[int(value) for value in req.atom_indices],
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            response_unit = str(measurement_payload["unit"])
+            series_payloads.append(
+                {
+                    "distribution_id": str(distribution_id),
+                    "label": str(bundle.label),
+                    "source_name": str(bundle.source_name),
+                    "values": list(measurement_payload["values"]),
+                    "sample_count": int(measurement_payload["sample_count"]),
+                    "min": float(measurement_payload["min"]),
+                    "max": float(measurement_payload["max"]),
+                    "mean": float(measurement_payload["mean"]),
+                    "std": float(measurement_payload["std"]),
+                }
+            )
+
+        return DistributionCompareGeometryResponse(
+            measurement_kind=str(req.measurement_kind),
+            atom_indices=[int(value) for value in req.atom_indices],
+            unit=response_unit,
+            bins=int(req.bins),
+            topology_signature=str(topology_signature or ""),
+            series=series_payloads,
+        )
+
+    @app.post(f"{api_base}/distributions/compare-spectrum", response_model=DistributionCompareSpectrumResponse)
+    def compare_distribution_spectrum(req: DistributionCompareSpectrumRequest) -> DistributionCompareSpectrumResponse:
+        series_items = _normalize_spectrum_series_request_items(req.series)
+        if not series_items:
+            raise HTTPException(status_code=422, detail="series must contain at least one valid item.")
+
+        comparable_series, skipped_payloads, excitation_energy_sets_ev = _collect_comparable_spectrum_series(
+            series_items
+        )
+
+        if not comparable_series:
+            raise HTTPException(
+                status_code=422,
+                detail="No selected spectrum series with valid electronic transitions are available for spectrum comparison.",
+            )
+
+        available_pairs = _collect_common_spectrum_pairs(comparable_series)
+
+        x_energy_ev = _build_absorption_energy_grid(
+            excitation_energy_sets_ev=excitation_energy_sets_ev,
+            delta_ev=float(req.delta_ev),
+        )
+
+        series_payloads: list[DistributionSpectrumSeries] = []
+        for distribution_id, bundle, profile_id, profile in comparable_series:
+            try:
+                spectrum_payload = compute_absorption_spectrum(
+                    profile,
+                    x_energy_ev=x_energy_ev,
+                    delta_ev=float(req.delta_ev),
+                    pair_overlays=available_pairs,
+                )
+            except ValueError as exc:
+                skipped_payloads.append(
+                    {
+                        "distribution_id": str(distribution_id),
+                        "distribution_label": str(bundle.label),
+                        "profile_id": str(profile_id),
+                        "profile_label": str(profile.label),
+                        "reason": str(exc),
+                    }
+                )
+                continue
+
+            series_payloads.append(
+                DistributionSpectrumSeries(
+                    distribution_id=str(distribution_id),
+                    distribution_label=str(bundle.label),
+                    source_name=str(bundle.source_name),
+                    profile_id=str(profile_id),
+                    profile_label=str(profile.label),
+                    series_label=_build_series_label(bundle=bundle, profile=profile),
+                    total_y_normalized=[float(value) for value in spectrum_payload["total_y_normalized"]],
+                    pair_curves=[
+                        DistributionSpectrumPairCurve(
+                            pair=[int(value) for value in pair_payload["pair"]],
+                            y_normalized=[float(value) for value in pair_payload["y_normalized"]],
+                        )
+                        for pair_payload in spectrum_payload["pair_curves"]
+                    ],
+                )
+            )
+
+        if not series_payloads:
+            raise HTTPException(
+                status_code=422,
+                detail="No selected spectrum series could be rendered into an absorption spectrum.",
+            )
+
+        return DistributionCompareSpectrumResponse(
+            delta_ev=float(req.delta_ev),
+            x_energy_ev=[float(value) for value in x_energy_ev.tolist()],
+            available_pairs=_build_transition_pair_options(available_pairs),
+            series=series_payloads,
+            skipped=[DistributionSpectrumSkippedItem(**item) for item in skipped_payloads],
+        )
+
     @app.get(f"{api_base}/files", response_model=FileBrowserResponse)
     def list_files(path: str | None = None) -> FileBrowserResponse:
         current_dir = _resolve_browse_path(path)
         if not current_dir.is_dir():
             raise HTTPException(status_code=422, detail=f"Path is not a directory: {path or '.'}")
-
-        entries: list[dict[str, Any]] = []
-        for child in current_dir.iterdir():
-            if child.name.startswith("."):
-                continue
-            try:
-                resolved_child = child.resolve(strict=True)
-                resolved_child.relative_to(browse_root_resolved)
-            except (FileNotFoundError, OSError, ValueError):
-                continue
-
-            kind = "directory" if resolved_child.is_dir() else "file" if resolved_child.is_file() else ""
-            if not kind:
-                continue
-
-            entries.append(
-                {
-                    "name": child.name,
-                    "relative_path": _relative_path_text(browse_root_resolved, child),
-                    "kind": kind,
-                    "loadable": kind == "file" and child.suffix.lower() in LOADABLE_DATASET_SUFFIXES,
-                }
-            )
-
-        entries.sort(key=lambda item: (item["kind"] != "directory", str(item["name"]).lower()))
-        parent_path = None if current_dir == browse_root_resolved else _relative_path_text(browse_root_resolved, current_dir.parent)
-        return FileBrowserResponse(
-            root_label=str(browse_root_resolved),
-            current_path=_relative_path_text(browse_root_resolved, current_dir),
-            parent_path=parent_path,
-            entries=entries,
+        return _build_file_browser_response(
+            current_dir,
+            is_loadable=lambda child, kind: kind == "file" and _path_matches_suffixes(child, LOADABLE_DATASET_SUFFIXES),
         )
 
     @app.post(f"{api_base}/load-dataset", response_model=LoadDatasetResponse)
@@ -723,7 +1306,7 @@ def create_app(
         target_path = _resolve_browse_path(req.path)
         if not target_path.is_file():
             raise HTTPException(status_code=422, detail=f"Path is not a file: {req.path}")
-        if target_path.suffix.lower() not in LOADABLE_DATASET_SUFFIXES:
+        if not _path_matches_suffixes(target_path, LOADABLE_DATASET_SUFFIXES):
             raise HTTPException(status_code=422, detail="Only .pkl and .pickle files can be loaded.")
 
         try:
