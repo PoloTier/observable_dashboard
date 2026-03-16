@@ -196,9 +196,33 @@ For a local serial run:
 bash path/to/normal_modes_geometry_dir/electronic_workspaces/pyscf_tddft__auto__b3lyp__6-31g__n5/run_all.sh
 ```
 
-You can also distribute the per-sample job directories to a cluster or other
-machines. The only required contract is that each job directory ends with a
-`result.json`.
+For a Slurm array run, use the repository-level wrapper:
+
+```bash
+bash scripts/electronic_structure/submit_workspace_array.sh \
+  --workspace path/to/normal_modes_geometry_dir/electronic_workspaces/pyscf_tddft__auto__b3lyp__6-31g__n5 \
+  --batch-count 8 \
+  --cpus-per-task 8 \
+  --mem 16G \
+  --time 02:00:00 \
+  --job-name pyscf-demo
+```
+
+This submits:
+
+```bash
+sbatch --array=0-7 ...
+```
+
+`--array=0-7` means Slurm launches 8 separate tasks that all run the same
+Python batch runner. Each task gets a different `SLURM_ARRAY_TASK_ID`
+(`0, 1, ..., 7`), and `run_workspace_batch.py` uses that value to decide which
+contiguous slice of `sample_ids` it should process.
+
+The batch runner reads `prepare_manifest.json.sample_ids`, keeps that order,
+and writes results back to the existing per-sample directories under `jobs/`.
+If a sample already has `result.json` with `status: "ok"`, that sample is
+skipped by default so retries can resume incomplete work.
 
 The generated `run_pyscf_tddft.py` script reads:
 
@@ -238,6 +262,12 @@ Each successful `result.json` contains:
 
 Failed jobs should still write `result.json` with `status: "error"` plus an
 `error_message`.
+
+The Slurm wrapper is only a submission helper. The actual batch execution logic
+lives in:
+
+- `scripts/electronic_structure/run_workspace_batch.py`
+- `scripts/electronic_structure/submit_workspace_array.sh`
 
 ## Step 3: Assemble Workspace(s) Into Profile(s)
 

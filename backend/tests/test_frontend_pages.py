@@ -284,6 +284,8 @@ def test_distribution_compare_page_script_reads_injected_api_base() -> None:
     assert "state.endpoints.compareSpectrum" in text
     assert "buildSpectrumPayload" in text
     assert "renderSpectrumPlot" in text
+    assert "clearEmptyPlotPlaceholder" in text
+    assert "clearEmptyPlotPlaceholder(dom.spectrumPlot)" in text
     assert "buildDeleteUrl" in text
 
 

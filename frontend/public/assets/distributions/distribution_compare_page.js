@@ -505,6 +505,12 @@
     dom.spectrumPlot.appendChild(empty);
   }
 
+  function clearEmptyPlotPlaceholder(plotEl) {
+    if (!plotEl) return;
+    if (!plotEl.querySelector('.distribution-empty')) return;
+    plotEl.innerHTML = '';
+  }
+
   function formatTransitionPair(pair) {
     if (!Array.isArray(pair) || pair.length !== 2) return '';
     return `${pair[0]}->${pair[1]}`;
@@ -1826,6 +1832,7 @@
       clearPlot('No comparison data was returned for the active distributions.');
       return;
     }
+    clearEmptyPlotPlaceholder(dom.plot);
     const plotColors = getPlotColors();
     const requestedBins = Number.parseInt(String(dom.histogramBins?.value || ''), 10);
     const traces = result.entries.map((entry, index) => {
@@ -2007,6 +2014,7 @@
       clearSpectrumPlot('No absorption spectrum data was returned for the active distributions.');
       return;
     }
+    clearEmptyPlotPlaceholder(dom.spectrumPlot);
 
     const traces = [];
     const selectedPairList = getSelectedSpectrumPairs();

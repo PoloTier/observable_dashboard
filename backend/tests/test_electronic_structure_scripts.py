@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -20,6 +23,7 @@ from scripts.electronic_structure.assemble_distribution_bundle import (
 )
 from scripts.electronic_structure.common import load_geometry_bundle
 from scripts.electronic_structure.prepare_pyscf_jobs import prepare_workspace
+from scripts.electronic_structure.run_workspace_batch import main as run_workspace_batch_main
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -175,6 +179,33 @@ def _write_result_json(
         payload["traceback"] = "Traceback placeholder"
     result_path = workspace_dir / "jobs" / sample_id / "result.json"
     result_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
+
+
+def _install_fake_job_script(job_dir: Path, *, status: str | None, exit_code: int) -> None:
+    payload_text: str | None = None
+    if status is not None:
+        payload = {"status": str(status)}
+        if str(status).strip().lower() != "ok":
+            payload["error_message"] = "mock failure"
+        payload_text = json.dumps(payload, indent=2, sort_keys=True)
+
+    script_lines = [
+        "#!/usr/bin/env python3",
+        "from __future__ import annotations",
+        "",
+        "from pathlib import Path",
+        "",
+        "job_dir = Path(__file__).resolve().parent",
+        '(job_dir / "executed.txt").write_text("ran\\n", encoding="utf-8")',
+    ]
+    if payload_text is not None:
+        script_lines.append(
+            f'(job_dir / "result.json").write_text({payload_text!r} + "\\n", encoding="utf-8")'
+        )
+    script_lines.append(f"raise SystemExit({int(exit_code)})")
+    script_path = job_dir / "run_pyscf_tddft.py"
+    script_path.write_text("\n".join(script_lines) + "\n", encoding="utf-8")
+    script_path.chmod(0o755)
 
 
 def test_prepare_pyscf_jobs_creates_default_workspace_and_job_inputs(tmp_path: Path) -> None:
@@ -794,3 +825,191 @@ def test_assemble_distribution_workspaces_rejects_duplicate_profile_ids_in_batch
     assert all("Duplicate profile_id" in item.error for item in batch_result.failures)
     assert not (bundle_path / "electronics" / "duplicate_profile").exists()
     assert (bundle_path / "electronics" / "pyscf_tddft__auto__cam-b3lyp__3-21g__n4" / "manifest.json").is_file()
+
+
+def test_run_workspace_batch_uses_slurm_array_id_and_skips_existing_ok(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+    )
+
+    job_dirs = sorted((workspace_dir / "jobs").iterdir())
+    _install_fake_job_script(job_dirs[0], status="ok", exit_code=0)
+    _install_fake_job_script(job_dirs[1], status="ok", exit_code=0)
+    (job_dirs[0] / "result.json").write_text('{\n  "status": "ok"\n}\n', encoding="utf-8")
+
+    monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "0")
+    exit_code = run_workspace_batch_main(
+        [
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "1",
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "[skip] nm-sample-demo_sample_000000" in stdout
+    assert "[ok] nm-sample-demo_sample_000001" in stdout
+    assert not (job_dirs[0] / "executed.txt").exists()
+    assert (job_dirs[1] / "executed.txt").read_text(encoding="utf-8") == "ran\n"
+
+
+def test_run_workspace_batch_reruns_error_results_and_continues_after_failures(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+    )
+
+    job_dirs = sorted((workspace_dir / "jobs").iterdir())
+    _install_fake_job_script(job_dirs[0], status=None, exit_code=3)
+    _install_fake_job_script(job_dirs[1], status="ok", exit_code=0)
+    (job_dirs[0] / "result.json").write_text('{\n  "status": "error"\n}\n', encoding="utf-8")
+
+    exit_code = run_workspace_batch_main(
+        [
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "1",
+            "--batch-index",
+            "0",
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "[failed] nm-sample-demo_sample_000000 (exit=3)" in stdout
+    assert "[ok] nm-sample-demo_sample_000001" in stdout
+    assert (job_dirs[0] / "executed.txt").read_text(encoding="utf-8") == "ran\n"
+    assert (job_dirs[1] / "executed.txt").read_text(encoding="utf-8") == "ran\n"
+    assert json.loads((job_dirs[1] / "result.json").read_text(encoding="utf-8"))["status"] == "ok"
+
+
+def test_run_workspace_batch_allows_empty_batches(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+    )
+
+    job_dirs = sorted((workspace_dir / "jobs").iterdir())
+    _install_fake_job_script(job_dirs[0], status="ok", exit_code=0)
+    _install_fake_job_script(job_dirs[1], status="ok", exit_code=0)
+
+    exit_code = run_workspace_batch_main(
+        [
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "3",
+            "--batch-index",
+            "2",
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "samples=0" in stdout
+    assert not (job_dirs[0] / "executed.txt").exists()
+    assert not (job_dirs[1] / "executed.txt").exists()
+
+
+def test_submit_workspace_array_wrapper_builds_sbatch_command(tmp_path: Path) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+    )
+
+    fake_bin_dir = tmp_path / "fake_bin"
+    fake_bin_dir.mkdir(parents=True, exist_ok=True)
+    capture_path = tmp_path / "sbatch_args.txt"
+    fake_sbatch_path = fake_bin_dir / "sbatch"
+    fake_sbatch_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\n' "$@" > "$CAPTURE_PATH"
+            printf 'Submitted batch job 12345\n'
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_sbatch_path.chmod(0o755)
+
+    wrapper_path = REPO_ROOT / "scripts" / "electronic_structure" / "submit_workspace_array.sh"
+    env = dict(os.environ)
+    env["CAPTURE_PATH"] = str(capture_path)
+    env["PATH"] = f"{fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    completed = subprocess.run(  # noqa: S603
+        [
+            "bash",
+            str(wrapper_path),
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "3",
+            "--cpus-per-task",
+            "4",
+            "--mem",
+            "8G",
+            "--time",
+            "01:30:00",
+            "--job-name",
+            "pyscf-demo",
+            "--python-exe",
+            sys.executable,
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "Submitting Slurm array with 3 batch(es)" in completed.stdout
+
+    captured_args = capture_path.read_text(encoding="utf-8").splitlines()
+    wrap_index = captured_args.index("--wrap")
+    wrap_cmd = captured_args[wrap_index + 1]
+    assert "--array=0-2" in captured_args
+    assert "--cpus-per-task=4" in captured_args
+    assert "--mem=8G" in captured_args
+    assert "--time=01:30:00" in captured_args
+    assert "--job-name=pyscf-demo" in captured_args
+    assert str(REPO_ROOT / "scripts" / "electronic_structure" / "run_workspace_batch.py") in wrap_cmd
+    assert f"--workspace {workspace_dir.resolve()}" in wrap_cmd
+    assert "--batch-count 3" in wrap_cmd
