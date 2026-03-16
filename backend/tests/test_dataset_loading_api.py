@@ -87,6 +87,29 @@ def test_empty_store_bootstrap_marks_dataset_unloaded(tmp_path: Path) -> None:
     assert payload.defaults["ui"]["default_panel_count"] == 1
 
 
+def test_empty_store_bootstrap_uses_builtin_defaults_without_config(tmp_path: Path) -> None:
+    store = build_empty_dataset_store(None)
+    app = create_app(store=store, cache=SeriesLRUCache(max_entries=8), browse_root=tmp_path)
+    endpoint = _find_endpoint(app, "/api/bootstrap", "GET")
+
+    payload = endpoint()
+
+    assert payload.meta["dataset_loaded"] is False
+    assert payload.meta["source_pkl"] == ""
+    assert payload.traj_ids == []
+    assert payload.defaults["ui"]["default_panel_count"] == 4
+    assert len(payload.defaults["panels"]) == 4
+
+
+def test_empty_store_bootstrap_rejects_missing_explicit_config(tmp_path: Path) -> None:
+    missing_config_path = tmp_path / "missing.yaml"
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        build_empty_dataset_store(missing_config_path)
+
+    assert str(missing_config_path) in str(exc_info.value)
+
+
 def test_files_endpoint_lists_root_and_filters_hidden_and_outside_links(tmp_path: Path) -> None:
     config_path = tmp_path / "viz_config.yaml"
     config_path.write_text("ui:\n  default_panel_count: 1\n", encoding="utf-8")

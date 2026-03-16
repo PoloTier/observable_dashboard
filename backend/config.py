@@ -71,12 +71,22 @@ def normalize_panel(panel_cfg: Dict[str, Any], fallback: Dict[str, Any]) -> Dict
     }
 
 
-def load_config(config_path: Path) -> Dict[str, Any]:
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+def load_config(config_path: Path | None) -> Dict[str, Any]:
+    user_cfg: Dict[str, Any] = {}
+    if config_path is not None:
+        config_path = Path(config_path)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        user_cfg = yaml.safe_load(f) or {}
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw_cfg = yaml.safe_load(f)
+
+        if raw_cfg is None:
+            user_cfg = {}
+        elif isinstance(raw_cfg, dict):
+            user_cfg = raw_cfg
+        else:
+            raise ValueError("Config root must be a mapping/object.")
 
     ui_cfg_raw = user_cfg.get("ui", {}) if isinstance(user_cfg.get("ui"), dict) else {}
     default_panel_count = int(ui_cfg_raw.get("default_panel_count", 4))

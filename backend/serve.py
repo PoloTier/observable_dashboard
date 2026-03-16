@@ -13,7 +13,12 @@ def parse_args() -> argparse.Namespace:
         description="Run the Observable Dashboard API server (backend-compute mode)."
     )
     parser.add_argument("-i", "--input", default=None, help="Input aggregated pickle file")
-    parser.add_argument("-c", "--config", default="tools/viz_config.yaml", help="YAML config path")
+    parser.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="Optional YAML config path; when omitted, built-in defaults are used",
+    )
 
     parser.add_argument("--time-key", default="_.0.record.time", help="Time key")
     parser.add_argument("--coord-key", default="_.0.record.x", help="Coordinate key")
@@ -56,7 +61,7 @@ def main() -> None:
         print(f"Detail: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
-    config_path = Path(args.config)
+    config_path = Path(args.config).resolve() if args.config else None
     browse_root = Path.cwd().resolve()
 
     def _make_options(input_path: Path) -> DatasetLoadOptions:

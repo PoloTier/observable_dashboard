@@ -14,7 +14,7 @@ from backend.dataset import flatten_time_array, prepare_dataset, reshape_coords
 @dataclass(slots=True)
 class DatasetLoadOptions:
     input_path: Path | None
-    config_path: Path
+    config_path: Path | None
     time_key: str = "_.0.record.time"
     coord_key: str = "_.0.record.x"
     etot_key: str = "_.0.record.Etot"
@@ -1608,7 +1608,7 @@ def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
         raise ValueError("input_path is required to load a dataset store.")
 
     input_path = Path(options.input_path)
-    config_path = Path(options.config_path)
+    config_path = Path(options.config_path) if options.config_path is not None else None
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -1664,7 +1664,7 @@ def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
     )
 
 
-def _load_defaults(config_path: Path) -> dict[str, Any]:
+def _load_defaults(config_path: Path | None) -> dict[str, Any]:
     cfg = load_config(config_path)
     return {
         "panels": cfg["panels"],
@@ -1674,8 +1674,8 @@ def _load_defaults(config_path: Path) -> dict[str, Any]:
     }
 
 
-def build_empty_dataset_store(config_path: Path) -> DatasetStore:
-    config_path = Path(config_path)
+def build_empty_dataset_store(config_path: Path | None) -> DatasetStore:
+    config_path_obj = Path(config_path) if config_path is not None else Path.cwd()
     defaults = _load_defaults(config_path)
     meta = {
         "traj_ids": [],
@@ -1694,7 +1694,7 @@ def build_empty_dataset_store(config_path: Path) -> DatasetStore:
         "dataset_loaded": False,
     }
     return DatasetStore(
-        input_path=config_path,
+        input_path=config_path_obj,
         meta=meta,
         defaults=defaults,
         trajectories={},
