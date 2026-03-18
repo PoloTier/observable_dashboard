@@ -186,6 +186,9 @@
     currentTimes: [],
     currentModel: null,
     currentModelRenderMode: '',
+    auxiliaryModels: [],
+    frameLabelFormatter: null,
+    frameRenderCallback: null,
     atomIndexLabels: [],
     atomIndexLabelSignature: '',
     atomIndexLabelThemeKey: '',
@@ -832,6 +835,37 @@
     return Array.isArray(state.currentCoords) ? state.currentCoords.length : 0;
   }
 
+  function formatFrameLabel(frameIndex, frameCount) {
+    if (typeof state.frameLabelFormatter === 'function') {
+      try {
+        const customLabel = state.frameLabelFormatter(frameIndex, frameCount);
+        if (typeof customLabel === 'string' && customLabel.trim()) {
+          return customLabel;
+        }
+      } catch (error) {
+        console.error('ObservableMol3D frameLabelFormatter failed:', error);
+      }
+    }
+    return `Frame ${frameIndex + 1}/${frameCount}`;
+  }
+
+  function setFrameLabelFormatter(formatter) {
+    state.frameLabelFormatter = typeof formatter === 'function' ? formatter : null;
+  }
+
+  function notifyFrameRendered(frameIndex, frameCount) {
+    if (typeof state.frameRenderCallback !== 'function') return;
+    try {
+      state.frameRenderCallback(frameIndex, frameCount);
+    } catch (error) {
+      console.error('ObservableMol3D frameRenderCallback failed:', error);
+    }
+  }
+
+  function setFrameRenderCallback(callback) {
+    state.frameRenderCallback = typeof callback === 'function' ? callback : null;
+  }
+
   function getSupportedAtomRenderModes() {
     return ATOM_RENDER_MODES.slice();
   }
@@ -1147,6 +1181,10 @@
     setNacControlsEnabled,
     getCurrentAtomCount,
     getCurrentFrameCount,
+    formatFrameLabel,
+    setFrameLabelFormatter,
+    notifyFrameRendered,
+    setFrameRenderCallback,
     getSupportedAtomRenderModes,
     normalizeAtomRenderMode,
     parseAtomIndexRuleSpec,

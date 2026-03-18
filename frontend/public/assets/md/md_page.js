@@ -2,13 +2,17 @@
   const root = window.ObservableMol3D || (window.ObservableMol3D = {});
   const shared = root.shared;
   const io = root.io;
-  if (!shared || !io) return;
+  const viewer = root.viewer;
+  const measurement = root.measurement;
+  const transformers = root.ioTransformers;
+  if (!shared || !io || !viewer || !measurement || !transformers) return;
 
+  const sharedDom = shared.dom || {};
   const dom = {
     mdTab: document.getElementById('md-mode-tab-md'),
     pimdTab: document.getElementById('md-mode-tab-pimd'),
-    mdPanel: document.getElementById('md-panel-md'),
-    pimdPanel: document.getElementById('md-panel-pimd'),
+    mdUploadCard: document.getElementById('md-upload-card'),
+    pimdUploadCard: document.getElementById('pimd-upload-card'),
     uploadInput: document.getElementById('md-upload-input'),
     dropzone: document.getElementById('md-dropzone'),
     uploadFileName: document.getElementById('md-upload-file-name'),
@@ -17,14 +21,59 @@
     metaFrames: document.getElementById('md-meta-frames'),
     metaAtoms: document.getElementById('md-meta-atoms'),
     metaElements: document.getElementById('md-meta-elements'),
+    pimdInput: document.getElementById('pimd-upload-input'),
+    pimdDropzone: document.getElementById('pimd-dropzone'),
+    pimdUploadFileName: document.getElementById('pimd-upload-file-name'),
+    pimdMetaFile: document.getElementById('pimd-meta-file'),
+    pimdMetaFileSubvalue: document.getElementById('pimd-meta-file-subvalue'),
+    pimdMetaFrames: document.getElementById('pimd-meta-frames'),
+    pimdMetaBeads: document.getElementById('pimd-meta-beads'),
+    pimdMetaAtoms: document.getElementById('pimd-meta-atoms'),
+    pimdMetaElements: document.getElementById('pimd-meta-elements'),
+    pimdMetaEnergy: document.getElementById('pimd-meta-energy'),
+    pimdMetaTemperature: document.getElementById('pimd-meta-temperature'),
+    pimdDisplayModeSelect: document.getElementById('pimd-display-mode-select'),
+    pimdBeadSelect: document.getElementById('pimd-bead-select'),
     sourceInfo: document.getElementById('source-pkl'),
     workflowLink: document.getElementById('md-open-workflow-link'),
     apiViewerLink: document.getElementById('md-open-api-viewer-link'),
+    viewerControlsTitle: document.getElementById('viewer-controls-title'),
+    legacyExportControls: document.getElementById('md-legacy-export-controls'),
+    samplingExportPanel: document.getElementById('md-sampling-export-panel'),
+    samplingStartFrame: document.getElementById('md-sampling-start-frame'),
+    samplingEndFrame: document.getElementById('md-sampling-end-frame'),
+    samplingFrameStride: document.getElementById('md-sampling-frame-stride'),
+    samplingCharge: document.getElementById('md-sampling-charge'),
+    samplingMultiplicity: document.getElementById('md-sampling-multiplicity'),
+    samplingBeadFields: document.getElementById('md-sampling-bead-fields'),
+    samplingBeadStart: document.getElementById('md-sampling-bead-start'),
+    samplingBeadEnd: document.getElementById('md-sampling-bead-end'),
+    samplingBeadStride: document.getElementById('md-sampling-bead-stride'),
+    samplingSummary: document.getElementById('md-sampling-summary'),
+    exportGeometryBundleBtn: document.getElementById('md-export-geometry-bundle-btn'),
+    exportGeometryBundleStatus: document.getElementById('md-export-geometry-bundle-status'),
   };
 
   const bootstrap = shared.bootstrap && typeof shared.bootstrap === 'object' ? shared.bootstrap : {};
   const pages = bootstrap.pages && typeof bootstrap.pages === 'object' ? bootstrap.pages : {};
   const symbolToAtomicNumber = buildSymbolMap(shared.constants?.PERIODIC_SYMBOLS || []);
+  const atomicNumberToSymbol = Array.isArray(shared.constants?.PERIODIC_SYMBOLS)
+    ? shared.constants.PERIODIC_SYMBOLS
+    : [];
+
+  const localState = {
+    panelMode: 'md',
+    activeDatasetKind: 'md',
+    mdData: null,
+    mdSourceFile: null,
+    pimdData: null,
+    pimdSourceFile: null,
+    pimdDisplayMode: 'single',
+    pimdSelectedBead: 0,
+    pimdFsPath: '',
+    appearanceUnsubscribe: null,
+    samplingExportInFlight: false,
+  };
 
   if (dom.workflowLink && pages.workflow) {
     dom.workflowLink.href = String(pages.workflow);
@@ -43,43 +92,13 @@
     return map;
   }
 
-  function setMode(mode) {
-    const isMd = mode !== 'pimd';
-    if (dom.mdPanel) dom.mdPanel.hidden = !isMd;
-    if (dom.pimdPanel) dom.pimdPanel.hidden = isMd;
-    if (dom.mdTab) {
-      dom.mdTab.classList.toggle('is-active', isMd);
-      dom.mdTab.setAttribute('aria-selected', isMd ? 'true' : 'false');
-    }
-    if (dom.pimdTab) {
-      dom.pimdTab.classList.toggle('is-active', !isMd);
-      dom.pimdTab.setAttribute('aria-selected', !isMd ? 'true' : 'false');
-    }
-  }
-
-  function bindModeTabs() {
-    dom.mdTab?.addEventListener('click', () => setMode('md'));
-    dom.pimdTab?.addEventListener('click', () => setMode('pimd'));
-  }
-
-  function setUploadFileName(message) {
-    if (!dom.uploadFileName) return;
-    dom.uploadFileName.textContent = String(message || 'No file loaded.');
-  }
-
-  function setSourceInfo(fileName) {
-    if (!dom.sourceInfo) return;
-    const label = String(fileName || 'Local XYZ');
-    dom.sourceInfo.textContent = `Source: ${label}`;
-    dom.sourceInfo.title = label;
-  }
-
   function summarizeAtomNumbers(atomNumbers) {
     const counts = new Map();
-    const symbols = Array.isArray(shared.constants?.PERIODIC_SYMBOLS) ? shared.constants.PERIODIC_SYMBOLS : [];
     atomNumbers.forEach((value) => {
       const atomicNumber = Number.parseInt(String(value), 10);
-      const symbol = atomicNumber > 0 && atomicNumber < symbols.length ? String(symbols[atomicNumber] || 'X') : 'X';
+      const symbol = atomicNumber > 0 && atomicNumber < atomicNumberToSymbol.length
+        ? String(atomicNumberToSymbol[atomicNumber] || 'X')
+        : 'X';
       counts.set(symbol, (counts.get(symbol) || 0) + 1);
     });
     return Array.from(counts.entries())
@@ -88,7 +107,223 @@
       .join(', ');
   }
 
-  function updateMetadata(fileName, record) {
+  function setPanelMode(mode) {
+    const normalized = mode === 'pimd' ? 'pimd' : 'md';
+    localState.panelMode = normalized;
+    if (dom.mdUploadCard) dom.mdUploadCard.hidden = normalized !== 'md';
+    if (dom.pimdUploadCard) dom.pimdUploadCard.hidden = normalized !== 'pimd';
+    if (dom.mdTab) {
+      dom.mdTab.classList.toggle('is-active', normalized === 'md');
+      dom.mdTab.setAttribute('aria-selected', normalized === 'md' ? 'true' : 'false');
+    }
+    if (dom.pimdTab) {
+      dom.pimdTab.classList.toggle('is-active', normalized === 'pimd');
+      dom.pimdTab.setAttribute('aria-selected', normalized === 'pimd' ? 'true' : 'false');
+    }
+  }
+
+  function setSourceInfo(label) {
+    if (!dom.sourceInfo) return;
+    const text = String(label || 'Local file');
+    dom.sourceInfo.textContent = `Source: ${text}`;
+    dom.sourceInfo.title = text;
+  }
+
+  function updateViewerTitle() {
+    if (!dom.viewerControlsTitle) return;
+    dom.viewerControlsTitle.textContent = localState.activeDatasetKind === 'pimd'
+      ? 'PIMD Viewer Controls'
+      : 'MD Viewer Controls';
+  }
+
+  function setMdUploadFileName(message) {
+    if (dom.uploadFileName) dom.uploadFileName.textContent = String(message || 'No file loaded.');
+  }
+
+  function setPimdUploadFileName(message) {
+    if (dom.pimdUploadFileName) dom.pimdUploadFileName.textContent = String(message || 'No file loaded.');
+  }
+
+  function getApiBase() {
+    const apiBase = typeof shared.apiBase === 'string' ? shared.apiBase.trim() : '';
+    return (apiBase ? apiBase : '/api').replace(/\/$/, '') || '/api';
+  }
+
+  function triggerBlobDownload(fileName, blob) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = String(fileName || 'trajectory_geometry_bundle.tar.gz');
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
+  function getDownloadFilename(response, fallback) {
+    const header = String(response?.headers?.get('Content-Disposition') || '');
+    const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match && utf8Match[1]) {
+      try {
+        return decodeURIComponent(utf8Match[1]);
+      } catch (_) {
+        return utf8Match[1];
+      }
+    }
+    const match = header.match(/filename=\"([^\"]+)\"/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+    return String(fallback || 'trajectory_geometry_bundle.tar.gz');
+  }
+
+  function sanitizeFilenamePart(rawValue, fallback = 'trajectory') {
+    const text = String(rawValue || '').trim();
+    const sanitized = text.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._-]+|[._-]+$/g, '');
+    return sanitized || String(fallback || 'trajectory');
+  }
+
+  function defaultSamplingDownloadName() {
+    const file = localState.activeDatasetKind === 'pimd' ? localState.pimdSourceFile : localState.mdSourceFile;
+    const sourceBase = sanitizeFilenamePart(String(file?.name || 'trajectory').replace(/\.[^.]+$/, ''), 'trajectory');
+    return `trajectory_geometry_${sourceBase}.tar.gz`;
+  }
+
+  function setSamplingStatus(message, isError = false) {
+    if (!dom.exportGeometryBundleStatus) return;
+    dom.exportGeometryBundleStatus.textContent = String(message || '');
+    dom.exportGeometryBundleStatus.classList.toggle('error', !!isError);
+  }
+
+  function setSamplingSummary(message, isError = false) {
+    if (!dom.samplingSummary) return;
+    dom.samplingSummary.textContent = String(message || '');
+    dom.samplingSummary.classList.toggle('error', !!isError);
+  }
+
+  function getActiveSamplingFrameCount() {
+    if (localState.activeDatasetKind === 'pimd') {
+      return Number.parseInt(String(localState.pimdData?.nFrames), 10) || 0;
+    }
+    return Number.parseInt(String(localState.mdData?.n_frames), 10) || 0;
+  }
+
+  function getActiveSamplingBeadCount() {
+    if (localState.activeDatasetKind === 'pimd') {
+      return Number.parseInt(String(localState.pimdData?.nBeads), 10) || 0;
+    }
+    return 1;
+  }
+
+  function getActiveSamplingSourceFile() {
+    return localState.activeDatasetKind === 'pimd' ? localState.pimdSourceFile : localState.mdSourceFile;
+  }
+
+  function parseIntegerInput(inputEl, label, { min = null, defaultValue = null } = {}) {
+    const raw = String(inputEl?.value ?? '').trim();
+    if (!raw && defaultValue !== null) {
+      return Number(defaultValue);
+    }
+    if (!raw) {
+      throw new Error(`${label} is required.`);
+    }
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric) || !Number.isInteger(numeric)) {
+      throw new Error(`${label} must be an integer.`);
+    }
+    if (min !== null && numeric < min) {
+      throw new Error(`${label} must be >= ${min}.`);
+    }
+    return numeric;
+  }
+
+  function expandIndexSelection(start, end, stride) {
+    const values = [];
+    for (let index = start; index <= end; index += stride) {
+      values.push(index);
+    }
+    return values;
+  }
+
+  function parseSamplingSelection() {
+    const sourceFile = getActiveSamplingSourceFile();
+    if (!(sourceFile instanceof File)) {
+      throw new Error('Load a local trajectory before exporting a sampling bundle.');
+    }
+
+    const frameCount = getActiveSamplingFrameCount();
+    if (frameCount <= 0) {
+      throw new Error('The active trajectory has no frames to sample.');
+    }
+
+    const startFrame = parseIntegerInput(dom.samplingStartFrame, 'Start frame', { min: 0, defaultValue: 0 });
+    const endFrame = parseIntegerInput(dom.samplingEndFrame, 'End frame', {
+      min: 0,
+      defaultValue: frameCount - 1,
+    });
+    const frameStride = parseIntegerInput(dom.samplingFrameStride, 'Frame stride', { min: 1, defaultValue: 1 });
+    const charge = parseIntegerInput(dom.samplingCharge, 'Charge', { defaultValue: 0 });
+    const multiplicity = parseIntegerInput(dom.samplingMultiplicity, 'Multiplicity', { min: 1, defaultValue: 1 });
+
+    if (startFrame >= frameCount) {
+      throw new Error(`Start frame ${startFrame} is out of range. Valid frames: 0-${frameCount - 1}.`);
+    }
+    if (endFrame < startFrame || endFrame >= frameCount) {
+      throw new Error(`End frame ${endFrame} is out of range. Valid frames: ${startFrame}-${frameCount - 1}.`);
+    }
+
+    const frameIndices = expandIndexSelection(startFrame, endFrame, frameStride);
+    if (!frameIndices.length) {
+      throw new Error('Frame selection produced zero samples.');
+    }
+
+    const isPimd = localState.activeDatasetKind === 'pimd';
+    const beadCount = getActiveSamplingBeadCount();
+    let beadStart = null;
+    let beadEnd = null;
+    let beadStride = 1;
+    let beadIndices = [0];
+
+    if (isPimd) {
+      if (beadCount <= 0) {
+        throw new Error('The active PIMD trajectory has no beads to sample.');
+      }
+      beadStart = parseIntegerInput(dom.samplingBeadStart, 'Bead start', { min: 0, defaultValue: 0 });
+      beadEnd = parseIntegerInput(dom.samplingBeadEnd, 'Bead end', { min: 0, defaultValue: beadCount - 1 });
+      beadStride = parseIntegerInput(dom.samplingBeadStride, 'Bead stride', { min: 1, defaultValue: 1 });
+
+      if (beadStart >= beadCount) {
+        throw new Error(`Bead start ${beadStart} is out of range. Valid beads: 0-${beadCount - 1}.`);
+      }
+      if (beadEnd < beadStart || beadEnd >= beadCount) {
+        throw new Error(`Bead end ${beadEnd} is out of range. Valid beads: ${beadStart}-${beadCount - 1}.`);
+      }
+
+      beadIndices = expandIndexSelection(beadStart, beadEnd, beadStride);
+      if (!beadIndices.length) {
+        throw new Error('Bead selection produced zero samples.');
+      }
+    }
+
+    return {
+      sourceFile,
+      sourceKind: isPimd ? 'pimd_h5' : 'md_xyz',
+      startFrame,
+      endFrame,
+      frameStride,
+      frameIndices,
+      charge,
+      multiplicity,
+      beadStart,
+      beadEnd,
+      beadStride,
+      beadIndices,
+      sampleCount: frameIndices.length * beadIndices.length,
+    };
+  }
+
+  function setMdMetadata(fileName, record) {
     const frameCount = Array.isArray(record?.coords) ? record.coords.length : 0;
     const atomCount = Number.parseInt(String(record?.n_atoms), 10) || 0;
     if (dom.metaFile) dom.metaFile.textContent = fileName || 'none';
@@ -104,8 +339,41 @@
         ? summarizeAtomNumbers(Array.isArray(record?.atom_numbers) ? record.atom_numbers : [])
         : 'Element summary appears after parsing.';
     }
-    setSourceInfo(fileName || 'Local XYZ');
-    setUploadFileName(fileName || 'No file loaded.');
+  }
+
+  function setPimdMetadata(data) {
+    const hasData = !!data;
+    if (dom.pimdMetaFile) dom.pimdMetaFile.textContent = hasData ? data.fileName : 'none';
+    if (dom.pimdMetaFileSubvalue) {
+      dom.pimdMetaFileSubvalue.textContent = hasData
+        ? `Schema ${data.schemaName || 'observable_dashboard_pimd'} v${data.schemaVersion}, coordinates in ${data.coordUnit}.`
+        : 'Waiting for a standardized PIMD H5 import.';
+    }
+    if (dom.pimdMetaFrames) dom.pimdMetaFrames.textContent = hasData ? String(data.nFrames) : '0';
+    if (dom.pimdMetaBeads) {
+      dom.pimdMetaBeads.textContent = hasData
+        ? `${data.nBeads} beads, ${data.stepKindLabel}.`
+        : 'Bead count appears after parsing.';
+    }
+    if (dom.pimdMetaAtoms) dom.pimdMetaAtoms.textContent = hasData ? String(data.nAtoms) : '0';
+    if (dom.pimdMetaElements) {
+      dom.pimdMetaElements.textContent = hasData
+        ? summarizeAtomNumbers(data.atomNumbers)
+        : 'Element summary appears after parsing.';
+    }
+    if (dom.pimdMetaEnergy) {
+      if (!hasData || !data.potentialEnergy.length) {
+        dom.pimdMetaEnergy.textContent = 'n/a';
+      } else {
+        const meanPotential = data.potentialEnergy.reduce((sum, value) => sum + value, 0) / data.potentialEnergy.length;
+        dom.pimdMetaEnergy.textContent = `${meanPotential.toFixed(6)} Eh`;
+      }
+    }
+    if (dom.pimdMetaTemperature) {
+      dom.pimdMetaTemperature.textContent = hasData
+        ? `T = ${data.temperatureK.toFixed(2)} K, step range ${data.step[0]}-${data.step[data.step.length - 1]}.`
+        : 'Temperature appears after parsing.';
+    }
   }
 
   function splitLines(text) {
@@ -239,10 +507,702 @@
     };
   }
 
+  function ensureH5WasmReady() {
+    const lib = window.h5wasm;
+    if (!lib || !lib.ready) {
+      throw new Error('h5wasm failed to load. Please verify assets/vendor/h5wasm.js.');
+    }
+    return lib.ready;
+  }
+
+  function ensurePimdFilesystemDir(FS) {
+    try {
+      FS.mkdir('/observable_dashboard');
+    } catch (_) {
+      // directory may already exist
+    }
+  }
+
+  function deleteFsPath(FS, path) {
+    if (!FS || !path) return;
+    try {
+      FS.unlink(path);
+    } catch (_) {
+      // best effort cleanup
+    }
+  }
+
+  function attrValue(attrs, key) {
+    const attr = attrs && typeof attrs === 'object' ? attrs[key] : null;
+    if (!attr || typeof attr !== 'object' || !('value' in attr)) return null;
+    return attr.value;
+  }
+
+  function scalarString(value, fallback = '') {
+    if (typeof value === 'string') return value;
+    if (value instanceof Uint8Array) {
+      try {
+        return new TextDecoder().decode(value);
+      } catch (_) {
+        return fallback;
+      }
+    }
+    return value == null ? fallback : String(value);
+  }
+
+  function scalarNumber(value, fallback = Number.NaN) {
+    if (typeof value === 'bigint') return Number(value);
+    if (Array.isArray(value) && value.length) return scalarNumber(value[0], fallback);
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function typedToNumberArray(value) {
+    if (ArrayBuffer.isView(value)) {
+      return Array.from(value, (item) => (typeof item === 'bigint' ? Number(item) : Number(item)));
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => scalarNumber(item, NaN));
+    }
+    return [];
+  }
+
+  function readRequiredDataset(file, name) {
+    const dataset = file.get(name) || file.get(`/${name}`);
+    if (!dataset) {
+      throw new Error(`Missing required dataset '${name}'.`);
+    }
+    return dataset;
+  }
+
+  function buildPimdFrameXyz(atomNumbers, frameCoords, commentText) {
+    const lines = [String(atomNumbers.length), String(commentText || '')];
+    for (let atomIndex = 0; atomIndex < atomNumbers.length; atomIndex++) {
+      const atomicNumber = Number.parseInt(String(atomNumbers[atomIndex]), 10);
+      const symbol = atomicNumber > 0 && atomicNumber < atomicNumberToSymbol.length
+        ? String(atomicNumberToSymbol[atomicNumber] || 'C')
+        : 'C';
+      const xyz = Array.isArray(frameCoords?.[atomIndex]) ? frameCoords[atomIndex] : [0, 0, 0];
+      lines.push(
+        `${symbol} ${Number(xyz[0] || 0).toFixed(8)} ${Number(xyz[1] || 0).toFixed(8)} ${Number(xyz[2] || 0).toFixed(8)}`
+      );
+    }
+    return lines.join('\n');
+  }
+
+  async function parsePimdFile(file) {
+    const lib = window.h5wasm;
+    const { FS } = await ensureH5WasmReady();
+    ensurePimdFilesystemDir(FS);
+
+    if (localState.pimdFsPath) {
+      deleteFsPath(FS, localState.pimdFsPath);
+      localState.pimdFsPath = '';
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const safeName = (file.name || 'pimd.h5').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const virtualPath = `/observable_dashboard/${Date.now()}_${safeName}`;
+    FS.writeFile(virtualPath, new Uint8Array(arrayBuffer));
+    localState.pimdFsPath = virtualPath;
+
+    let handle = null;
+    try {
+      handle = new lib.File(virtualPath, 'r');
+      const attrs = handle.attrs || {};
+
+      const coordsDataset = readRequiredDataset(handle, 'coords');
+      const stepDataset = readRequiredDataset(handle, 'step');
+      const atomNumbersDataset = readRequiredDataset(handle, 'atom_numbers');
+      const potentialEnergyDataset = readRequiredDataset(handle, 'potential_energy');
+      const potentialEnergyBeadsDataset = readRequiredDataset(handle, 'potential_energy_beads');
+
+      const coordsShape = Array.isArray(coordsDataset.shape) ? coordsDataset.shape.map((value) => Number(value)) : [];
+      if (coordsShape.length !== 4) {
+        throw new Error(`Dataset 'coords' must have shape [n_frames, n_beads, n_atoms, 3], got ${JSON.stringify(coordsShape)}.`);
+      }
+      const [nFrames, nBeads, nAtoms, xyzSize] = coordsShape;
+      if (!(nFrames > 0 && nBeads > 0 && nAtoms > 0 && xyzSize === 3)) {
+        throw new Error(`Dataset 'coords' has invalid shape ${JSON.stringify(coordsShape)}.`);
+      }
+
+      const coordsFlat = coordsDataset.value;
+      const atomNumbers = typedToNumberArray(atomNumbersDataset.value).map((value) => Number.parseInt(String(value), 10));
+      const step = typedToNumberArray(stepDataset.value);
+      const potentialEnergy = typedToNumberArray(potentialEnergyDataset.value);
+      const potentialEnergyBeads = typedToNumberArray(potentialEnergyBeadsDataset.value);
+
+      if (!ArrayBuffer.isView(coordsFlat) || coordsFlat.length !== nFrames * nBeads * nAtoms * 3) {
+        throw new Error(`Dataset 'coords' has unexpected flattened size ${coordsFlat?.length || 0}.`);
+      }
+      if (atomNumbers.length !== nAtoms) {
+        throw new Error(`Dataset 'atom_numbers' length ${atomNumbers.length} does not match n_atoms=${nAtoms}.`);
+      }
+      if (step.length !== nFrames) {
+        throw new Error(`Dataset 'step' length ${step.length} does not match n_frames=${nFrames}.`);
+      }
+      if (potentialEnergy.length !== nFrames) {
+        throw new Error(`Dataset 'potential_energy' length ${potentialEnergy.length} does not match n_frames=${nFrames}.`);
+      }
+      if (potentialEnergyBeads.length !== nFrames * nBeads) {
+        throw new Error(
+          `Dataset 'potential_energy_beads' length ${potentialEnergyBeads.length} does not match n_frames*n_beads=${nFrames * nBeads}.`
+        );
+      }
+
+      const schemaName = scalarString(attrValue(attrs, 'schema_name'), '');
+      if (schemaName && schemaName !== 'observable_dashboard_pimd') {
+        throw new Error(`Unsupported PIMD schema '${schemaName}'.`);
+      }
+
+      const coordUnit = scalarString(attrValue(attrs, 'coord_unit'), 'bohr').trim().toLowerCase() || 'bohr';
+      if (coordUnit !== 'bohr' && coordUnit !== 'angstrom') {
+        throw new Error(`Unsupported coordinate unit '${coordUnit}'.`);
+      }
+
+      const energyUnit = scalarString(attrValue(attrs, 'energy_unit'), 'hartree').trim().toLowerCase() || 'hartree';
+      const stepKind = scalarString(attrValue(attrs, 'step_kind'), 'step').trim() || 'step';
+      const stepKindLabel = stepKind.replaceAll('_', ' ');
+      const temperatureK = scalarNumber(attrValue(attrs, 'temperature_K'), Number.NaN);
+      const schemaVersion = scalarNumber(attrValue(attrs, 'schema_version'), 1);
+
+      return {
+        fileName: String(file.name || 'pimd.h5'),
+        fileBaseName: String(file.name || 'pimd').replace(/\.[^.]+$/, '') || 'pimd',
+        schemaName: schemaName || 'observable_dashboard_pimd',
+        schemaVersion,
+        nFrames,
+        nBeads,
+        nAtoms,
+        atomNumbers,
+        step,
+        stepKind,
+        stepKindLabel,
+        temperatureK: Number.isFinite(temperatureK) ? temperatureK : Number.NaN,
+        coordUnit,
+        energyUnit,
+        coordsFlat,
+        potentialEnergy,
+        potentialEnergyBeads,
+        coordsScale: coordUnit === 'bohr' ? Number(shared.constants?.BOHR_TO_ANGSTROM || 0.529177210903) : 1,
+        beadTrajectoryCache: new Map(),
+      };
+    } finally {
+      if (handle && typeof handle.close === 'function') {
+        try {
+          handle.close();
+        } catch (_) {
+          // best effort close
+        }
+      }
+      deleteFsPath(FS, virtualPath);
+      if (localState.pimdFsPath === virtualPath) {
+        localState.pimdFsPath = '';
+      }
+    }
+  }
+
+  function buildPimdBeadTrajectory(data, beadIndex) {
+    if (!data || !Number.isInteger(beadIndex) || beadIndex < 0 || beadIndex >= data.nBeads) {
+      return [];
+    }
+    const cached = data.beadTrajectoryCache.get(beadIndex);
+    if (cached) return cached;
+
+    const frames = new Array(data.nFrames);
+    const frameStride = data.nBeads * data.nAtoms * 3;
+    const beadStride = data.nAtoms * 3;
+    for (let frameIndex = 0; frameIndex < data.nFrames; frameIndex++) {
+      const frame = new Array(data.nAtoms);
+      const beadOffset = frameIndex * frameStride + beadIndex * beadStride;
+      for (let atomIndex = 0; atomIndex < data.nAtoms; atomIndex++) {
+        const coordOffset = beadOffset + atomIndex * 3;
+        frame[atomIndex] = [
+          Number(data.coordsFlat[coordOffset]) * data.coordsScale,
+          Number(data.coordsFlat[coordOffset + 1]) * data.coordsScale,
+          Number(data.coordsFlat[coordOffset + 2]) * data.coordsScale,
+        ];
+      }
+      frames[frameIndex] = frame;
+    }
+
+    data.beadTrajectoryCache.set(beadIndex, frames);
+    return frames;
+  }
+
+  function buildPimdRecord(data, beadIndex) {
+    const coords = buildPimdBeadTrajectory(data, beadIndex);
+    return {
+      traj_id: `${data.fileBaseName}_bead_${beadIndex}`,
+      time: data.step.slice(),
+      coords,
+      n_atoms: data.nAtoms,
+      atom_numbers: data.atomNumbers.slice(),
+      n_frames: data.nFrames,
+      nac_available: false,
+      nac_state_count: 0,
+      nac_component_count: 0,
+      de_available: false,
+      de_state_count: 0,
+      de_component_count: 0,
+      de_global_norm_scope: '',
+      de_global_norm_p5: null,
+      de_global_norm_p90: null,
+      de_global_norm_p95: null,
+      de_global_norm_count: 0,
+      de_nac_available: false,
+      de_nac_state_count: 0,
+      de_nac_component_count: 0,
+    };
+  }
+
+  function buildPimdAuxiliarySpecs(data, focusBead) {
+    const specs = [];
+    for (let beadIndex = 0; beadIndex < data.nBeads; beadIndex++) {
+      if (beadIndex === focusBead) continue;
+      const coordsFrames = buildPimdBeadTrajectory(data, beadIndex);
+      specs.push({
+        coordsFrames,
+        firstFrameXyz: buildPimdFrameXyz(
+          data.atomNumbers,
+          coordsFrames[0],
+          `bead=${beadIndex} step=${data.step[0]}`
+        ),
+      });
+    }
+    return specs;
+  }
+
+  function getPlotThemePatch() {
+    const appearance = window.ObservableAppearance;
+    return appearance && typeof appearance.getPlotlyLayoutPatch === 'function'
+      ? appearance.getPlotlyLayoutPatch()
+      : {};
+  }
+
+  function getPlotColors() {
+    const appearance = window.ObservableAppearance;
+    return appearance && typeof appearance.getPlotColors === 'function'
+      ? appearance.getPlotColors()
+      : { cursorLineColor: '#d62728' };
+  }
+
+  function mergePlotLayout(baseLayout, patch) {
+    return {
+      ...baseLayout,
+      ...patch,
+      xaxis: { ...(baseLayout.xaxis || {}), ...(patch.xaxis || {}) },
+      yaxis: { ...(baseLayout.yaxis || {}), ...(patch.yaxis || {}) },
+      legend: { ...(baseLayout.legend || {}), ...(patch.legend || {}) },
+      hoverlabel: { ...(baseLayout.hoverlabel || {}), ...(patch.hoverlabel || {}) },
+    };
+  }
+
+  function clearBondPlot(message) {
+    if (!sharedDom.bondPlotEl) return;
+    if (typeof Plotly !== 'undefined') {
+      try {
+        Plotly.purge(sharedDom.bondPlotEl);
+      } catch (_) {
+        // ignore purge failures
+      }
+    }
+    sharedDom.bondPlotEl.innerHTML = `<div class="bond-plot-empty">${message}</div>`;
+  }
+
+  function bindPimdPlotClick() {
+    if (!sharedDom.bondPlotEl || sharedDom.bondPlotEl.dataset.pimdPlotClickBound === '1') return;
+    if (typeof sharedDom.bondPlotEl.on !== 'function') return;
+    sharedDom.bondPlotEl.on('plotly_click', (event) => {
+      if (localState.activeDatasetKind !== 'pimd') return;
+      const pointIndex = Number.parseInt(String(event?.points?.[0]?.pointIndex), 10);
+      if (!Number.isFinite(pointIndex)) return;
+      viewer.stopPlayback();
+      void viewer.renderFrame(pointIndex);
+    });
+    sharedDom.bondPlotEl.dataset.pimdPlotClickBound = '1';
+  }
+
+  function updatePimdPotentialCursor(frameIndex) {
+    if (localState.activeDatasetKind !== 'pimd' || !localState.pimdData || !sharedDom.bondPlotEl) return;
+    if (typeof Plotly === 'undefined') return;
+    const step = Number(localState.pimdData.step[frameIndex]);
+    if (!Number.isFinite(step)) return;
+    Plotly.relayout(sharedDom.bondPlotEl, {
+      'shapes[0].x0': step,
+      'shapes[0].x1': step,
+    });
+  }
+
+  function renderPimdPotentialPlot() {
+    if (localState.activeDatasetKind !== 'pimd' || !localState.pimdData) return;
+    if (!sharedDom.bondPlotEl) return;
+
+    sharedDom.bondPlotEl.dataset.plotOwner = 'pimd';
+    if (typeof Plotly === 'undefined') {
+      clearBondPlot('Plot unavailable (Plotly failed to load).');
+      return;
+    }
+
+    const data = localState.pimdData;
+    const currentFrame = Math.max(0, Math.min(shared.state.currentFrame || 0, data.nFrames - 1));
+    const cursorStep = Number(data.step[currentFrame]);
+    const plotColors = getPlotColors();
+    const baseLayout = {
+      margin: { l: 68, r: 20, t: 34, b: 48 },
+      xaxis: { title: 'Step' },
+      yaxis: { title: `Potential Energy (${data.energyUnit})` },
+      showlegend: false,
+      shapes: Number.isFinite(cursorStep) ? [{
+        type: 'line',
+        x0: cursorStep,
+        x1: cursorStep,
+        yref: 'paper',
+        y0: 0,
+        y1: 1,
+        line: { color: plotColors.cursorLineColor, dash: 'dash', width: 1.6 },
+      }] : [],
+    };
+    const layout = mergePlotLayout(baseLayout, getPlotThemePatch());
+    const trace = {
+      x: data.step,
+      y: data.potentialEnergy,
+      type: 'scatter',
+      mode: 'lines',
+      line: { color: '#1f77b4', width: 2 },
+      hovertemplate: `step=%{x}<br>Ep=%{y:.6f} ${data.energyUnit}<extra></extra>`,
+      name: 'Potential Energy',
+    };
+
+    Plotly.react(sharedDom.bondPlotEl, [trace], layout, {
+      responsive: true,
+      displaylogo: false,
+      toImageButtonOptions: {
+        format: 'png',
+        scale: Number(shared.constants?.PLOT_EXPORT_SCALE || (300 / 96)),
+      },
+    });
+    bindPimdPlotClick();
+  }
+
+  function syncSamplingExportUi() {
+    const isPimd = localState.activeDatasetKind === 'pimd';
+    const sourceFile = getActiveSamplingSourceFile();
+    const hasSource = sourceFile instanceof File;
+    const frameCount = getActiveSamplingFrameCount();
+    const beadCount = getActiveSamplingBeadCount();
+    const controlsDisabled = !hasSource || frameCount <= 0 || localState.samplingExportInFlight;
+
+    if (dom.legacyExportControls) {
+      dom.legacyExportControls.hidden = isPimd;
+    }
+    if (dom.samplingBeadFields) {
+      dom.samplingBeadFields.hidden = !isPimd;
+    }
+
+    if (dom.samplingStartFrame) {
+      dom.samplingStartFrame.max = String(Math.max(frameCount - 1, 0));
+      dom.samplingStartFrame.disabled = controlsDisabled;
+    }
+    if (dom.samplingEndFrame) {
+      dom.samplingEndFrame.max = String(Math.max(frameCount - 1, 0));
+      dom.samplingEndFrame.disabled = controlsDisabled;
+    }
+    if (dom.samplingFrameStride) dom.samplingFrameStride.disabled = controlsDisabled;
+    if (dom.samplingCharge) dom.samplingCharge.disabled = controlsDisabled;
+    if (dom.samplingMultiplicity) dom.samplingMultiplicity.disabled = controlsDisabled;
+
+    if (dom.samplingBeadStart) {
+      dom.samplingBeadStart.max = String(Math.max(beadCount - 1, 0));
+      dom.samplingBeadStart.disabled = controlsDisabled || !isPimd;
+    }
+    if (dom.samplingBeadEnd) {
+      dom.samplingBeadEnd.max = String(Math.max(beadCount - 1, 0));
+      dom.samplingBeadEnd.disabled = controlsDisabled || !isPimd;
+    }
+    if (dom.samplingBeadStride) {
+      dom.samplingBeadStride.disabled = controlsDisabled || !isPimd;
+    }
+
+    if (!hasSource || frameCount <= 0) {
+      if (dom.exportGeometryBundleBtn) dom.exportGeometryBundleBtn.disabled = true;
+      setSamplingSummary('Load a local trajectory to prepare sampling export.');
+      return;
+    }
+
+    try {
+      const selection = parseSamplingSelection();
+      const frameSummary = `frames ${selection.startFrame}-${selection.endFrame} every ${selection.frameStride}`;
+      if (isPimd) {
+        const beadSummary = `beads ${selection.beadStart}-${selection.beadEnd} every ${selection.beadStride}`;
+        setSamplingSummary(
+          `Sampling ${selection.sampleCount} geometries from ${sourceFile.name}: ${selection.frameIndices.length} frame(s) × ${selection.beadIndices.length} bead(s), ${frameSummary}, ${beadSummary}.`
+        );
+      } else {
+        setSamplingSummary(
+          `Sampling ${selection.sampleCount} geometries from ${sourceFile.name}: ${selection.frameIndices.length} frame(s), ${frameSummary}.`
+        );
+      }
+      if (dom.exportGeometryBundleBtn) {
+        dom.exportGeometryBundleBtn.disabled = localState.samplingExportInFlight || selection.sampleCount <= 0;
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSamplingSummary(detail, true);
+      if (dom.exportGeometryBundleBtn) dom.exportGeometryBundleBtn.disabled = true;
+    }
+  }
+
+  function resetSamplingControlsForActiveDataset() {
+    const frameCount = getActiveSamplingFrameCount();
+    const beadCount = getActiveSamplingBeadCount();
+
+    if (dom.samplingStartFrame) dom.samplingStartFrame.value = '0';
+    if (dom.samplingEndFrame) dom.samplingEndFrame.value = String(Math.max(frameCount - 1, 0));
+    if (dom.samplingFrameStride) dom.samplingFrameStride.value = '1';
+    if (dom.samplingCharge) dom.samplingCharge.value = '0';
+    if (dom.samplingMultiplicity) dom.samplingMultiplicity.value = '1';
+    if (dom.samplingBeadStart) dom.samplingBeadStart.value = '0';
+    if (dom.samplingBeadEnd) dom.samplingBeadEnd.value = String(Math.max(beadCount - 1, 0));
+    if (dom.samplingBeadStride) dom.samplingBeadStride.value = '1';
+
+    setSamplingStatus('');
+    syncSamplingExportUi();
+  }
+
+  async function readErrorResponseDetail(response) {
+    try {
+      const payload = await response.json();
+      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+        return payload.detail;
+      }
+      if (payload?.detail != null) {
+        return JSON.stringify(payload.detail);
+      }
+    } catch (_) {
+      // ignore JSON parsing errors and fall back to text
+    }
+
+    try {
+      const text = await response.text();
+      if (text.trim()) return text.trim();
+    } catch (_) {
+      // ignore body read failures
+    }
+    return `Request failed with status ${response.status}.`;
+  }
+
+  async function exportGeometryBundle() {
+    if (localState.samplingExportInFlight) return;
+
+    let selection = null;
+    try {
+      selection = parseSamplingSelection();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSamplingStatus(detail, true);
+      syncSamplingExportUi();
+      return;
+    }
+
+    const params = new URLSearchParams({
+      source_kind: selection.sourceKind,
+      source_name: selection.sourceFile.name || 'trajectory',
+      start_frame: String(selection.startFrame),
+      end_frame: String(selection.endFrame),
+      frame_stride: String(selection.frameStride),
+      charge: String(selection.charge),
+      multiplicity: String(selection.multiplicity),
+    });
+    if (selection.sourceKind === 'pimd_h5') {
+      params.set('bead_start', String(selection.beadStart));
+      params.set('bead_end', String(selection.beadEnd));
+      params.set('bead_stride', String(selection.beadStride));
+    }
+
+    localState.samplingExportInFlight = true;
+    setSamplingStatus(`Exporting ${selection.sampleCount} sampled geometry frame(s)...`);
+    syncSamplingExportUi();
+
+    try {
+      const response = await fetch(`${getApiBase()}/md/export-geometry-bundle?${params.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': selection.sourceFile.type || 'application/octet-stream',
+        },
+        body: selection.sourceFile,
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorResponseDetail(response));
+      }
+
+      const blob = await response.blob();
+      const fileName = getDownloadFilename(response, defaultSamplingDownloadName());
+      triggerBlobDownload(fileName, blob);
+      setSamplingStatus(`Downloaded ${fileName}.`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSamplingStatus(`Geometry bundle export failed: ${detail}`, true);
+    } finally {
+      localState.samplingExportInFlight = false;
+      syncSamplingExportUi();
+    }
+  }
+
+  function configureViewerUiForActiveDataset() {
+    const isPimd = localState.activeDatasetKind === 'pimd';
+    updateViewerTitle();
+
+    if (sharedDom.bondListEl) {
+      sharedDom.bondListEl.classList.toggle('is-visually-hidden', isPimd);
+    }
+    if (sharedDom.bondColorSettingsBtn) {
+      sharedDom.bondColorSettingsBtn.classList.toggle('is-visually-hidden', isPimd);
+    }
+    if (sharedDom.bondColorSettingsPanelEl) {
+      sharedDom.bondColorSettingsPanelEl.classList.toggle('is-visually-hidden', isPimd);
+    }
+    if (sharedDom.controlsTabMeasureBtn) {
+      sharedDom.controlsTabMeasureBtn.classList.toggle('is-visually-hidden', isPimd);
+    }
+    if (sharedDom.controlsTabExportBtn) {
+      sharedDom.controlsTabExportBtn.classList.remove('is-visually-hidden');
+    }
+    if (sharedDom.measureControlsGroup) {
+      sharedDom.measureControlsGroup.classList.toggle('is-visually-hidden', isPimd);
+    }
+    if (sharedDom.gifRangeControlsGroup) {
+      sharedDom.gifRangeControlsGroup.classList.remove('is-visually-hidden');
+    }
+
+    if (isPimd) {
+      shared.setColorSettingsOpen(false);
+      shared.setFrameLabelFormatter((frameIndex, frameCount) => {
+        const step = localState.pimdData && Array.isArray(localState.pimdData.step)
+          ? localState.pimdData.step[frameIndex]
+          : null;
+        return Number.isFinite(Number(step))
+          ? `Step ${step} | Frame ${frameIndex + 1}/${frameCount}`
+          : `Frame ${frameIndex + 1}/${frameCount}`;
+      });
+      shared.setFrameRenderCallback((frameIndex) => updatePimdPotentialCursor(frameIndex));
+      if (shared.getControlsGroupOpen('measure')) {
+        shared.setControlsGroupOpen('playback', true);
+      }
+      if (sharedDom.showAtomIndexCheckbox) {
+        sharedDom.showAtomIndexCheckbox.checked = false;
+        sharedDom.showAtomIndexCheckbox.disabled = true;
+      }
+      if (sharedDom.dynamicBondsCheckbox) {
+        sharedDom.dynamicBondsCheckbox.checked = false;
+        sharedDom.dynamicBondsCheckbox.disabled = true;
+      }
+      viewer.setDynamicBondsEnabled(false);
+      shared.setDownloadButtonsEnabled(false);
+      renderPimdPotentialPlot();
+      syncSamplingExportUi();
+      return;
+    }
+
+    shared.setFrameLabelFormatter(null);
+    shared.setFrameRenderCallback(null);
+    if (sharedDom.showAtomIndexCheckbox) {
+      sharedDom.showAtomIndexCheckbox.disabled = false;
+    }
+    if (sharedDom.dynamicBondsCheckbox) {
+      sharedDom.dynamicBondsCheckbox.disabled = false;
+    }
+    if (sharedDom.bondPlotEl) {
+      sharedDom.bondPlotEl.dataset.plotOwner = 'measurement';
+    }
+    if (typeof measurement.renderMeasurementPlot === 'function') {
+      measurement.renderMeasurementPlot();
+    }
+    syncSamplingExportUi();
+  }
+
+  function setActiveDatasetKind(kind) {
+    localState.activeDatasetKind = kind === 'pimd' ? 'pimd' : 'md';
+    configureViewerUiForActiveDataset();
+  }
+
+  function populatePimdBeadSelect(nBeads, selectedBead) {
+    if (!dom.pimdBeadSelect) return;
+    dom.pimdBeadSelect.innerHTML = '';
+    for (let beadIndex = 0; beadIndex < nBeads; beadIndex++) {
+      const option = document.createElement('option');
+      option.value = String(beadIndex);
+      option.textContent = `Bead ${beadIndex}`;
+      dom.pimdBeadSelect.appendChild(option);
+    }
+    dom.pimdBeadSelect.value = String(selectedBead);
+    dom.pimdBeadSelect.disabled = localState.pimdDisplayMode !== 'single';
+  }
+
+  async function applyCurrentPimdView({ refitView = true } = {}) {
+    if (!localState.pimdData) return false;
+    const data = localState.pimdData;
+    const beadIndex = Math.max(0, Math.min(localState.pimdSelectedBead, data.nBeads - 1));
+    const record = buildPimdRecord(data, beadIndex);
+
+    if (typeof measurement.clearMeasurementState === 'function') {
+      measurement.clearMeasurementState();
+    }
+
+    await io.loadTrajectoryRecord(record.traj_id, record, {
+      loadingMessage: `Preparing PIMD viewer for ${data.fileName}...`,
+      loadedMessage: `Loaded PIMD ${data.fileName} (${data.nFrames} frames, ${data.nBeads} beads).`,
+    });
+
+    viewer.clearAuxiliaryModels();
+    if (localState.pimdDisplayMode === 'all') {
+      viewer.setAuxiliaryTrajectories(buildPimdAuxiliarySpecs(data, beadIndex));
+      await viewer.renderFrame(shared.state.currentFrame || 0, refitView);
+    }
+
+    shared.setDownloadButtonsEnabled(false);
+    setSourceInfo(data.fileName);
+    setActiveDatasetKind('pimd');
+    return true;
+  }
+
+  async function importPimdFile(file) {
+    if (!(file instanceof File)) return;
+    setPanelMode('pimd');
+    setPimdUploadFileName(`Reading ${file.name}...`);
+    shared.setStatus(`Reading local PIMD H5 file ${file.name}...`);
+
+    let data = null;
+    try {
+      data = await parsePimdFile(file);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      shared.setStatus(`Failed to parse ${file.name}: ${detail}`, true);
+      setPimdUploadFileName(file.name);
+      setPimdMetadata(null);
+      return;
+    }
+
+    localState.mdData = null;
+    localState.mdSourceFile = null;
+    localState.pimdData = data;
+    localState.pimdSourceFile = file;
+    localState.pimdSelectedBead = 0;
+    localState.pimdDisplayMode = 'single';
+    setMdMetadata('', null);
+    setMdUploadFileName('No file loaded.');
+    if (dom.pimdDisplayModeSelect) dom.pimdDisplayModeSelect.value = 'single';
+    populatePimdBeadSelect(data.nBeads, 0);
+    setPimdMetadata(data);
+    setPimdUploadFileName(file.name);
+    await applyCurrentPimdView({ refitView: true });
+    resetSamplingControlsForActiveDataset();
+  }
+
   async function importXyzFile(file) {
     if (!(file instanceof File)) return;
-    setMode('md');
-    setUploadFileName(`Reading ${file.name}...`);
+    setPanelMode('md');
+    setMdUploadFileName(`Reading ${file.name}...`);
     shared.setStatus(`Reading local XYZ file ${file.name}...`);
 
     let text = '';
@@ -251,7 +1211,7 @@
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       shared.setStatus(`Failed to read ${file.name}: ${detail}`, true);
-      setUploadFileName(file.name);
+      setMdUploadFileName(file.name);
       return;
     }
 
@@ -261,51 +1221,153 @@
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       shared.setStatus(`Failed to parse ${file.name}: ${detail}`, true);
-      updateMetadata(file.name, null);
+      setMdMetadata(file.name, null);
       return;
     }
 
-    updateMetadata(file.name, record);
+    localState.mdData = record;
+    localState.mdSourceFile = file;
+    localState.pimdData = null;
+    localState.pimdSourceFile = null;
+    viewer.clearAuxiliaryModels();
+    if (typeof measurement.clearMeasurementState === 'function') {
+      measurement.clearMeasurementState();
+    }
+    setPimdMetadata(null);
+    setPimdUploadFileName('No file loaded.');
+    setMdMetadata(file.name, record);
     await io.loadTrajectoryRecord(file.name.replace(/\.[^.]+$/, '') || 'local_xyz', record, {
       loadingMessage: `Preparing viewer for ${file.name}...`,
       loadedMessage: `Loaded local XYZ ${file.name} (${record.n_frames} frames).`,
     });
+    setSourceInfo(file.name);
+    setActiveDatasetKind('md');
+    setMdUploadFileName(file.name);
+    resetSamplingControlsForActiveDataset();
+  }
+
+  function bindDropzone(dropzoneEl, inputEl, acceptFile, onFile) {
+    if (!dropzoneEl) return;
+
+    ['dragenter', 'dragover'].forEach((eventName) => {
+      dropzoneEl.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzoneEl.classList.add('is-dragover');
+      });
+    });
+
+    ['dragleave', 'dragend', 'drop'].forEach((eventName) => {
+      dropzoneEl.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzoneEl.classList.remove('is-dragover');
+      });
+    });
+
+    dropzoneEl.addEventListener('drop', async (event) => {
+      const files = event.dataTransfer && event.dataTransfer.files ? Array.from(event.dataTransfer.files) : [];
+      const file = files.find((item) => acceptFile(item)) || files[0] || null;
+      await onFile(file);
+      if (inputEl) inputEl.value = '';
+    });
+  }
+
+  function bindModeTabs() {
+    dom.mdTab?.addEventListener('click', () => setPanelMode('md'));
+    dom.pimdTab?.addEventListener('click', () => setPanelMode('pimd'));
   }
 
   function bindUploadControls() {
     dom.uploadInput?.addEventListener('change', async () => {
       const file = dom.uploadInput && dom.uploadInput.files ? dom.uploadInput.files[0] : null;
       await importXyzFile(file);
-      if (dom.uploadInput) {
-        dom.uploadInput.value = '';
+      if (dom.uploadInput) dom.uploadInput.value = '';
+    });
+
+    dom.pimdInput?.addEventListener('change', async () => {
+      const file = dom.pimdInput && dom.pimdInput.files ? dom.pimdInput.files[0] : null;
+      await importPimdFile(file);
+      if (dom.pimdInput) dom.pimdInput.value = '';
+    });
+
+    bindDropzone(
+      dom.dropzone,
+      dom.uploadInput,
+      (file) => file instanceof File && /\.xyz$/i.test(file.name),
+      importXyzFile,
+    );
+
+    bindDropzone(
+      dom.pimdDropzone,
+      dom.pimdInput,
+      (file) => file instanceof File && /\.(?:h5|hdf5)$/i.test(file.name),
+      importPimdFile,
+    );
+  }
+
+  function bindPimdControls() {
+    dom.pimdDisplayModeSelect?.addEventListener('change', async () => {
+      localState.pimdDisplayMode = dom.pimdDisplayModeSelect?.value === 'all' ? 'all' : 'single';
+      if (dom.pimdBeadSelect) {
+        dom.pimdBeadSelect.disabled = localState.pimdDisplayMode !== 'single';
       }
+      if (!localState.pimdData) return;
+      await applyCurrentPimdView({ refitView: false });
     });
 
-    if (!dom.dropzone) return;
-
-    ['dragenter', 'dragover'].forEach((eventName) => {
-      dom.dropzone.addEventListener(eventName, (event) => {
-        event.preventDefault();
-        dom.dropzone.classList.add('is-dragover');
-      });
-    });
-
-    ['dragleave', 'dragend', 'drop'].forEach((eventName) => {
-      dom.dropzone.addEventListener(eventName, (event) => {
-        event.preventDefault();
-        dom.dropzone.classList.remove('is-dragover');
-      });
-    });
-
-    dom.dropzone.addEventListener('drop', async (event) => {
-      const files = event.dataTransfer && event.dataTransfer.files ? Array.from(event.dataTransfer.files) : [];
-      const file = files.find((item) => /\.xyz$/i.test(item.name)) || files[0] || null;
-      await importXyzFile(file);
+    dom.pimdBeadSelect?.addEventListener('change', async () => {
+      const beadIndex = Number.parseInt(String(dom.pimdBeadSelect?.value || 0), 10);
+      localState.pimdSelectedBead = Number.isFinite(beadIndex) ? beadIndex : 0;
+      if (!localState.pimdData || localState.pimdDisplayMode !== 'single') return;
+      await applyCurrentPimdView({ refitView: false });
     });
   }
 
-  bindModeTabs();
-  bindUploadControls();
-  updateMetadata('', null);
-  setMode('md');
+  function bindSamplingExportControls() {
+    [
+      dom.samplingStartFrame,
+      dom.samplingEndFrame,
+      dom.samplingFrameStride,
+      dom.samplingCharge,
+      dom.samplingMultiplicity,
+      dom.samplingBeadStart,
+      dom.samplingBeadEnd,
+      dom.samplingBeadStride,
+    ].forEach((inputEl) => {
+      inputEl?.addEventListener('input', () => syncSamplingExportUi());
+      inputEl?.addEventListener('change', () => syncSamplingExportUi());
+    });
+
+    dom.exportGeometryBundleBtn?.addEventListener('click', () => {
+      void exportGeometryBundle();
+    });
+  }
+
+  function bindAppearanceUpdates() {
+    const appearance = window.ObservableAppearance;
+    if (!appearance || typeof appearance.subscribe !== 'function') return;
+    localState.appearanceUnsubscribe = appearance.subscribe(() => {
+      if (localState.activeDatasetKind === 'pimd') {
+        renderPimdPotentialPlot();
+      }
+    });
+  }
+
+  function init() {
+    bindModeTabs();
+    bindUploadControls();
+    bindPimdControls();
+    bindSamplingExportControls();
+    bindAppearanceUpdates();
+
+    setPanelMode('md');
+    setMdMetadata('', null);
+    setPimdMetadata(null);
+    setSourceInfo('Local XYZ');
+    setActiveDatasetKind('md');
+    setMdUploadFileName('No file loaded.');
+    setPimdUploadFileName('No file loaded.');
+    syncSamplingExportUi();
+  }
+
+  init();
 })();

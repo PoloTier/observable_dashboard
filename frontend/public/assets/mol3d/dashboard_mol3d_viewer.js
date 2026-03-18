@@ -275,7 +275,7 @@
     if (dom.frameSlider) dom.frameSlider.value = String(frameIndex);
     if (dom.framePrevBtn) dom.framePrevBtn.disabled = frameCount <= 1 || frameIndex <= 0;
     if (dom.frameNextBtn) dom.frameNextBtn.disabled = frameCount <= 1 || frameIndex >= frameCount - 1;
-    if (dom.frameLabel) dom.frameLabel.textContent = `Frame ${frameIndex + 1}/${frameCount}`;
+    if (dom.frameLabel) dom.frameLabel.textContent = shared.formatFrameLabel(frameIndex, frameCount);
   }
 
   function getAtomIndexLabelText(atomIndex) {
@@ -461,6 +461,7 @@
     state.viewer.removeAllModels();
     state.currentModel = null;
     state.currentModelRenderMode = '';
+    state.auxiliaryModels = [];
   }
 
   function clearOverlayScene() {
@@ -560,6 +561,35 @@
       atom_numbers: Array.isArray(state.atomNumbers) ? state.atomNumbers : [],
       n_atoms: atomCount,
     };
+  }
+
+  function clearAuxiliaryModels() {
+    state.auxiliaryModels = [];
+  }
+
+  function setAuxiliaryTrajectories(trajectorySpecs) {
+    clearAuxiliaryModels();
+    if (!state.viewer || !Array.isArray(trajectorySpecs) || !trajectorySpecs.length) {
+      return 0;
+    }
+
+    const createdModels = [];
+    for (const spec of trajectorySpecs) {
+      const firstFrameXyz = typeof spec?.firstFrameXyz === 'string' ? spec.firstFrameXyz : '';
+      const coordsFrames = Array.isArray(spec?.coordsFrames) ? spec.coordsFrames : [];
+      if (!firstFrameXyz || !coordsFrames.length) continue;
+
+      const model = state.viewer.addModel(firstFrameXyz, 'xyz');
+      if (!model) continue;
+      if (typeof model.setCoordinates === 'function') {
+        model.setCoordinates(coordsFrames, 'array');
+      }
+      createdModels.push(model);
+    }
+
+    state.auxiliaryModels = createdModels;
+    refreshModelStyle();
+    return createdModels.length;
   }
 
   function buildFrameXyz(frameIndex) {
@@ -732,6 +762,12 @@
       if (typeof state.currentModel?.setFrame === 'function') {
         await state.currentModel.setFrame(idx, state.viewer);
       }
+      const auxiliaryModels = Array.isArray(state.auxiliaryModels) ? state.auxiliaryModels : [];
+      for (const model of auxiliaryModels) {
+        if (typeof model?.setFrame === 'function') {
+          await model.setFrame(idx, state.viewer);
+        }
+      }
     }
 
     if (renderSeq !== frameRenderSeq) return false;
@@ -752,6 +788,8 @@
     if (measurement) {
       measurement.updateMeasurementPlotFrameCursor();
     }
+
+    shared.notifyFrameRendered(idx, frameCount);
 
     return true;
   }
@@ -794,6 +832,8 @@
     syncAtomIndexLabelsForFrame,
     bindAtomClickHandler,
     clearScene,
+    clearAuxiliaryModels,
+    setAuxiliaryTrajectories,
     clearOverlayScene,
     applyAppearanceTheme,
     refreshModelStyle,

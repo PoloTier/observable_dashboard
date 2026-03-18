@@ -254,7 +254,7 @@
         w: 380,
         h: 100,
         title: ['md.html'],
-        subtitle: ['multi-frame XYZ import', 'MD now, PIMD placeholder'],
+        subtitle: ['multi-frame XYZ import', 'local PIMD H5 import'],
         href: config.pages.md || '/md.html',
         fill: '#f7fafc',
         stroke: '#4b5563',

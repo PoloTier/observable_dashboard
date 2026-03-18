@@ -9,7 +9,7 @@ from threading import Lock
 import time
 from typing import Any, Callable
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -100,6 +100,7 @@ from backend.server.models import (
     SeriesRequest,
     SeriesResponse,
 )
+from backend.server.trajectory_sampling import build_trajectory_geometry_export_bundle
 
 logger = logging.getLogger(__name__)
 MAX_INSPECT_KEYS = 200
@@ -880,7 +881,7 @@ def create_app(
                         "md": "/md.html",
                     },
                     "features": {
-                        "pimd_placeholder": True,
+                        "pimd_placeholder": False,
                     },
                 }
             )
@@ -907,7 +908,8 @@ def create_app(
             config_json = _json_script_text(
                 {
                     "data_mode": "local_xyz",
-                    "pimd_mode": "placeholder",
+                    "pimd_mode": "local_h5",
+                    "api_base": api_base,
                     "pages": {
                         "workflow": "/workflow.html",
                         "molecule3d": "/molecule3d.html",
@@ -1158,6 +1160,47 @@ def create_app(
             status="ok",
             saved_relative_path=_relative_path_text(browse_root_resolved, target_path),
             saved_absolute_path=str(target_path),
+        )
+
+    @app.post(f"{api_base}/md/export-geometry-bundle")
+    async def export_md_geometry_bundle(
+        source_kind: str = Query(..., min_length=1),
+        source_name: str = Query(..., min_length=1),
+        start_frame: int = Query(..., ge=0),
+        end_frame: int | None = Query(default=None, ge=0),
+        frame_stride: int = Query(default=1, ge=1),
+        charge: int = Query(default=0),
+        multiplicity: int = Query(default=1, ge=1),
+        bead_start: int | None = Query(default=None, ge=0),
+        bead_end: int | None = Query(default=None, ge=0),
+        bead_stride: int = Query(default=1, ge=1),
+        source_bytes: bytes = Body(...),
+    ) -> Response:
+        try:
+            file_name, archive_bytes = build_trajectory_geometry_export_bundle(
+                source_kind=str(source_kind),
+                source_name=str(source_name),
+                source_bytes=bytes(source_bytes),
+                start_frame=int(start_frame),
+                end_frame=(None if end_frame is None else int(end_frame)),
+                frame_stride=int(frame_stride),
+                charge=int(charge),
+                multiplicity=int(multiplicity),
+                bead_start=(None if bead_start is None else int(bead_start)),
+                bead_end=(None if bead_end is None else int(bead_end)),
+                bead_stride=int(bead_stride),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to export trajectory geometry bundle: {exc}") from exc
+
+        return Response(
+            content=archive_bytes,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_name}"',
+            },
         )
 
     @app.post(f"{api_base}/distributions/load", response_model=DistributionListItem)

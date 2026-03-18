@@ -121,7 +121,7 @@ def test_workflow_page_injects_navigation_config() -> None:
     assert '"dashboard":"/index.html"' in text
     assert '"molecule3d":"/molecule3d.html"' in text
     assert '"md":"/md.html"' in text
-    assert '"pimd_placeholder":true' in text
+    assert '"pimd_placeholder":false' in text
 
 
 def test_molecule3d_page_includes_theme_bootstrap_and_control() -> None:
@@ -157,9 +157,28 @@ def test_md_page_includes_upload_controls_and_assets() -> None:
     assert 'id="md-mode-tab-pimd"' in text
     assert 'id="md-upload-input"' in text
     assert 'id="md-dropzone"' in text
-    assert 'id="md-panel-pimd"' in text
+    assert 'id="pimd-upload-card"' in text
+    assert 'id="pimd-upload-input"' in text
+    assert 'id="pimd-dropzone"' in text
+    assert 'id="pimd-display-mode-select"' in text
+    assert 'id="pimd-bead-select"' in text
+    assert 'id="viewer-controls-title"' in text
     assert 'id="controls-tab-measure"' in text
     assert 'id="controls-tab-export"' in text
+    assert 'id="md-legacy-export-controls"' in text
+    assert 'id="md-sampling-export-panel"' in text
+    assert 'id="md-sampling-start-frame"' in text
+    assert 'id="md-sampling-end-frame"' in text
+    assert 'id="md-sampling-frame-stride"' in text
+    assert 'id="md-sampling-charge"' in text
+    assert 'id="md-sampling-multiplicity"' in text
+    assert 'id="md-sampling-bead-fields"' in text
+    assert 'id="md-sampling-bead-start"' in text
+    assert 'id="md-sampling-bead-end"' in text
+    assert 'id="md-sampling-bead-stride"' in text
+    assert 'id="md-sampling-summary"' in text
+    assert 'id="md-export-geometry-bundle-btn"' in text
+    assert 'id="md-export-geometry-bundle-status"' in text
     assert 'id="save-frame-xyz-btn"' in text
     assert 'id="save-traj-xyz-btn"' in text
     assert 'id="viewer"' in text
@@ -167,6 +186,7 @@ def test_md_page_includes_upload_controls_and_assets() -> None:
     assert 'id="bond-color-settings-panel"' in text
     assert 'data-appearance-control' in text
     assert "/assets/md/md_page.js" in text
+    assert "/assets/vendor/h5wasm.js" in text
     assert '/assets/dashboard/dashboard_appearance.js' in text
 
 
@@ -180,9 +200,22 @@ def test_md_page_injects_local_xyz_config() -> None:
     text = response.body.decode("utf-8")
     assert 'id="md-config-json"' in text
     assert '"data_mode":"local_xyz"' in text
-    assert '"pimd_mode":"placeholder"' in text
+    assert '"pimd_mode":"local_h5"' in text
+    assert '"api_base":"/api"' in text
     assert '"workflow":"/workflow.html"' in text
     assert '"molecule3d":"/molecule3d.html"' in text
+
+
+def test_md_page_injects_configured_api_base() -> None:
+    app = _make_app_with_api_base("/custom-api")
+    endpoint = _find_endpoint(app, "/md.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert 'id="md-config-json"' in text
+    assert '"api_base":"/custom-api"' in text
 
 
 def test_normal_modes_page_includes_upload_controls_and_assets() -> None:

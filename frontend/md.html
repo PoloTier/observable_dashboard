@@ -21,6 +21,7 @@
   <script src="/assets/vendor/3Dmol-min.js"></script>
   <script src="/assets/vendor/plotly-2.35.2.min.js"></script>
   <script src="/assets/vendor/gif.min.js"></script>
+  <script src="/assets/vendor/h5wasm.js"></script>
   <style>
     :root {
       --bg: #f6f0ea;
@@ -454,6 +455,90 @@
       align-items: center;
       margin-top: 8px;
     }
+    .export-stack {
+      width: 100%;
+      display: grid;
+      gap: 14px;
+    }
+    .export-legacy-grid {
+      width: 100%;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .sampling-export-panel {
+      width: 100%;
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+    }
+    .sampling-export-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: start;
+    }
+    .sampling-export-heading {
+      min-width: min(100%, 360px);
+    }
+    .sampling-export-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .sampling-export-copy {
+      margin: 4px 0 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .sampling-export-summary {
+      min-height: 40px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text-soft);
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+    }
+    .sampling-export-summary.error,
+    .sampling-export-status.error {
+      color: #dc2626;
+    }
+    .sampling-export-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px 12px;
+      align-items: end;
+    }
+    .sampling-export-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .sampling-export-field label {
+      font-size: 13px;
+      color: var(--text-soft);
+      font-weight: 600;
+    }
+    .sampling-export-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .sampling-export-status {
+      min-height: 24px;
+      color: var(--muted);
+      flex: 1 1 280px;
+    }
     .atom-style-rules,
     .bond-list,
     .bond-plot,
@@ -539,30 +624,24 @@
       font-size: 20px;
       cursor: pointer;
     }
-    .pimd-card {
-      padding: 22px;
-      min-height: 320px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,255,255,0.2));
+    .pimd-mode-controls {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: auto minmax(180px, 1fr) auto minmax(180px, 1fr);
+      gap: 10px;
+      align-items: center;
     }
-    html[data-theme='dark'] .pimd-card {
-      background: linear-gradient(180deg, rgba(15, 23, 34, 0.58), rgba(11, 18, 28, 0.36));
-    }
-    .pimd-title {
-      margin: 0 0 8px;
-      font-size: 26px;
-      font-weight: 700;
-    }
-    .pimd-copy {
-      margin: 0;
-      max-width: 72ch;
+    .pimd-mode-note {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
       color: var(--muted);
-      line-height: 1.65;
+      line-height: 1.55;
     }
-    .pimd-list {
-      margin: 18px 0 0;
-      padding-left: 18px;
-      color: var(--text-soft);
-      line-height: 1.7;
+    .is-visually-hidden {
+      display: none !important;
     }
     input[type='text'],
     input[type='number'],
@@ -590,8 +669,14 @@
       .upload-card {
         grid-template-columns: 1fr;
       }
+      .pimd-mode-controls {
+        grid-template-columns: 1fr;
+      }
       .hero-actions {
         justify-content: flex-start;
+      }
+      .sampling-export-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .atom-style-controls {
         grid-template-columns: 1fr;
@@ -617,6 +702,9 @@
       .meta-grid {
         grid-template-columns: 1fr;
       }
+      .sampling-export-grid {
+        grid-template-columns: 1fr;
+      }
       #viewer {
         min-height: 340px;
       }
@@ -628,10 +716,11 @@
     <section class="card hero">
       <div>
         <p class="eyebrow">Local Trajectory Workspace</p>
-        <h1 class="hero-title">MD Viewer From Multi-Frame XYZ</h1>
+        <h1 class="hero-title">Local MD and PIMD Viewer</h1>
         <p class="hero-copy">
-          This page runs entirely from a local XYZ trajectory file. Upload a multi-frame XYZ, inspect the motion in 3D,
-          measure bonds or angles over time, and export single-frame or whole-trajectory XYZ without loading a PKL dataset.
+          This page runs entirely from local files. Upload either a multi-frame XYZ trajectory for standard MD, or a
+          standardized PIMD H5 file with bead-resolved coordinates and system potential energy, then inspect the motion in 3D
+          without loading a PKL dataset.
         </p>
       </div>
       <div class="hero-actions">
@@ -641,12 +730,12 @@
     </section>
 
     <div class="mode-tabs" role="tablist" aria-label="MD and PIMD modes">
-      <button id="md-mode-tab-md" class="mode-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="md-panel-md">MD</button>
-      <button id="md-mode-tab-pimd" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="md-panel-pimd">PIMD</button>
+      <button id="md-mode-tab-md" class="mode-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="md-upload-card">MD</button>
+      <button id="md-mode-tab-pimd" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="pimd-upload-card">PIMD</button>
     </div>
 
     <section id="md-panel-md" class="workspace-panel">
-      <section class="card upload-card">
+      <section id="md-upload-card" class="card upload-card">
         <div>
           <h2 class="upload-block-title">Load Local XYZ</h2>
           <p class="upload-copy">
@@ -690,9 +779,72 @@
         </div>
       </section>
 
+      <section id="pimd-upload-card" class="card upload-card" hidden>
+        <div>
+          <h2 class="upload-block-title">Load Standard PIMD H5</h2>
+          <p class="upload-copy">
+            Expected datasets: <code>/coords [frame, bead, atom, xyz]</code>, <code>/step</code>,
+            <code>/atom_numbers</code>, <code>/potential_energy</code>, and <code>/potential_energy_beads</code>.
+            Coordinates are expected in bohr and are converted to Angstrom in the browser for rendering.
+          </p>
+          <div id="pimd-dropzone" class="dropzone">
+            <div class="dropzone-label">Drop a PIMD H5 file here</div>
+            <div class="dropzone-copy">Or choose a file from disk. The PIMD viewer reads the standardized dashboard schema directly in the browser.</div>
+            <div class="upload-actions">
+              <label class="file-picker">
+                <input id="pimd-upload-input" type="file" accept=".h5,.hdf5,application/x-hdf,application/x-hdf5" />
+                Choose H5
+              </label>
+              <div id="pimd-upload-file-name" class="upload-file-name">No file loaded.</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="meta-grid">
+            <div class="meta-card">
+              <span class="meta-label">Loaded File</span>
+              <span id="pimd-meta-file" class="meta-value">none</span>
+              <div id="pimd-meta-file-subvalue" class="meta-subvalue">Waiting for a standardized PIMD H5 import.</div>
+            </div>
+            <div class="meta-card">
+              <span class="meta-label">Frames / Beads</span>
+              <span id="pimd-meta-frames" class="meta-value">0</span>
+              <div id="pimd-meta-beads" class="meta-subvalue">Bead count appears after parsing.</div>
+            </div>
+            <div class="meta-card">
+              <span class="meta-label">Atoms</span>
+              <span id="pimd-meta-atoms" class="meta-value">0</span>
+              <div id="pimd-meta-elements" class="meta-subvalue">Element summary appears after parsing.</div>
+            </div>
+            <div class="meta-card">
+              <span class="meta-label">Potential / Temp</span>
+              <span id="pimd-meta-energy" class="meta-value">n/a</span>
+              <div id="pimd-meta-temperature" class="meta-subvalue">Temperature appears after parsing.</div>
+            </div>
+          </div>
+
+          <div class="pimd-mode-controls">
+            <label for="pimd-display-mode-select">Display Mode</label>
+            <select id="pimd-display-mode-select">
+              <option value="single">Single Bead</option>
+              <option value="all">All Beads</option>
+            </select>
+
+            <label for="pimd-bead-select">Bead</label>
+            <select id="pimd-bead-select" disabled></select>
+          </div>
+
+          <div class="pimd-mode-note">
+            <strong>All Beads mode:</strong> all beads are shown together for playback only. Measurement, atom picking,
+            and XYZ export remain disabled in PIMD mode in this first implementation.
+          </div>
+        </div>
+      </section>
+
       <div class="card header">
         <div class="header-top">
-          <h2 class="header-title">MD Viewer Controls</h2>
+          <h2 id="viewer-controls-title" class="header-title">MD Viewer Controls</h2>
           <div id="source-pkl" class="source-pkl">Source: Local XYZ</div>
         </div>
 
@@ -869,18 +1021,78 @@
           </section>
 
           <section id="gif-range-controls-group" class="control-panel" aria-labelledby="controls-tab-export" hidden>
-            <div class="controls control-panel-body">
-              <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
-              <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
-              <button id="export-gif-btn" type="button" disabled>Export GIF</button>
-              <button id="export-video-btn" type="button" disabled>Export Video</button>
+            <div class="control-panel-body export-stack">
+              <div id="md-legacy-export-controls" class="export-legacy-grid">
+                <button id="save-frame-xyz-btn" type="button" disabled>Save Frame XYZ</button>
+                <button id="save-traj-xyz-btn" type="button" disabled>Save Trajectory XYZ</button>
+                <button id="export-gif-btn" type="button" disabled>Export GIF</button>
+                <button id="export-video-btn" type="button" disabled>Export Video</button>
 
-              <label for="gif-export-start">GIF Start</label>
-              <input id="gif-export-start" type="number" min="0" step="1" value="0" />
-              <label for="gif-export-end">GIF End</label>
-              <input id="gif-export-end" type="number" min="0" step="1" value="0" />
-              <button id="cancel-gif-export-btn" type="button" hidden disabled>Cancel Export</button>
-              <span id="gif-export-progress"></span>
+                <label for="gif-export-start">GIF Start</label>
+                <input id="gif-export-start" type="number" min="0" step="1" value="0" />
+                <label for="gif-export-end">GIF End</label>
+                <input id="gif-export-end" type="number" min="0" step="1" value="0" />
+                <button id="cancel-gif-export-btn" type="button" hidden disabled>Cancel Export</button>
+                <span id="gif-export-progress"></span>
+              </div>
+
+              <section id="md-sampling-export-panel" class="sampling-export-panel" aria-labelledby="md-sampling-export-title">
+                <div class="sampling-export-head">
+                  <div class="sampling-export-heading">
+                    <h3 id="md-sampling-export-title" class="sampling-export-title">Sampling Geometry Bundle</h3>
+                    <p class="sampling-export-copy">
+                      Sample the active MD or PIMD trajectory by frame stride, then let the backend assemble a
+                      distribution-compatible geometry bundle for download.
+                    </p>
+                  </div>
+                  <div id="md-sampling-summary" class="sampling-export-summary">Load a local trajectory to prepare sampling export.</div>
+                </div>
+
+                <div class="sampling-export-grid">
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-start-frame">Start Frame</label>
+                    <input id="md-sampling-start-frame" type="number" min="0" step="1" value="0" />
+                  </div>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-end-frame">End Frame</label>
+                    <input id="md-sampling-end-frame" type="number" min="0" step="1" value="0" />
+                  </div>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-frame-stride">Frame Stride</label>
+                    <input id="md-sampling-frame-stride" type="number" min="1" step="1" value="1" />
+                  </div>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-charge">Charge</label>
+                    <input id="md-sampling-charge" type="number" step="1" value="0" />
+                  </div>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-multiplicity">Multiplicity</label>
+                    <input id="md-sampling-multiplicity" type="number" min="1" step="1" value="1" />
+                  </div>
+                </div>
+
+                <div id="md-sampling-bead-fields" class="sampling-export-grid" hidden>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-bead-start">Bead Start</label>
+                    <input id="md-sampling-bead-start" type="number" min="0" step="1" value="0" />
+                  </div>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-bead-end">Bead End</label>
+                    <input id="md-sampling-bead-end" type="number" min="0" step="1" value="0" />
+                  </div>
+                  <div class="sampling-export-field">
+                    <label for="md-sampling-bead-stride">Bead Stride</label>
+                    <input id="md-sampling-bead-stride" type="number" min="1" step="1" value="1" />
+                  </div>
+                </div>
+
+                <div class="sampling-export-actions">
+                  <button id="md-export-geometry-bundle-btn" class="toolbar-action-btn" type="button" disabled>
+                    Export Geometry Bundle
+                  </button>
+                  <span id="md-export-geometry-bundle-status" class="sampling-export-status"></span>
+                </div>
+              </section>
             </div>
           </section>
         </div>
@@ -902,22 +1114,6 @@
           <div id="bond-color-settings-list" class="bond-color-settings-list"><div class="bond-color-empty">No tracked measurements.</div></div>
         </div>
       </div>
-    </section>
-
-    <section id="md-panel-pimd" class="workspace-panel" hidden>
-      <section class="card pimd-card">
-        <h2 class="pimd-title">PIMD Placeholder</h2>
-        <p class="pimd-copy">
-          The workflow map already reserves a path for PIMD, but this iteration does not implement a parser or viewer
-          contract for ring-polymer trajectories yet. The page is intentionally explicit here so the MD workflow stays
-          stable while the PIMD data model is still undecided.
-        </p>
-        <ul class="pimd-list">
-          <li>Current implementation: MD only, driven by one multi-frame XYZ file.</li>
-          <li>Planned next step: decide how bead indices, centroid views, and per-bead playback should be represented.</li>
-          <li>Likely future inputs: bead-resolved XYZ bundles or a structured archive with topology plus bead trajectories.</li>
-        </ul>
-      </section>
     </section>
   </div>
 

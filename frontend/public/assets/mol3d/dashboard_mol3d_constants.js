@@ -36,6 +36,7 @@
     PLOT_EXPORT_DPI: 300,
     CSS_BASE_DPI: 96,
     PLOT_EXPORT_SCALE: 300 / 96,
+    BOHR_TO_ANGSTROM: 0.529177210903,
     BOND_COLOR_PALETTE: [
       '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
       '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'

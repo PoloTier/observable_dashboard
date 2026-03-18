@@ -418,6 +418,7 @@
 
   function clearMeasurementPlot(message = shared.getMeasureMeta().plotEmptyText) {
     if (!dom.bondPlotEl) return;
+    if (dom.bondPlotEl.dataset.plotOwner === 'pimd') return;
     state.measurementPlotReady = false;
     if (typeof Plotly !== 'undefined') {
       try {
@@ -455,6 +456,7 @@
   function updateMeasurementPlotFrameCursor() {
     const tracks = shared.getTracks();
     if (!state.measurementPlotReady || !dom.bondPlotEl || !tracks.length) return;
+    if (dom.bondPlotEl.dataset.plotOwner === 'pimd') return;
     if (typeof Plotly === 'undefined') return;
 
     const t = getCursorTime();
@@ -471,6 +473,7 @@
     const tracks = shared.getTracks();
 
     if (!dom.bondPlotEl) return;
+    if (dom.bondPlotEl.dataset.plotOwner === 'pimd') return;
     if (!tracks.length) {
       clearMeasurementPlot(meta.plotEmptyText);
       return;
