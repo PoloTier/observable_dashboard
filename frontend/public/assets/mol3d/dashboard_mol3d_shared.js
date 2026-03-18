@@ -56,8 +56,8 @@
   }
 
   const dataMode = String(bootstrap.data_mode || 'api');
-  if (dataMode !== 'api') {
-    showBootError(`3D page expects API mode, but received data_mode='${dataMode}'.`);
+  if (dataMode !== 'api' && dataMode !== 'local_xyz') {
+    showBootError(`3D page received unsupported data_mode='${dataMode}'.`);
     return;
   }
 

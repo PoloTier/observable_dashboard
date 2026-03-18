@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Workflow Navigation</title>
+  <script>
+    (function () {
+      const storageKey = 'observable_dashboard_theme_v1';
+      let mode = 'light';
+      try {
+        const savedMode = localStorage.getItem(storageKey);
+        if (savedMode === 'light' || savedMode === 'dark') mode = savedMode;
+      } catch {
+        // ignore storage failures
+      }
+      document.documentElement.setAttribute('data-theme', mode);
+      document.documentElement.style.colorScheme = mode;
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #f3f6f8;
+      --bg-ambient: radial-gradient(circle at 12% 16%, rgba(15, 118, 110, 0.18), transparent 30%),
+        radial-gradient(circle at 88% 12%, rgba(37, 99, 235, 0.16), transparent 28%),
+        linear-gradient(180deg, #fbfcfd 0%, #eef3f6 100%);
+      --card: rgba(255, 255, 255, 0.86);
+      --card-strong: #ffffff;
+      --border: rgba(15, 23, 42, 0.1);
+      --border-strong: rgba(15, 23, 42, 0.16);
+      --text: #112031;
+      --muted: #516071;
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.12);
+      --accent-strong: #0b5b55;
+      --shadow: 0 28px 64px rgba(15, 23, 42, 0.08);
+    }
+    html[data-theme='dark'] {
+      --bg: #07131b;
+      --bg-ambient: radial-gradient(circle at 14% 18%, rgba(20, 184, 166, 0.22), transparent 32%),
+        radial-gradient(circle at 86% 10%, rgba(59, 130, 246, 0.16), transparent 28%),
+        linear-gradient(180deg, #06131b 0%, #081720 56%, #061019 100%);
+      --card: rgba(7, 18, 28, 0.82);
+      --card-strong: rgba(8, 20, 31, 0.96);
+      --border: rgba(148, 163, 184, 0.18);
+      --border-strong: rgba(148, 163, 184, 0.28);
+      --text: #e7f0f8;
+      --muted: #9fb2c6;
+      --accent: #59d2c5;
+      --accent-soft: rgba(20, 184, 166, 0.16);
+      --accent-strong: #8ce8df;
+      --shadow: 0 34px 78px rgba(2, 6, 23, 0.42);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      position: relative;
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: var(--bg-ambient);
+      pointer-events: none;
+      z-index: -1;
+    }
+    .page {
+      width: min(1480px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 22px 0 28px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+    .hero {
+      padding: 24px 26px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: start;
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.05;
+    }
+    .hero-copy {
+      max-width: 78ch;
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .hero-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+      background: var(--card-strong);
+      color: var(--text);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .hero-link.primary {
+      border-color: rgba(15, 118, 110, 0.36);
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+    }
+    .section {
+      margin-top: 18px;
+      padding: 18px;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 14px;
+    }
+    .section-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .section-note {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .flowchart-shell {
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.38));
+    }
+    html[data-theme='dark'] .flowchart-shell {
+      background: linear-gradient(180deg, rgba(12, 22, 33, 0.64), rgba(8, 18, 28, 0.5));
+    }
+    #wf-flowchart {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .quick-links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    .quick-link {
+      display: block;
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      background: var(--card-strong);
+      text-decoration: none;
+      color: inherit;
+      min-height: 144px;
+    }
+    .quick-link-title {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .quick-link-file {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .quick-link-copy {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .quick-link-meta {
+      margin-top: 12px;
+      color: var(--accent-strong);
+      font-weight: 600;
+      font-size: 14px;
+    }
+    @media (max-width: 900px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+      .hero-actions {
+        justify-content: flex-start;
+      }
+    }
+    @media (max-width: 640px) {
+      .page {
+        width: min(100%, calc(100% - 20px));
+        padding-top: 14px;
+      }
+      .hero,
+      .section {
+        padding: 16px;
+      }
+      .section-head {
+        display: block;
+      }
+      .section-note {
+        margin-top: 6px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="card hero">
+      <div>
+        <p class="eyebrow">Workflow Portal</p>
+        <h1>Ensemble to Dynamics Navigation</h1>
+        <p class="hero-copy">
+          This page maps the current workflow into direct browser entry points. Click any HTML node inside the diagram
+          to open the corresponding page, or use the quick-launch cards below on smaller screens.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <a class="hero-link primary" href="/normal_modes.html">Start From Normal Modes</a>
+        <a class="hero-link" href="/md.html">Open Local MD Viewer</a>
+        <a class="hero-link" href="/index.html">Open Dashboard</a>
+      </div>
+    </section>
+
+    <section class="card section">
+      <div class="section-head">
+        <h2 class="section-title">Interactive Flowchart</h2>
+        <p class="section-note">Clickable nodes are the runnable HTML entry points. External compute steps stay annotated but non-clickable.</p>
+      </div>
+      <div class="flowchart-shell">
+        <svg id="wf-flowchart" viewBox="0 0 1500 1100" role="img" aria-label="Workflow navigation flowchart"></svg>
+      </div>
+    </section>
+
+    <section class="card section">
+      <div class="section-head">
+        <h2 class="section-title">Quick Launch</h2>
+        <p class="section-note">Fast access cards for mobile and for opening individual tools without using the diagram.</p>
+      </div>
+      <div id="wf-quick-links" class="quick-links"></div>
+    </section>
+  </div>
+
+  <script id="workflow-config-json" type="application/json">{}</script>
+  <script src="/assets/workflow/workflow_page.js"></script>
+</body>
+</html>

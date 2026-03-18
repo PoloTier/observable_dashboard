@@ -575,6 +575,21 @@ def build_generated_pyscf_job_script() -> str:
             return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+        def configure_thread_env(config: dict) -> None:
+            explicit_env_names = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+            if any(str(os.environ.get(name) or "").strip() for name in explicit_env_names):
+                return
+
+            configured_raw = config.get("num_threads")
+            thread_count: int | None = None if configured_raw is None else int(configured_raw)
+            if thread_count is None or int(thread_count) <= 0:
+                return
+
+            thread_text = str(int(thread_count))
+            for name in explicit_env_names:
+                os.environ.setdefault(name, thread_text)
+
+
         def select_reference(config: dict, *, multiplicity: int) -> str:
             requested = str(config.get("reference") or "auto").strip().lower()
             if requested == "auto":
@@ -606,11 +621,7 @@ def build_generated_pyscf_job_script() -> str:
             }
 
             try:
-                num_threads = config.get("num_threads")
-                if num_threads is not None:
-                    thread_text = str(int(num_threads))
-                    os.environ.setdefault("OMP_NUM_THREADS", thread_text)
-                    os.environ.setdefault("MKL_NUM_THREADS", thread_text)
+                configure_thread_env(config)
 
                 from pyscf import dft, gto, tddft
 

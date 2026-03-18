@@ -137,7 +137,8 @@ python scripts/electronic_structure/prepare_pyscf_jobs.py \
   --sampling-dir path/to/normal_modes_geometry_dir \
   --xc b3lyp \
   --basis 6-31g* \
-  --nstates 5
+  --nstates 5 \
+  --num-threads 8
 ```
 
 By default this creates a workspace under the sampling directory using a stable
@@ -178,6 +179,8 @@ Important behavior:
   overridden on the command line.
 - `prepare_manifest.json` records `profile_id` and `profile_label` in addition
   to the calculation settings.
+- `prepare_manifest.json.num_threads` is the canonical per-job thread count for
+  generated PySCF runs when provided.
 - `sample_meta.json` records only:
   - `sample_id`
   - `sample_idx`
@@ -202,7 +205,7 @@ For a Slurm array run, use the repository-level wrapper:
 bash scripts/electronic_structure/submit_workspace_array.sh \
   --workspace path/to/normal_modes_geometry_dir/electronic_workspaces/pyscf_tddft__auto__b3lyp__6-31g__n5 \
   --batch-count 8 \
-  --cpus-per-task 8 \
+  --partition cpu \
   --mem 16G \
   --time 02:00:00 \
   --job-name pyscf-demo
@@ -223,6 +226,24 @@ The batch runner reads `prepare_manifest.json.sample_ids`, keeps that order,
 and writes results back to the existing per-sample directories under `jobs/`.
 If a sample already has `result.json` with `status: "ok"`, that sample is
 skipped by default so retries can resume incomplete work.
+
+Threading behavior:
+
+- `prepare_manifest.json.num_threads`, when present, is the single source of
+  truth for PySCF/BLAS thread count.
+- `submit_workspace_array.sh` automatically maps
+  `prepare_manifest.json.num_threads` to both `--cpus-per-task` and
+  `OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`OPENBLAS_NUM_THREADS`.
+- If you explicitly pass `--cpus-per-task` and it conflicts with
+  `prepare_manifest.json.num_threads`, the submission wrapper exits with an
+  error instead of silently drifting.
+- `run_workspace_batch.py` and each generated `run_pyscf_tddft.py` only use
+  `prepare_manifest.json.num_threads` (or already-exported thread environment
+  variables); they no longer infer thread count from `SLURM_CPUS_PER_TASK`.
+
+On clusters where generic submissions may land on fat nodes, prefer passing
+`--partition cpu` explicitly. It is also reasonable to request
+`--mem 16G` in the common case so the job shape is explicit and reproducible.
 
 The generated `run_pyscf_tddft.py` script reads:
 
@@ -259,6 +280,22 @@ Each successful `result.json` contains:
   - `transition_pairs`
   - `transition_dipole_au`
   - `transition_intensity`
+
+Field semantics for the current PySCF TDDFT implementation:
+
+- `state_energy_hartree` stores the total electronic energy of each state in
+  Hartree. Entry `0` is the converged SCF ground-state energy, and entries
+  `1..n` are formed as `E0 + excitation_energy`.
+- `transition_pairs` is currently always `[[0, 1], [0, 2], ...]`, meaning the
+  payload only records ground-to-excited transitions from state 0 to each
+  requested excited state.
+- `transition_dipole_au[i]` is taken directly from
+  `td.transition_dipole()[i]` in PySCF and is the transition dipole vector for
+  `transition_pairs[i]`, in atomic units.
+- `transition_intensity[i]` is taken directly from
+  `td.oscillator_strength(gauge="length")[i]` in PySCF. Despite the generic
+  field name, it is the length-gauge oscillator strength for
+  `transition_pairs[i]`, not a separately recomputed intensity.
 
 Failed jobs should still write `result.json` with `status: "error"` plus an
 `error_message`.

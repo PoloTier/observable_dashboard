@@ -424,8 +424,8 @@ def test_exported_normal_modes_geometry_bundle_loads_into_distribution_compare()
 
     assert loaded.available_channels == ["atom_numbers", "atom_masses_amu", "coords_bohr", "velocities_bohr_per_au_time"]
     assert loaded.has_electronics is False
-    assert loaded.n_states is None
-    assert loaded.n_transition is None
+    assert loaded.default_electronic_profile_id is None
+    assert loaded.electronic_profiles == []
 
     compare_response = _invoke_endpoint(
         compare_endpoint,

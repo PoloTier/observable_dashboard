@@ -31,7 +31,13 @@
 
   function setSourcePklInfo() {
     if (!dom.sourcePklEl) return;
+    const sourceLabel = String(meta?.source_label || '').trim();
     const sourcePkl = String(meta?.source_pkl || '');
+    if (sourceLabel && !sourcePkl) {
+      dom.sourcePklEl.textContent = `Source: ${sourceLabel}`;
+      dom.sourcePklEl.title = sourceLabel;
+      return;
+    }
     if (sourcePkl) {
       const filename = sourcePkl.split(/[\\/]/).pop() || sourcePkl;
       dom.sourcePklEl.textContent = `PKL: ${filename}`;
@@ -582,6 +588,84 @@
     return vectorOps.loadDeNacPair(forceReload);
   }
 
+  async function applyTrajectoryRecord(selectedTrajId, rec, options = {}) {
+    const viewer = root.viewer;
+    const measurement = root.measurement;
+    if (!viewer || !measurement) return false;
+
+    const preparedTrajectory = typeof transformers.prepareRenderableTrajectory === 'function'
+      ? transformers.prepareRenderableTrajectory(rec)
+      : rec;
+
+    state.currentCoords = Array.isArray(preparedTrajectory?.coords) ? preparedTrajectory.coords : [];
+    state.currentTimes = Array.isArray(preparedTrajectory?.time) ? preparedTrajectory.time : [];
+    state.atomNumbers = Array.isArray(preparedTrajectory?.atom_numbers) ? preparedTrajectory.atom_numbers : [];
+    state.hbondCache = null;
+
+    state.xyzFrames = [];
+    state.currentTrajId = selectedTrajId;
+    state.currentModel = null;
+    state.currentModelRenderMode = '';
+    state.currentFrame = 0;
+    measurement.syncMeasurementStateForTrajectoryChange();
+    vectorOps.applyTrajectoryNacMeta(preparedTrajectory);
+
+    const frameCount = getFrameCount();
+    if (frameCount <= 0) {
+      clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
+      shared.setStatus(`Trajectory ${selectedTrajId} has no valid coordinate frames.`, true);
+      return false;
+    }
+
+    const firstFrameXyz = typeof transformers.buildXyzFrame === 'function'
+      ? transformers.buildXyzFrame(preparedTrajectory, 0)
+      : '';
+    if (!firstFrameXyz || typeof viewer.initializeTrajectoryModel !== 'function') {
+      clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
+      shared.setStatus(`Trajectory ${selectedTrajId} could not initialize the 3D viewer.`, true);
+      return false;
+    }
+
+    const initialized = viewer.initializeTrajectoryModel(firstFrameXyz, state.currentCoords);
+    if (!initialized) {
+      clearLoadedTrajectoryView();
+      measurement.syncMeasurementStateForTrajectoryChange();
+      shared.setStatus(`Trajectory ${selectedTrajId} could not initialize the 3D viewer.`, true);
+      return false;
+    }
+
+    if (dom.frameSlider) {
+      dom.frameSlider.min = '0';
+      dom.frameSlider.max = String(frameCount - 1);
+      dom.frameSlider.step = '1';
+    }
+    resetGifExportRangeToFullTrajectory();
+    shared.setDownloadButtonsEnabled(true);
+    shared.setGifExportUiState(false);
+    const restoredVectors = typeof vectorOps.restoreDesiredVectorVisibility === 'function'
+      ? await vectorOps.restoreDesiredVectorVisibility()
+      : null;
+
+    let statusMessage = String(options.loadedMessage || `Loaded trajectory ${selectedTrajId} (${frameCount} frames).`);
+    let statusIsError = false;
+    if (Array.isArray(restoredVectors?.restored) && restoredVectors.restored.length) {
+      statusMessage += ` Restored vectors: ${restoredVectors.restored.join(', ')}.`;
+    }
+    if (Array.isArray(restoredVectors?.unavailable) && restoredVectors.unavailable.length) {
+      statusMessage += ` Unavailable here: ${restoredVectors.unavailable.join(', ')}.`;
+    }
+    if (Array.isArray(restoredVectors?.failed) && restoredVectors.failed.length) {
+      statusMessage += ` Failed to restore: ${restoredVectors.failed.join('; ')}.`;
+      statusIsError = true;
+    }
+
+    shared.setStatus(statusMessage, statusIsError);
+    await viewer.renderFrame(0, true);
+    return true;
+  }
+
   function clearLoadedTrajectoryView() {
     const hbond = root.hbond;
     cancelGifExport(false);
@@ -653,83 +737,36 @@
       shared.setStatus(`Trajectory ${selectedTrajId} not found.`, true);
       return;
     }
+    await applyTrajectoryRecord(selectedTrajId, rec);
+  }
 
-    const preparedTrajectory = typeof transformers.prepareRenderableTrajectory === 'function'
-      ? transformers.prepareRenderableTrajectory(rec)
-      : rec;
+  async function loadTrajectoryRecord(trajId, rec, options = {}) {
+    const viewer = root.viewer;
+    const measurement = root.measurement;
+    if (!viewer || !measurement) return false;
 
-    state.currentCoords = Array.isArray(preparedTrajectory?.coords) ? preparedTrajectory.coords : [];
-    state.currentTimes = Array.isArray(preparedTrajectory?.time) ? preparedTrajectory.time : [];
-    state.atomNumbers = Array.isArray(preparedTrajectory?.atom_numbers) ? preparedTrajectory.atom_numbers : [];
-    state.hbondCache = null;
+    const selectedTrajId = transformers.normalizeTrajId(trajId);
+    const requestSeq = ++loadRequestSeq;
+    const hbond = root.hbond;
+    cancelGifExport(false);
+    viewer.stopPlayback();
+    if (hbond && typeof hbond.resetHydrogenBondState === 'function') {
+      hbond.resetHydrogenBondState();
+    }
+    shared.setDownloadButtonsEnabled(false);
+    shared.setGifExportProgress(0, 0);
+    if (options.loadingMessage) {
+      shared.setStatus(String(options.loadingMessage));
+    }
 
-    console.log('Loaded trajectory:', {
-      nFrames: state.currentCoords.length,
-      nAtoms: state.atomNumbers.length,
-      atomNumbers: state.atomNumbers
-    });
-
-    state.xyzFrames = [];
-    state.currentTrajId = selectedTrajId;
-    state.currentModel = null;
-    state.currentModelRenderMode = '';
-    state.currentFrame = 0;
-    measurement.syncMeasurementStateForTrajectoryChange();
-    vectorOps.applyTrajectoryNacMeta(preparedTrajectory);
-
-    const frameCount = getFrameCount();
-    if (frameCount <= 0) {
+    if (!rec || typeof rec !== 'object') {
       clearLoadedTrajectoryView();
       measurement.syncMeasurementStateForTrajectoryChange();
-      shared.setStatus(`Trajectory ${selectedTrajId} has no valid coordinate frames.`, true);
-      return;
+      shared.setStatus(`Trajectory ${selectedTrajId} is empty or invalid.`, true);
+      return false;
     }
-
-    const firstFrameXyz = typeof transformers.buildXyzFrame === 'function'
-      ? transformers.buildXyzFrame(preparedTrajectory, 0)
-      : '';
-    if (!firstFrameXyz || typeof viewer.initializeTrajectoryModel !== 'function') {
-      clearLoadedTrajectoryView();
-      measurement.syncMeasurementStateForTrajectoryChange();
-      shared.setStatus(`Trajectory ${selectedTrajId} could not initialize the 3D viewer.`, true);
-      return;
-    }
-
-    const initialized = viewer.initializeTrajectoryModel(firstFrameXyz, state.currentCoords);
-    if (!initialized) {
-      clearLoadedTrajectoryView();
-      measurement.syncMeasurementStateForTrajectoryChange();
-      shared.setStatus(`Trajectory ${selectedTrajId} could not initialize the 3D viewer.`, true);
-      return;
-    }
-
-    if (dom.frameSlider) {
-      dom.frameSlider.min = '0';
-      dom.frameSlider.max = String(frameCount - 1);
-      dom.frameSlider.step = '1';
-    }
-    resetGifExportRangeToFullTrajectory();
-    shared.setDownloadButtonsEnabled(true);
-    shared.setGifExportUiState(false);
-    const restoredVectors = typeof vectorOps.restoreDesiredVectorVisibility === 'function'
-      ? await vectorOps.restoreDesiredVectorVisibility()
-      : null;
-
-    let statusMessage = `Loaded trajectory ${selectedTrajId} (${frameCount} frames).`;
-    let statusIsError = false;
-    if (Array.isArray(restoredVectors?.restored) && restoredVectors.restored.length) {
-      statusMessage += ` Restored vectors: ${restoredVectors.restored.join(', ')}.`;
-    }
-    if (Array.isArray(restoredVectors?.unavailable) && restoredVectors.unavailable.length) {
-      statusMessage += ` Unavailable here: ${restoredVectors.unavailable.join(', ')}.`;
-    }
-    if (Array.isArray(restoredVectors?.failed) && restoredVectors.failed.length) {
-      statusMessage += ` Failed to restore: ${restoredVectors.failed.join('; ')}.`;
-      statusIsError = true;
-    }
-
-    shared.setStatus(statusMessage, statusIsError);
-    await viewer.renderFrame(0, true);
+    if (requestSeq !== loadRequestSeq) return false;
+    return applyTrajectoryRecord(selectedTrajId, rec, options);
   }
 
   vectorOps.registerVectorSources();
@@ -744,6 +781,7 @@
     exportTrajectoryVideo,
     cancelGifExport,
     loadTrajectory,
+    loadTrajectoryRecord,
     setNacVectorsVisible,
     setDeVectorsVisible,
     setDeNacVectorsVisible,

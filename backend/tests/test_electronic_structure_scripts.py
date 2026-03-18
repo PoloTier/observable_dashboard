@@ -181,7 +181,13 @@ def _write_result_json(
     result_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
 
 
-def _install_fake_job_script(job_dir: Path, *, status: str | None, exit_code: int) -> None:
+def _install_fake_job_script(
+    job_dir: Path,
+    *,
+    status: str | None,
+    exit_code: int,
+    capture_env_names: tuple[str, ...] = (),
+) -> None:
     payload_text: str | None = None
     if status is not None:
         payload = {"status": str(status)}
@@ -194,10 +200,17 @@ def _install_fake_job_script(job_dir: Path, *, status: str | None, exit_code: in
         "from __future__ import annotations",
         "",
         "from pathlib import Path",
+        "import json",
+        "import os",
         "",
         "job_dir = Path(__file__).resolve().parent",
         '(job_dir / "executed.txt").write_text("ran\\n", encoding="utf-8")',
     ]
+    if capture_env_names:
+        capture_expr = "{" + ", ".join(f"{name!r}: os.environ.get({name!r})" for name in capture_env_names) + "}"
+        script_lines.append(
+            f'(job_dir / "thread_env.json").write_text(json.dumps({capture_expr}, sort_keys=True) + "\\n", encoding="utf-8")'
+        )
     if payload_text is not None:
         script_lines.append(
             f'(job_dir / "result.json").write_text({payload_text!r} + "\\n", encoding="utf-8")'
@@ -940,6 +953,105 @@ def test_run_workspace_batch_allows_empty_batches(
     assert not (job_dirs[1] / "executed.txt").exists()
 
 
+def test_run_workspace_batch_does_not_infer_threads_from_slurm_without_prepare_setting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+    )
+
+    job_dir = sorted((workspace_dir / "jobs").iterdir())[0]
+    _install_fake_job_script(
+        job_dir,
+        status="ok",
+        exit_code=0,
+        capture_env_names=("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"),
+    )
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS", raising=False)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "6")
+
+    exit_code = run_workspace_batch_main(
+        [
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "2",
+            "--batch-index",
+            "0",
+        ]
+    )
+    stdout = capsys.readouterr().out
+    thread_env = json.loads((job_dir / "thread_env.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert "[threads]" not in stdout
+    assert thread_env == {
+        "MKL_NUM_THREADS": None,
+        "OMP_NUM_THREADS": None,
+        "OPENBLAS_NUM_THREADS": None,
+    }
+
+
+def test_run_workspace_batch_prefers_prepare_num_threads_over_slurm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+        num_threads=3,
+    )
+
+    job_dir = sorted((workspace_dir / "jobs").iterdir())[0]
+    _install_fake_job_script(
+        job_dir,
+        status="ok",
+        exit_code=0,
+        capture_env_names=("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"),
+    )
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS", raising=False)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "6")
+
+    exit_code = run_workspace_batch_main(
+        [
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "2",
+            "--batch-index",
+            "0",
+        ]
+    )
+    stdout = capsys.readouterr().out
+    thread_env = json.loads((job_dir / "thread_env.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert "[threads] source=prepare_manifest.num_threads" in stdout
+    assert thread_env == {
+        "MKL_NUM_THREADS": "3",
+        "OMP_NUM_THREADS": "3",
+        "OPENBLAS_NUM_THREADS": "3",
+    }
+
+
 def test_submit_workspace_array_wrapper_builds_sbatch_command(tmp_path: Path) -> None:
     bundle_path = _write_geometry_bundle_dir(tmp_path)
     workspace_dir = prepare_workspace(
@@ -1010,6 +1122,101 @@ def test_submit_workspace_array_wrapper_builds_sbatch_command(tmp_path: Path) ->
     assert "--mem=8G" in captured_args
     assert "--time=01:30:00" in captured_args
     assert "--job-name=pyscf-demo" in captured_args
+    assert "--export=ALL,OMP_NUM_THREADS=4,MKL_NUM_THREADS=4,OPENBLAS_NUM_THREADS=4" in captured_args
     assert str(REPO_ROOT / "scripts" / "electronic_structure" / "run_workspace_batch.py") in wrap_cmd
     assert f"--workspace {workspace_dir.resolve()}" in wrap_cmd
     assert "--batch-count 3" in wrap_cmd
+
+
+def test_submit_workspace_array_wrapper_uses_prepare_manifest_num_threads_by_default(tmp_path: Path) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+        num_threads=5,
+    )
+
+    fake_bin_dir = tmp_path / "fake_bin"
+    fake_bin_dir.mkdir(parents=True, exist_ok=True)
+    capture_path = tmp_path / "sbatch_args.txt"
+    fake_sbatch_path = fake_bin_dir / "sbatch"
+    fake_sbatch_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\n' "$@" > "$CAPTURE_PATH"
+            printf 'Submitted batch job 12345\n'
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_sbatch_path.chmod(0o755)
+
+    wrapper_path = REPO_ROOT / "scripts" / "electronic_structure" / "submit_workspace_array.sh"
+    env = dict(os.environ)
+    env["CAPTURE_PATH"] = str(capture_path)
+    env["PATH"] = f"{fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    completed = subprocess.run(  # noqa: S603
+        [
+            "bash",
+            str(wrapper_path),
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "2",
+            "--python-exe",
+            sys.executable,
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    captured_args = capture_path.read_text(encoding="utf-8").splitlines()
+    assert "--cpus-per-task=5" in captured_args
+    assert "--export=ALL,OMP_NUM_THREADS=5,MKL_NUM_THREADS=5,OPENBLAS_NUM_THREADS=5" in captured_args
+
+
+def test_submit_workspace_array_wrapper_rejects_cpus_conflicting_with_prepare_manifest(tmp_path: Path) -> None:
+    bundle_path = _write_geometry_bundle_dir(tmp_path)
+    workspace_dir = prepare_workspace(
+        bundle_path=bundle_path,
+        workspace_dir=None,
+        xc="b3lyp",
+        basis="6-31g*",
+        n_excited_states=2,
+        reference="auto",
+        num_threads=5,
+    )
+
+    wrapper_path = REPO_ROOT / "scripts" / "electronic_structure" / "submit_workspace_array.sh"
+    completed = subprocess.run(  # noqa: S603
+        [
+            "bash",
+            str(wrapper_path),
+            "--workspace",
+            str(workspace_dir),
+            "--batch-count",
+            "2",
+            "--cpus-per-task",
+            "4",
+            "--python-exe",
+            sys.executable,
+        ],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "does not match prepare_manifest.json num_threads (5)" in completed.stderr

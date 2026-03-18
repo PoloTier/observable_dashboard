@@ -103,6 +103,43 @@ if [[ ! -d "$workspace" ]]; then
   echo "Workspace directory does not exist: $workspace" >&2
   exit 2
 fi
+prepare_manifest_path="$workspace/prepare_manifest.json"
+if [[ ! -f "$prepare_manifest_path" ]]; then
+  echo "Workspace is missing prepare manifest: $prepare_manifest_path" >&2
+  exit 2
+fi
+
+prepare_num_threads="$("$python_exe" -c '
+from pathlib import Path
+import json
+import sys
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = payload.get("num_threads")
+print("" if value is None else int(value))
+' "$prepare_manifest_path")"
+
+if [[ -n "$prepare_num_threads" ]]; then
+  if [[ -n "$cpus_per_task" ]] && [[ "$cpus_per_task" != "$prepare_num_threads" ]]; then
+    echo "--cpus-per-task ($cpus_per_task) does not match prepare_manifest.json num_threads ($prepare_num_threads)" >&2
+    exit 2
+  fi
+  cpus_per_task="$prepare_num_threads"
+fi
+
+resolved_thread_count=""
+if [[ -n "$prepare_num_threads" ]]; then
+  resolved_thread_count="$prepare_num_threads"
+elif [[ -n "$cpus_per_task" ]]; then
+  resolved_thread_count="$cpus_per_task"
+fi
+
+if [[ -n "$cpus_per_task" ]]; then
+  if ! [[ "$cpus_per_task" =~ ^[0-9]+$ ]] || [[ "$cpus_per_task" -lt 1 ]]; then
+    echo "--cpus-per-task must be an integer >= 1" >&2
+    exit 2
+  fi
+fi
 
 sbatch_args=()
 sbatch_args+=("--array=0-$((batch_count - 1))")
@@ -126,6 +163,11 @@ if [[ -n "$qos" ]]; then
 fi
 if [[ -n "$job_name" ]]; then
   sbatch_args+=("--job-name=$job_name")
+fi
+if [[ -n "$resolved_thread_count" ]]; then
+  sbatch_args+=(
+    "--export=ALL,OMP_NUM_THREADS=$resolved_thread_count,MKL_NUM_THREADS=$resolved_thread_count,OPENBLAS_NUM_THREADS=$resolved_thread_count"
+  )
 fi
 
 printf -v wrap_cmd '%q %q --workspace %q --batch-count %q' \

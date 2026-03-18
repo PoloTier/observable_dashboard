@@ -20,9 +20,13 @@ def _load_json_file(path: Path, *, label: str) -> dict[str, Any]:
     return payload
 
 
-def _load_sample_ids(workspace_dir: Path) -> list[str]:
+def _load_prepare_manifest(workspace_dir: Path) -> dict[str, Any]:
     manifest_path = workspace_dir / "prepare_manifest.json"
-    prepare_manifest = _load_json_file(manifest_path, label="prepare manifest")
+    return _load_json_file(manifest_path, label="prepare manifest")
+
+
+def _load_sample_ids(workspace_dir: Path, *, prepare_manifest: dict[str, Any]) -> list[str]:
+    manifest_path = workspace_dir / "prepare_manifest.json"
     sample_ids_raw = prepare_manifest.get("sample_ids")
     if not isinstance(sample_ids_raw, list) or not sample_ids_raw:
         raise ValueError(f"{manifest_path} sample_ids must be a non-empty JSON list.")
@@ -44,6 +48,22 @@ def _load_sample_ids(workspace_dir: Path) -> list[str]:
         seen_ids.add(sample_id)
         sample_ids.append(sample_id)
     return sample_ids
+
+
+def _configure_thread_env(*, prepare_manifest: dict[str, Any]) -> str | None:
+    explicit_env_names = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+    if any(str(os.environ.get(name) or "").strip() for name in explicit_env_names):
+        return None
+
+    configured_raw = prepare_manifest.get("num_threads")
+    thread_count: int | None = None if configured_raw is None else int(configured_raw)
+    if thread_count is None or int(thread_count) <= 0:
+        return None
+
+    thread_text = str(int(thread_count))
+    for env_name in explicit_env_names:
+        os.environ.setdefault(env_name, thread_text)
+    return "prepare_manifest.num_threads"
 
 
 def _resolve_batch_index(args_batch_index: int | None, parser: argparse.ArgumentParser) -> int:
@@ -140,7 +160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     batch_index = _resolve_batch_index(args.batch_index, parser)
     try:
-        sample_ids = _load_sample_ids(workspace_dir)
+        prepare_manifest = _load_prepare_manifest(workspace_dir)
+        sample_ids = _load_sample_ids(workspace_dir, prepare_manifest=prepare_manifest)
         start, end = _slice_bounds(
             total_count=len(sample_ids),
             batch_count=int(args.batch_count),
@@ -149,11 +170,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
+    thread_source = _configure_thread_env(prepare_manifest=prepare_manifest)
     selected_sample_ids = sample_ids[start:end]
     print(
         f"[batch] workspace={workspace_dir} batch={batch_index}/{int(args.batch_count) - 1} "
         f"samples={len(selected_sample_ids)} slice=[{start}:{end})"
     )
+    if thread_source is not None:
+        print(
+            f"[threads] source={thread_source} OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')} "
+            f"MKL_NUM_THREADS={os.environ.get('MKL_NUM_THREADS')} "
+            f"OPENBLAS_NUM_THREADS={os.environ.get('OPENBLAS_NUM_THREADS')}"
+        )
 
     executed_count = 0
     skipped_count = 0

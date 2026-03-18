@@ -87,7 +87,41 @@ def test_index_page_includes_theme_bootstrap_and_control() -> None:
     assert 'id="dashboard-top-tab-hopping"' in text
     assert 'id="dashboard-hopping-section"' in text
     assert 'id="hopping-apply"' in text
+    assert 'href="workflow.html"' in text
     assert "/assets/dashboard/dashboard.css" in text
+
+
+def test_workflow_page_includes_flowchart_mount_and_assets() -> None:
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/workflow.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert "observable_dashboard_theme_v1" in text
+    assert 'id="workflow-config-json"' in text
+    assert 'id="wf-flowchart"' in text
+    assert 'id="wf-quick-links"' in text
+    assert "Ensemble to Dynamics Navigation" in text
+    assert 'src="/assets/workflow/workflow_page.js"' in text
+
+
+def test_workflow_page_injects_navigation_config() -> None:
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/workflow.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert 'id="workflow-config-json"' in text
+    assert '"normal_modes":"/normal_modes.html"' in text
+    assert '"distribution_compare":"/distribution_compare.html"' in text
+    assert '"dashboard":"/index.html"' in text
+    assert '"molecule3d":"/molecule3d.html"' in text
+    assert '"md":"/md.html"' in text
+    assert '"pimd_placeholder":true' in text
 
 
 def test_molecule3d_page_includes_theme_bootstrap_and_control() -> None:
@@ -106,6 +140,49 @@ def test_molecule3d_page_includes_theme_bootstrap_and_control() -> None:
     assert 'id="dynamic-bonds"' in text
     assert "/assets/dashboard/dashboard_appearance.js" in text
     assert 'src="assets/mol3d/dashboard_mol3d_page.js"' not in text
+
+
+def test_md_page_includes_upload_controls_and_assets() -> None:
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/md.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert "observable_dashboard_theme_v1" in text
+    assert 'id="md-config-json"' in text
+    assert 'id="bootstrap-json"' in text
+    assert 'id="md-mode-tab-md"' in text
+    assert 'id="md-mode-tab-pimd"' in text
+    assert 'id="md-upload-input"' in text
+    assert 'id="md-dropzone"' in text
+    assert 'id="md-panel-pimd"' in text
+    assert 'id="controls-tab-measure"' in text
+    assert 'id="controls-tab-export"' in text
+    assert 'id="save-frame-xyz-btn"' in text
+    assert 'id="save-traj-xyz-btn"' in text
+    assert 'id="viewer"' in text
+    assert 'id="bond-plot"' in text
+    assert 'id="bond-color-settings-panel"' in text
+    assert 'data-appearance-control' in text
+    assert "/assets/md/md_page.js" in text
+    assert '/assets/dashboard/dashboard_appearance.js' in text
+
+
+def test_md_page_injects_local_xyz_config() -> None:
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/md.html")
+
+    response = endpoint()
+
+    assert response.status_code == 200
+    text = response.body.decode("utf-8")
+    assert 'id="md-config-json"' in text
+    assert '"data_mode":"local_xyz"' in text
+    assert '"pimd_mode":"placeholder"' in text
+    assert '"workflow":"/workflow.html"' in text
+    assert '"molecule3d":"/molecule3d.html"' in text
 
 
 def test_normal_modes_page_includes_upload_controls_and_assets() -> None:

@@ -865,12 +865,65 @@ def create_app(
     def index_page_alias() -> HTMLResponse:
         return index_page()
 
+    @app.get("/workflow.html", response_class=HTMLResponse)
+    def workflow_page() -> HTMLResponse:
+        workflow_file = frontend_dir / "workflow.html"
+        if workflow_file.exists():
+            html = workflow_file.read_text()
+            config_json = _json_script_text(
+                {
+                    "pages": {
+                        "normal_modes": "/normal_modes.html",
+                        "distribution_compare": "/distribution_compare.html",
+                        "dashboard": "/index.html",
+                        "molecule3d": "/molecule3d.html",
+                        "md": "/md.html",
+                    },
+                    "features": {
+                        "pimd_placeholder": True,
+                    },
+                }
+            )
+            html = html.replace(
+                '<script id="workflow-config-json" type="application/json">{}</script>',
+                f'<script id="workflow-config-json" type="application/json">{config_json}</script>',
+                1,
+            )
+            return HTMLResponse(html)
+        return HTMLResponse("<h1>Workflow page not found</h1>", status_code=404)
+
     @app.get("/molecule3d.html", response_class=HTMLResponse)
     def molecule3d_page() -> HTMLResponse:
         mol3d_file = frontend_dir / "molecule3d.html"
         if mol3d_file.exists():
             return HTMLResponse(mol3d_file.read_text())
         return HTMLResponse("<h1>Molecule3D page not found</h1>", status_code=404)
+
+    @app.get("/md.html", response_class=HTMLResponse)
+    def md_page() -> HTMLResponse:
+        md_file = frontend_dir / "md.html"
+        if md_file.exists():
+            html = md_file.read_text()
+            config_json = _json_script_text(
+                {
+                    "data_mode": "local_xyz",
+                    "pimd_mode": "placeholder",
+                    "pages": {
+                        "workflow": "/workflow.html",
+                        "molecule3d": "/molecule3d.html",
+                    },
+                    "meta": {
+                        "source_label": "Local XYZ",
+                    },
+                }
+            )
+            html = html.replace(
+                '<script id="md-config-json" type="application/json">{}</script>',
+                f'<script id="md-config-json" type="application/json">{config_json}</script>',
+                1,
+            )
+            return HTMLResponse(html)
+        return HTMLResponse("<h1>MD page not found</h1>", status_code=404)
 
     @app.get("/normal_modes.html", response_class=HTMLResponse)
     def normal_modes_page() -> HTMLResponse:

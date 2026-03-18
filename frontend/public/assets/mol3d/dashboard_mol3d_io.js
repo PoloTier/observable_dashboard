@@ -16,6 +16,7 @@
     exportTrajectoryVideo: (...args) => app.exportTrajectoryVideo(...args),
     cancelGifExport: (...args) => app.cancelGifExport(...args),
     loadTrajectory: (...args) => app.loadTrajectory(...args),
+    loadTrajectoryRecord: (...args) => app.loadTrajectoryRecord(...args),
     setNacVectorsVisible: (...args) => app.setNacVectorsVisible(...args),
     setDeVectorsVisible: (...args) => app.setDeVectorsVisible(...args),
     setDeNacVectorsVisible: (...args) => app.setDeNacVectorsVisible(...args),

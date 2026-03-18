@@ -7,6 +7,8 @@ A web-based dashboard for visualizing molecular dynamics observables and traject
 - **Interactive 2D Plots**: Visualize time-series data for bonds, angles, dihedrals, energies, eigenvalues, NAC, state populations, and raw keys
 - **3D Molecular Viewer**: WebGL-based playback with geometry measurements, hydrogen-bond overlays, NAC/dE/dE-NAC vectors, per-atom render rules, and GIF/WebM export
 - **Normal Modes Viewer**: Upload a single `molden` file, parse `frequency` / `FR-NORM-COORD`, and animate one normal mode at a time
+- **Workflow Navigation**: A clickable overview page that links the ensemble, comparison, MD, dashboard, and 3D visualization entry points
+- **Local MD Viewer**: Upload one multi-frame `xyz` trajectory directly in the browser for playback, measurement, and XYZ export without a PKL dataset
 - **Ensemble Statistics**: Automatic calculation of mean/median with confidence intervals across multiple trajectories
 - **Custom Data Support**: Inspect and plot arbitrary keys from your pickle files
 - **Expression Engine**: Evaluate custom mathematical expressions on your data
@@ -53,7 +55,9 @@ If you are not using the example config next to this repository, replace `../viz
 ### 3. Open in Browser
 
 - Main dashboard: `http://127.0.0.1:8000/`
+- Workflow map: `http://127.0.0.1:8000/workflow.html`
 - 3D viewer: `http://127.0.0.1:8000/molecule3d.html`
+- Local MD viewer: `http://127.0.0.1:8000/md.html`
 - Normal modes viewer: `http://127.0.0.1:8000/normal_modes.html`
 
 ## Usage

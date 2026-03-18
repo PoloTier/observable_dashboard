@@ -9,7 +9,7 @@
     return;
   }
 
-  const { dom, trajIds, state } = shared;
+  const { dom, trajIds, state, dataMode } = shared;
   let viewerResizeObserver = null;
   let removeAppearanceSubscription = null;
 
@@ -392,7 +392,11 @@
     window.addEventListener('resize', viewer.resizeViewer);
     bindViewerResizeObserver();
 
-    populateTrajectoryOptions();
+    if (dataMode === 'api') {
+      populateTrajectoryOptions();
+    } else if (dom.trajSelect) {
+      dom.trajSelect.disabled = true;
+    }
     bindTrajectoryControls();
     bindPlaybackControls();
     bindRenderStyleRuleControls();
@@ -400,6 +404,11 @@
     bindExportControls();
     bindNacControls();
     bindLifecycleCleanup();
+
+    if (dataMode === 'local_xyz') {
+      shared.setStatus('Upload a multi-frame XYZ file to begin.', false);
+      return;
+    }
 
     if (!trajIds.length) {
       shared.setStatus('No trajectories found in dataset.', true);
