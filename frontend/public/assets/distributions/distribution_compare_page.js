@@ -24,6 +24,7 @@
     '#16a34a',
   ];
   const DISTRIBUTION_DASH_PATTERNS = ['solid', 'dash', 'dot', 'dashdot', 'longdash', 'longdashdot'];
+  const WORKSPACE_SELECTION = 'selection';
   const WORKSPACE_OVERLAY = 'overlay';
   const WORKSPACE_SUMMARY = 'summary';
   const WORKSPACE_SPECTRUM = 'spectrum';
@@ -38,14 +39,20 @@
     activeCount: document.getElementById('dc-active-count'),
     listStatus: document.getElementById('dc-list-status'),
     distributionList: document.getElementById('dc-distribution-list'),
+    workspaceSelectionBtn: document.getElementById('dc-workspace-selection-btn'),
     workspaceOverlayBtn: document.getElementById('dc-workspace-overlay-btn'),
     workspaceSummaryBtn: document.getElementById('dc-workspace-summary-btn'),
     workspaceSpectrumBtn: document.getElementById('dc-workspace-spectrum-btn'),
     workspaceHint: document.getElementById('dc-workspace-hint'),
+    workspaceSelectionPanel: document.getElementById('dc-workspace-selection-panel'),
     workspaceOverlayPanel: document.getElementById('dc-workspace-overlay-panel'),
     workspaceSummaryPanel: document.getElementById('dc-workspace-summary-panel'),
     workspaceSpectrumPanel: document.getElementById('dc-workspace-spectrum-panel'),
+    selectionEnabled: document.getElementById('dc-selection-enabled'),
     measurementKind: document.getElementById('dc-measurement-kind'),
+    windowCenterEv: document.getElementById('dc-window-center-ev'),
+    windowWidthEv: document.getElementById('dc-window-width-ev'),
+    selectionProfilePanel: document.getElementById('dc-selection-profile-panel'),
     atom0: document.getElementById('dc-measurement-atom-0'),
     atom1: document.getElementById('dc-measurement-atom-1'),
     atom2: document.getElementById('dc-measurement-atom-2'),
@@ -57,6 +64,9 @@
     compareStatus: document.getElementById('dc-compare-status'),
     plotActivePill: document.getElementById('dc-plot-active-pill'),
     plot: document.getElementById('dc-plot'),
+    umapStatus: document.getElementById('dc-umap-status'),
+    umapActivePill: document.getElementById('dc-umap-active-pill'),
+    umapPlot: document.getElementById('dc-umap-plot'),
     summaryCount: document.getElementById('dc-summary-count'),
     summaryMeta: document.getElementById('dc-summary-meta'),
     summaryGrid: document.getElementById('dc-summary-grid'),
@@ -88,19 +98,36 @@
     uploadInFlight: false,
     listInFlight: false,
     compareInFlight: false,
+    umapInFlight: false,
     spectrumCompareInFlight: false,
     pathLoadInFlight: false,
     browseListInFlight: false,
     deleteInFlightIds: new Set(),
     compareRequestSeq: 0,
+    umapRequestSeq: 0,
     spectrumRequestSeq: 0,
     lastCompareResult: null,
+    lastUmapResult: null,
     lastSpectrumResult: null,
     spectrumPairOptions: [],
     selectedSpectrumPairKeys: new Set(),
+    selectionEnabled: false,
+    selectionProfilesByDistribution: {},
   };
   let fileBrowserCurrentPath = '';
   let fileBrowserParentPath = null;
+  let overlayRefreshTimer = null;
+  let overlayRefreshPending = { geometry: false, umap: false };
+  const DEFAULT_WINDOW_CENTER_EV = 3.9;
+  const DEFAULT_WINDOW_WIDTH_EV = 0.30;
+  const DEFAULT_SOAP_R_CUT = 5.0;
+  const DEFAULT_SOAP_N_MAX = 6;
+  const DEFAULT_SOAP_L_MAX = 4;
+  const DEFAULT_SOAP_SIGMA = 0.3;
+  const DEFAULT_UMAP_N_NEIGHBORS = 50;
+  const DEFAULT_UMAP_MIN_DIST = 0.1;
+  const DEFAULT_UMAP_METRIC = 'euclidean';
+  const DEFAULT_UMAP_RANDOM_STATE = 42;
 
   function readConfig() {
     const defaults = {
@@ -142,6 +169,21 @@
           apiBase,
           endpoints.compare_geometry || endpoints.compareGeometry,
           '/distributions/compare-geometry'
+        ),
+        compareGeometryWindow: resolveEndpoint(
+          apiBase,
+          endpoints.compare_geometry_window || endpoints.compareGeometryWindow,
+          '/distributions/compare-geometry-window'
+        ),
+        projectSoapUmapWindow: resolveEndpoint(
+          apiBase,
+          endpoints.project_soap_umap_window || endpoints.projectSoapUmapWindow,
+          '/distributions/project-soap-umap-window'
+        ),
+        projectSoapUmap: resolveEndpoint(
+          apiBase,
+          endpoints.project_soap_umap || endpoints.projectSoapUmap,
+          '/distributions/project-soap-umap'
         ),
         compareSpectrum: resolveEndpoint(
           apiBase,
@@ -252,6 +294,12 @@
     dom.compareStatus.classList.toggle('error', !!isError);
   }
 
+  function setUmapStatus(message, isError = false) {
+    if (!dom.umapStatus) return;
+    dom.umapStatus.textContent = String(message || '');
+    dom.umapStatus.classList.toggle('error', !!isError);
+  }
+
   function setSpectrumStatus(message, isError = false) {
     if (!dom.spectrumStatus) return;
     dom.spectrumStatus.textContent = String(message || '');
@@ -271,14 +319,22 @@
 
   function syncVisibleWorkspacePlot() {
     if (typeof Plotly === 'undefined') return;
-    const inOverlay = state.workspace === WORKSPACE_OVERLAY;
-    const inSpectrum = state.workspace === WORKSPACE_SPECTRUM;
-    const plotEl = inOverlay ? dom.plot : inSpectrum ? dom.spectrumPlot : null;
-    const result = inOverlay ? state.lastCompareResult : inSpectrum ? state.lastSpectrumResult : null;
-    const renderFn = inOverlay ? renderComparePlot : inSpectrum ? renderSpectrumPlot : null;
-    if (!plotEl || !result || typeof renderFn !== 'function') return;
+    const tasks = [];
+    if (state.workspace === WORKSPACE_OVERLAY) {
+      if (dom.plot && state.lastCompareResult) {
+        tasks.push({ plotEl: dom.plot, result: state.lastCompareResult, renderFn: renderComparePlot });
+      }
+      if (dom.umapPlot && state.lastUmapResult) {
+        tasks.push({ plotEl: dom.umapPlot, result: state.lastUmapResult, renderFn: renderUmapPlot });
+      }
+    } else if (state.workspace === WORKSPACE_SPECTRUM) {
+      if (dom.spectrumPlot && state.lastSpectrumResult) {
+        tasks.push({ plotEl: dom.spectrumPlot, result: state.lastSpectrumResult, renderFn: renderSpectrumPlot });
+      }
+    }
+    if (!tasks.length) return;
 
-    const refresh = () => {
+    const refreshOne = ({ plotEl, result, renderFn }) => {
       const hasRenderedPlot = Array.isArray(plotEl.data) && plotEl.data.length > 0;
       if (hasRenderedPlot && Plotly.Plots && typeof Plotly.Plots.resize === 'function') {
         try {
@@ -291,6 +347,12 @@
       renderFn(result);
     };
 
+    const refresh = () => {
+      for (const task of tasks) {
+        refreshOne(task);
+      }
+    };
+
     if (typeof window.requestAnimationFrame === 'function') {
       window.requestAnimationFrame(refresh);
       return;
@@ -299,10 +361,15 @@
   }
 
   function syncWorkspaceUi() {
+    const inSelection = state.workspace === WORKSPACE_SELECTION;
     const inOverlay = state.workspace === WORKSPACE_OVERLAY;
     const inSummary = state.workspace === WORKSPACE_SUMMARY;
     const inSpectrum = state.workspace === WORKSPACE_SPECTRUM;
 
+    if (dom.workspaceSelectionBtn) {
+      dom.workspaceSelectionBtn.classList.toggle('is-active', inSelection);
+      dom.workspaceSelectionBtn.setAttribute('aria-selected', inSelection ? 'true' : 'false');
+    }
     if (dom.workspaceOverlayBtn) {
       dom.workspaceOverlayBtn.classList.toggle('is-active', inOverlay);
       dom.workspaceOverlayBtn.setAttribute('aria-selected', inOverlay ? 'true' : 'false');
@@ -316,6 +383,9 @@
       dom.workspaceSpectrumBtn.setAttribute('aria-selected', inSpectrum ? 'true' : 'false');
     }
 
+    if (dom.workspaceSelectionPanel) {
+      dom.workspaceSelectionPanel.hidden = !inSelection;
+    }
     if (dom.workspaceOverlayPanel) {
       dom.workspaceOverlayPanel.hidden = !inOverlay;
     }
@@ -327,10 +397,12 @@
     }
 
     if (dom.workspaceHint) {
-      dom.workspaceHint.textContent = inOverlay
-        ? 'Adjust geometry settings and render the active distributions into one overlay histogram.'
+      dom.workspaceHint.textContent = inSelection
+        ? 'Choose the selection window and the active electronic profile for each distribution.'
+        : inOverlay
+          ? 'Adjust structure settings. Histogram and UMAP refresh automatically for the active distributions.'
         : inSummary
-          ? 'Review the current geometry comparison metadata and per-distribution statistics.'
+          ? 'Review the current all-vs-selected geometry statistics for each distribution.'
           : 'Inspect the automatically refreshed absorption spectra and optional transition-pair overlays.';
     }
 
@@ -338,7 +410,9 @@
   }
 
   function setWorkspace(nextWorkspace) {
-    const workspace = nextWorkspace === WORKSPACE_SUMMARY
+    const workspace = nextWorkspace === WORKSPACE_SELECTION
+      ? WORKSPACE_SELECTION
+      : nextWorkspace === WORKSPACE_SUMMARY
       ? WORKSPACE_SUMMARY
       : nextWorkspace === WORKSPACE_SPECTRUM
         ? WORKSPACE_SPECTRUM
@@ -380,6 +454,7 @@
     if (dom.filePicker) dom.filePicker.classList.toggle('is-disabled', busy);
     if (dom.openServerBundleBtn) dom.openServerBundleBtn.disabled = busy;
     if (dom.refreshBtn) dom.refreshBtn.disabled = busy;
+    if (dom.selectionEnabled) dom.selectionEnabled.disabled = busy;
     if (dom.compareBtn) {
       dom.compareBtn.disabled = state.compareInFlight || !getActiveIds().length;
     }
@@ -449,6 +524,90 @@
     return items;
   }
 
+  function getActiveSelectionItems() {
+    const items = [];
+    for (const distribution of state.distributions) {
+      if (!state.activeIds.has(distribution.id)) continue;
+      const profiles = Array.isArray(distribution.electronicProfiles) ? distribution.electronicProfiles : [];
+      if (!profiles.length) continue;
+      const preferredProfileId = firstNonEmptyString(
+        state.selectionProfilesByDistribution[distribution.id],
+        distribution.defaultElectronicProfileId
+      );
+      const selectedProfile = profiles.find((profile) => profile.profileId === preferredProfileId) || profiles[0];
+      if (!selectedProfile) continue;
+      items.push({
+        distribution,
+        profile: selectedProfile,
+      });
+    }
+    return items;
+  }
+
+  function getSelectionContext() {
+    const activeDistributions = state.distributions.filter((distribution) => state.activeIds.has(distribution.id));
+    const eligibleItems = [];
+    const skippedDistributions = [];
+    for (const distribution of activeDistributions) {
+      const profiles = Array.isArray(distribution.electronicProfiles) ? distribution.electronicProfiles : [];
+      if (!profiles.length) {
+        skippedDistributions.push(distribution);
+        continue;
+      }
+      const preferredProfileId = firstNonEmptyString(
+        state.selectionProfilesByDistribution[distribution.id],
+        distribution.defaultElectronicProfileId
+      );
+      const selectedProfile = profiles.find((profile) => profile.profileId === preferredProfileId) || profiles[0];
+      if (!selectedProfile) {
+        skippedDistributions.push(distribution);
+        continue;
+      }
+      eligibleItems.push({
+        distribution,
+        profile: selectedProfile,
+      });
+    }
+    return {
+      activeDistributions,
+      eligibleItems,
+      skippedDistributions,
+    };
+  }
+
+  function getSelectionSkippedLabels(limit = 3) {
+    const skipped = getSelectionContext().skippedDistributions;
+    return skipped.slice(0, Math.max(0, limit)).map((distribution) => distribution.name || distribution.id);
+  }
+
+  function buildSkippedDistributionsText() {
+    const skipped = getSelectionContext().skippedDistributions;
+    if (!skipped.length) return '';
+    const labels = getSelectionSkippedLabels(3);
+    let text = ` Skipped ${skipped.length} active bundle${skipped.length === 1 ? '' : 's'} without electronic profiles`;
+    if (labels.length) {
+      text += `: ${labels.join(', ')}`;
+      if (skipped.length > labels.length) {
+        text += ', ...';
+      }
+    }
+    return `${text}.`;
+  }
+
+  function syncSelectionControlsState() {
+    const enabled = !!state.selectionEnabled;
+    if (dom.selectionEnabled) {
+      dom.selectionEnabled.checked = enabled;
+    }
+    if (dom.windowCenterEv) dom.windowCenterEv.disabled = !enabled;
+    if (dom.windowWidthEv) dom.windowWidthEv.disabled = !enabled;
+    if (dom.selectionProfilePanel) {
+      dom.selectionProfilePanel.querySelectorAll('select').forEach((selectEl) => {
+        selectEl.disabled = !enabled;
+      });
+    }
+  }
+
   function getSelectedSpectrumPairs() {
     return state.spectrumPairOptions
       .filter((option) => state.selectedSpectrumPairKeys.has(option.key))
@@ -458,10 +617,16 @@
   function syncActivePills() {
     const total = state.distributions.length;
     const active = getActiveIds().length;
+    const activeSelectionItems = getActiveSelectionItems().length;
     const activeSpectrumSeries = getActiveSpectrumSeriesItems().length;
     if (dom.distributionCount) dom.distributionCount.textContent = String(total);
     if (dom.activeCount) dom.activeCount.textContent = `${active} active`;
     if (dom.plotActivePill) dom.plotActivePill.textContent = `${active} active`;
+    if (dom.umapActivePill) {
+      dom.umapActivePill.textContent = state.selectionEnabled
+        ? `${activeSelectionItems} prof${activeSelectionItems === 1 ? '' : 's'}`
+        : `${active} bundle${active === 1 ? '' : 's'}`;
+    }
     if (dom.spectrumActivePill) dom.spectrumActivePill.textContent = `${activeSpectrumSeries} series`;
   }
 
@@ -483,6 +648,26 @@
     empty.className = 'distribution-empty';
     empty.textContent = String(message || 'No comparison has been rendered yet.');
     dom.plot.appendChild(empty);
+  }
+
+  function purgeUmapPlot() {
+    if (dom.umapPlot && typeof Plotly !== 'undefined') {
+      try {
+        Plotly.purge(dom.umapPlot);
+      } catch (_) {
+        // Ignore purge failures for partially initialized plots.
+      }
+    }
+  }
+
+  function clearUmapPlot(message) {
+    if (!dom.umapPlot) return;
+    purgeUmapPlot();
+    dom.umapPlot.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'distribution-empty';
+    empty.textContent = String(message || 'No UMAP projection has been rendered yet.');
+    dom.umapPlot.appendChild(empty);
   }
 
   function purgeSpectrumPlot() {
@@ -1075,6 +1260,73 @@
     }
   }
 
+  function renderSelectionProfileControls() {
+    syncActivePills();
+    if (!dom.selectionProfilePanel) return;
+    dom.selectionProfilePanel.innerHTML = '';
+
+    const activeIds = getActiveIds();
+    if (!activeIds.length) {
+      const empty = document.createElement('div');
+      empty.className = 'spectrum-pair-empty';
+      empty.textContent = 'Enable one or more cached distributions to configure window-selection profiles.';
+      dom.selectionProfilePanel.appendChild(empty);
+      syncSelectionControlsState();
+      return;
+    }
+
+    const activeDistributions = state.distributions.filter((distribution) => state.activeIds.has(distribution.id));
+    const selectableDistributions = activeDistributions.filter(
+      (distribution) => Array.isArray(distribution.electronicProfiles) && distribution.electronicProfiles.length > 0
+    );
+    if (!selectableDistributions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'spectrum-pair-empty';
+      empty.textContent = 'Active distributions need at least one electronic profile before window selection can be applied.';
+      dom.selectionProfilePanel.appendChild(empty);
+      syncSelectionControlsState();
+      return;
+    }
+
+    for (const distribution of selectableDistributions) {
+      const profiles = Array.isArray(distribution.electronicProfiles) ? distribution.electronicProfiles : [];
+      if (!profiles.length) continue;
+      const selectedProfileId = firstNonEmptyString(
+        state.selectionProfilesByDistribution[distribution.id],
+        distribution.defaultElectronicProfileId,
+        profiles[0] && profiles[0].profileId
+      );
+      const selectedProfile = profiles.find((profile) => profile.profileId === selectedProfileId) || profiles[0];
+      const item = document.createElement('div');
+      item.className = 'selection-profile-item';
+
+      const name = document.createElement('div');
+      name.className = 'selection-profile-name';
+      name.textContent = distribution.name;
+
+      const select = document.createElement('select');
+      select.dataset.selectionProfileDistributionId = distribution.id;
+      select.disabled = !state.selectionEnabled;
+      for (const profile of profiles) {
+        const option = document.createElement('option');
+        option.value = profile.profileId;
+        option.textContent = profile.label;
+        option.selected = profile.profileId === selectedProfile.profileId;
+        select.appendChild(option);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'selection-profile-meta';
+      meta.textContent = buildProfileSummaryText(selectedProfile) || selectedProfile.profileId;
+
+      item.appendChild(name);
+      item.appendChild(select);
+      item.appendChild(meta);
+      dom.selectionProfilePanel.appendChild(item);
+    }
+    syncSelectionControlsState();
+  }
+
   function buildChip(text, modifier) {
     const chip = document.createElement('span');
     chip.className = modifier ? `chip ${modifier}` : 'chip';
@@ -1099,6 +1351,7 @@
         .map((item, index) => normalizeDistributionRecord(item, index));
       const previousActiveIds = preserveActive ? new Set(state.activeIds) : new Set();
       const previousSpectrumSeriesKeys = preserveActive ? new Set(state.activeSpectrumSeriesKeys) : new Set();
+      const previousSelectionProfiles = preserveActive ? { ...state.selectionProfilesByDistribution } : {};
       state.distributions = records;
 
       const nextActiveIds = new Set();
@@ -1138,9 +1391,25 @@
       }
       state.activeIds = nextActiveIds;
       state.activeSpectrumSeriesKeys = nextSpectrumSeriesKeys;
+      const nextSelectionProfiles = {};
+      for (const record of records) {
+        const profiles = Array.isArray(record.electronicProfiles) ? record.electronicProfiles : [];
+        if (!profiles.length) continue;
+        const availableProfileIds = new Set(profiles.map((profile) => profile.profileId));
+        let selectedProfileId = firstNonEmptyString(
+          previousSelectionProfiles[record.id],
+          record.defaultElectronicProfileId
+        );
+        if (!selectedProfileId || !availableProfileIds.has(selectedProfileId)) {
+          selectedProfileId = profiles[0].profileId;
+        }
+        nextSelectionProfiles[record.id] = selectedProfileId;
+      }
+      state.selectionProfilesByDistribution = nextSelectionProfiles;
 
       renderDistributionList();
-      reconcileCompareResult();
+      renderSelectionProfileControls();
+      scheduleOverlayRefresh({ geometry: true, umap: true, immediate: true });
       await refreshSpectrumView();
       const distributionCount = records.length;
       setListStatus(
@@ -1154,18 +1423,23 @@
       state.activeIds = new Set();
       state.activeSpectrumSeriesKeys = new Set();
       state.lastCompareResult = null;
+      state.lastUmapResult = null;
       state.lastSpectrumResult = null;
       state.spectrumPairOptions = [];
       state.selectedSpectrumPairKeys = new Set();
+      state.selectionProfilesByDistribution = {};
       renderDistributionList();
+      renderSelectionProfileControls();
       renderSpectrumPairOptions({
         availablePairs: [],
         emptyMessage: 'Unable to load transition pairs because the distribution list failed to load.',
       });
       clearPlot('Unable to load cached distributions from the backend.');
+      clearUmapPlot('Unable to load cached distributions from the backend.');
       clearSpectrumPlot('Unable to load cached distributions from the backend.');
       clearSummary('Unable to load cached distributions from the backend.');
       setListStatus(`Failed to load distributions: ${error.message}`, true);
+      setUmapStatus('Unable to render the SOAP UMAP projection because the distribution list failed to load.', true);
       setSpectrumPairStatus('Unable to load transition pairs because the distribution list failed to load.', true);
       setSpectrumStatus('Unable to render absorption spectra because the distribution list failed to load.', true);
     } finally {
@@ -1284,6 +1558,275 @@
     } finally {
       if (requestSeq === state.spectrumRequestSeq) {
         state.spectrumCompareInFlight = false;
+        syncActionState();
+      }
+    }
+  }
+
+  function scheduleOverlayRefresh(options = {}) {
+    const immediate = options.immediate === true;
+    if (options.geometry) overlayRefreshPending.geometry = true;
+    if (options.umap) overlayRefreshPending.umap = true;
+    if (!overlayRefreshPending.geometry && !overlayRefreshPending.umap) return;
+
+    const flush = () => {
+      overlayRefreshTimer = null;
+      const pending = {
+        geometry: overlayRefreshPending.geometry,
+        umap: overlayRefreshPending.umap,
+      };
+      overlayRefreshPending = { geometry: false, umap: false };
+      if (pending.geometry) {
+        void refreshGeometryWindowView();
+      }
+      if (pending.umap) {
+        void refreshUmapView();
+      }
+    };
+
+    if (overlayRefreshTimer != null) {
+      clearTimeout(overlayRefreshTimer);
+      overlayRefreshTimer = null;
+    }
+    if (immediate) {
+      flush();
+      return;
+    }
+    overlayRefreshTimer = window.setTimeout(flush, 400);
+  }
+
+  function readWindowCenterValue() {
+    const rawValue = firstFiniteNumber(dom.windowCenterEv && dom.windowCenterEv.value, DEFAULT_WINDOW_CENTER_EV);
+    return Number.isFinite(rawValue) ? Number(rawValue) : DEFAULT_WINDOW_CENTER_EV;
+  }
+
+  function readWindowWidthValue() {
+    const rawValue = firstFiniteNumber(dom.windowWidthEv && dom.windowWidthEv.value, DEFAULT_WINDOW_WIDTH_EV);
+    return Number.isFinite(rawValue) ? Number(rawValue) : DEFAULT_WINDOW_WIDTH_EV;
+  }
+
+  function readWindowBounds() {
+    const center = readWindowCenterValue();
+    const width = readWindowWidthValue();
+    if (!Number.isFinite(center) || !Number.isFinite(width) || width <= 0) return null;
+    const halfWidth = width / 2;
+    return {
+      center,
+      width,
+      min: center - halfWidth,
+      max: center + halfWidth,
+    };
+  }
+
+  function clearGeometryWindowResult(message, statusMessage, isError = false) {
+    state.lastCompareResult = null;
+    clearPlot(message);
+    clearSummary(message);
+    setCompareStatus(statusMessage || message, isError);
+  }
+
+  function clearUmapResult(message, statusMessage, isError = false) {
+    state.lastUmapResult = null;
+    clearUmapPlot(message);
+    setUmapStatus(statusMessage || message, isError);
+  }
+
+  function buildGeometryWindowPayload(selectionContext = getSelectionContext()) {
+    const items = Array.isArray(selectionContext.eligibleItems) ? selectionContext.eligibleItems : [];
+    if (!items.length) {
+      throw new Error(
+        'Selection is enabled, but none of the active distributions provide an electronic profile for window selection.'
+      );
+    }
+    const measurement = collectMeasurementInputs();
+    const windowCenterEv = parsePositiveFloatInput(dom.windowCenterEv, 'Window center');
+    return {
+      items: items.map((item) => ({
+        distribution_id: item.distribution.id,
+        profile_id: item.profile.profileId,
+      })),
+      measurement_kind: measurement.measurementKind,
+      atom_indices: measurement.atomIndices,
+      bins: Number.isFinite(measurement.histogramBins) ? measurement.histogramBins : 60,
+      window_center_ev: windowCenterEv,
+      window_width_ev: parsePositiveFloatInput(dom.windowWidthEv, 'Window width'),
+    };
+  }
+
+  function buildUmapPayload(selectionContext = getSelectionContext()) {
+    const items = Array.isArray(selectionContext.eligibleItems) ? selectionContext.eligibleItems : [];
+    if (!items.length) {
+      throw new Error(
+        'Selection is enabled, but none of the active distributions provide an electronic profile for the SOAP UMAP projection.'
+      );
+    }
+    return {
+      items: items.map((item) => ({
+        distribution_id: item.distribution.id,
+        profile_id: item.profile.profileId,
+      })),
+      window_center_ev: parsePositiveFloatInput(dom.windowCenterEv, 'Window center'),
+      window_width_ev: parsePositiveFloatInput(dom.windowWidthEv, 'Window width'),
+      soap_atom_indices: [],
+      soap_r_cut: DEFAULT_SOAP_R_CUT,
+      soap_n_max: DEFAULT_SOAP_N_MAX,
+      soap_l_max: DEFAULT_SOAP_L_MAX,
+      soap_sigma: DEFAULT_SOAP_SIGMA,
+      umap_n_neighbors: DEFAULT_UMAP_N_NEIGHBORS,
+      umap_min_dist: DEFAULT_UMAP_MIN_DIST,
+      umap_metric: DEFAULT_UMAP_METRIC,
+      umap_random_state: DEFAULT_UMAP_RANDOM_STATE,
+    };
+  }
+
+  function buildProjectSoapUmapPayload() {
+    const activeIds = getActiveIds();
+    if (!activeIds.length) {
+      throw new Error('Enable at least one active distribution before requesting the SOAP UMAP projection.');
+    }
+    return {
+      distribution_ids: activeIds,
+      soap_atom_indices: [],
+      soap_r_cut: DEFAULT_SOAP_R_CUT,
+      soap_n_max: DEFAULT_SOAP_N_MAX,
+      soap_l_max: DEFAULT_SOAP_L_MAX,
+      soap_sigma: DEFAULT_SOAP_SIGMA,
+      umap_n_neighbors: DEFAULT_UMAP_N_NEIGHBORS,
+      umap_min_dist: DEFAULT_UMAP_MIN_DIST,
+      umap_metric: DEFAULT_UMAP_METRIC,
+      umap_random_state: DEFAULT_UMAP_RANDOM_STATE,
+    };
+  }
+
+  async function refreshGeometryWindowView() {
+    let payload = null;
+    const selectionContext = getSelectionContext();
+    try {
+      payload = state.selectionEnabled
+        ? buildGeometryWindowPayload(selectionContext)
+        : buildComparePayload();
+    } catch (error) {
+      clearGeometryWindowResult(
+        state.selectionEnabled
+          ? 'Enable one or more active distributions with electronic profiles to display the windowed geometry comparison.'
+          : 'Enable one or more active distributions to display the geometry comparison.',
+        `${error.message}${state.selectionEnabled ? buildSkippedDistributionsText() : ''}`,
+        true
+      );
+      return;
+    }
+
+    const requestSeq = ++state.compareRequestSeq;
+    state.compareInFlight = true;
+    syncActionState();
+    setCompareStatus(
+      state.selectionEnabled
+        ? 'Refreshing all-vs-selected geometry comparison...'
+        : 'Refreshing all-geometry comparison...',
+      false
+    );
+    try {
+      const responsePayload = await fetchPayload(
+        state.selectionEnabled ? state.endpoints.compareGeometryWindow : state.endpoints.compareGeometry,
+        {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        }
+      );
+      if (requestSeq !== state.compareRequestSeq) return;
+      const normalized = normalizeCompareResult(responsePayload, payload);
+      if (!normalized.entries.length) {
+        throw new Error(
+          state.selectionEnabled
+            ? 'The backend returned no geometry distributions for the current window selection.'
+            : 'The backend returned no geometry distributions for the active bundles.'
+        );
+      }
+      normalized.selectionEnabled = state.selectionEnabled;
+      normalized.skippedDistributions = state.selectionEnabled
+        ? selectionContext.skippedDistributions.map((distribution) => distribution.name || distribution.id)
+        : [];
+      state.lastCompareResult = normalized;
+      renderComparePlot(normalized);
+      renderSummary(normalized);
+      setCompareStatus(buildGeometryWindowStatus(normalized), false);
+    } catch (error) {
+      if (requestSeq !== state.compareRequestSeq) return;
+      clearGeometryWindowResult(
+        state.selectionEnabled
+          ? 'Failed to render the windowed geometry comparison.'
+          : 'Failed to render the geometry comparison.',
+        `Failed to refresh the ${state.selectionEnabled ? 'windowed ' : ''}geometry comparison: ${error.message}`,
+        true
+      );
+    } finally {
+      if (requestSeq === state.compareRequestSeq) {
+        state.compareInFlight = false;
+        syncActionState();
+      }
+    }
+  }
+
+  async function refreshUmapView() {
+    let payload = null;
+    const selectionContext = getSelectionContext();
+    try {
+      payload = state.selectionEnabled
+        ? buildUmapPayload(selectionContext)
+        : buildProjectSoapUmapPayload();
+    } catch (error) {
+      clearUmapResult(
+        state.selectionEnabled
+          ? 'Enable one or more active distributions with electronic profiles to display the SOAP UMAP projection.'
+          : 'Enable one or more active distributions to display the SOAP UMAP projection.',
+        `${error.message}${state.selectionEnabled ? buildSkippedDistributionsText() : ''}`,
+        true
+      );
+      return;
+    }
+
+    const requestSeq = ++state.umapRequestSeq;
+    state.umapInFlight = true;
+    syncActionState();
+    setUmapStatus('Refreshing SOAP UMAP projection...', false);
+    try {
+      const responsePayload = await fetchPayload(
+        state.selectionEnabled ? state.endpoints.projectSoapUmapWindow : state.endpoints.projectSoapUmap,
+        {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        }
+      );
+      if (requestSeq !== state.umapRequestSeq) return;
+      const normalized = normalizeUmapResult(responsePayload, payload);
+      if (!normalized.points.length) {
+        throw new Error('The backend returned no projected geometries for the SOAP UMAP request.');
+      }
+      normalized.selectionEnabled = state.selectionEnabled;
+      normalized.skippedDistributions = state.selectionEnabled
+        ? selectionContext.skippedDistributions.map((distribution) => distribution.name || distribution.id)
+        : [];
+      state.lastUmapResult = normalized;
+      renderUmapPlot(normalized);
+      setUmapStatus(buildUmapStatus(normalized), false);
+    } catch (error) {
+      if (requestSeq !== state.umapRequestSeq) return;
+      clearUmapResult(
+        'Failed to render the SOAP UMAP projection.',
+        `Failed to refresh the SOAP UMAP projection: ${error.message}`,
+        true
+      );
+    } finally {
+      if (requestSeq === state.umapRequestSeq) {
+        state.umapInFlight = false;
         syncActionState();
       }
     }
@@ -1622,15 +2165,22 @@
   function normalizeCompareEntry(rawItem, index) {
     const raw = rawItem && typeof rawItem === 'object' ? rawItem : {};
     const distributionId = firstNonEmptyString(raw.distribution_id, raw.id, raw.key, raw.uid) || `series-${index + 1}`;
-    const values = coerceNumberArray(
+    const allValues = coerceNumberArray(
+      raw.all_values ||
       raw.values ||
       raw.measurement_values ||
       raw.measurements ||
       raw.samples ||
       raw.data
     );
+    const selectedValues = coerceNumberArray(
+      raw.selected_values ||
+      raw.selected_measurements ||
+      raw.selected ||
+      raw.window_selected_values
+    );
     const histogram = normalizeHistogram(raw);
-    if (!values.length && !histogram) return null;
+    if (!allValues.length && !histogram) return null;
     const sourceFilename = firstNonEmptyString(
       raw.source_filename,
       raw.file_name,
@@ -1649,9 +2199,39 @@
       id: distributionId,
       name,
       sourceFilename,
-      values,
+      profileId: firstNonEmptyString(raw.profile_id),
+      profileLabel: firstNonEmptyString(raw.profile_label),
+      values: allValues,
+      allValues,
+      selectedValues,
       histogram,
-      summary: normalizeSummary(raw.summary || raw.stats || raw.statistics, values, histogram),
+      allSummary: normalizeSummary(
+        raw.all_summary || raw.summary || raw.stats || raw.statistics,
+        allValues,
+        histogram
+      ),
+      selectedSummary: normalizeSummary(
+        raw.selected_summary || raw.selected_stats || raw.selected_statistics,
+        selectedValues,
+        null
+      ),
+      selectedCount: firstFiniteNumber(
+        raw.selected_count,
+        raw.selection_count,
+        selectedValues.length
+      ) || 0,
+      selectedFraction: firstFiniteNumber(
+        raw.selected_fraction,
+        allValues.length > 0 ? (selectedValues.length / allValues.length) : 0
+      ) || 0,
+      effectiveSampleSize: firstFiniteNumber(raw.effective_sample_size, raw.ess, 0) || 0,
+      meanSelectionWeight: firstFiniteNumber(raw.mean_selection_weight, 0) || 0,
+      maxSelectionWeight: firstFiniteNumber(raw.max_selection_weight, 0) || 0,
+      summary: normalizeSummary(
+        raw.all_summary || raw.summary || raw.stats || raw.statistics,
+        allValues,
+        histogram
+      ),
     };
   }
 
@@ -1701,7 +2281,84 @@
       measurementKind,
       atomIndices,
       unit,
+      bins: firstFiniteNumber(payload && payload.bins, fallbackRequest && fallbackRequest.bins),
+      windowCenterEv: firstFiniteNumber(payload && payload.window_center_ev, fallbackRequest && fallbackRequest.window_center_ev),
+      windowWidthEv: firstFiniteNumber(payload && payload.window_width_ev, fallbackRequest && fallbackRequest.window_width_ev),
+      windowMinEv: firstFiniteNumber(payload && payload.window_min_ev),
+      windowMaxEv: firstFiniteNumber(payload && payload.window_max_ev),
+      selectionMode: firstNonEmptyString(payload && payload.selection_mode, 'none') || 'none',
       entries,
+    };
+  }
+
+  function normalizeUmapPoint(rawItem) {
+    const raw = rawItem && typeof rawItem === 'object' ? rawItem : {};
+    const distributionId = firstNonEmptyString(raw.distribution_id, raw.id, raw.key, raw.uid);
+    const profileId = firstNonEmptyString(raw.profile_id, raw.profile);
+    const x = firstFiniteNumber(raw.x);
+    const y = firstFiniteNumber(raw.y);
+    if (!distributionId || !profileId || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return {
+      distributionId,
+      distributionLabel: firstNonEmptyString(raw.distribution_label, lookupDistributionName(distributionId, '')) || distributionId,
+      profileId,
+      profileLabel: firstNonEmptyString(raw.profile_label, profileId),
+      sampleIndex: firstFiniteNumber(raw.sample_index, 0) || 0,
+      sampleId: firstNonEmptyString(raw.sample_id, `sample-${raw.sample_index || 0}`),
+      x: Number(x),
+      y: Number(y),
+      selectionWeight: firstFiniteNumber(raw.selection_weight, 0) || 0,
+      normalizedSelectionWeight: firstFiniteNumber(raw.normalized_selection_weight, 0) || 0,
+      hardSelected: !!raw.hard_selected,
+    };
+  }
+
+  function normalizeUmapResult(payload, fallbackRequest) {
+    const rawProjectionMeta = payload && payload.projection_meta && typeof payload.projection_meta === 'object'
+      ? payload.projection_meta
+      : {};
+    const rawSelectionMeta = payload && payload.selection_meta && typeof payload.selection_meta === 'object'
+      ? payload.selection_meta
+      : {};
+    const rawDistributions = Array.isArray(payload && payload.distributions) ? payload.distributions : [];
+    return {
+      points: Array.isArray(payload && payload.points)
+        ? payload.points.map((item) => normalizeUmapPoint(item)).filter(Boolean)
+        : [],
+      projectionMeta: {
+        method: firstNonEmptyString(rawProjectionMeta.method, 'umap') || 'umap',
+        featureKind: firstNonEmptyString(rawProjectionMeta.feature_kind, 'soap_atomwise_pooled') || 'soap_atomwise_pooled',
+        axisLabels: Array.isArray(rawProjectionMeta.axis_labels)
+          ? rawProjectionMeta.axis_labels.map((value) => String(value))
+          : ['UMAP 1', 'UMAP 2'],
+        featureDimension: firstFiniteNumber(rawProjectionMeta.feature_dimension, 0) || 0,
+      },
+      selectionMeta: {
+        windowCenterEv: firstFiniteNumber(rawSelectionMeta.window_center_ev, fallbackRequest && fallbackRequest.window_center_ev),
+        windowWidthEv: firstFiniteNumber(rawSelectionMeta.window_width_ev, fallbackRequest && fallbackRequest.window_width_ev),
+        windowMinEv: firstFiniteNumber(rawSelectionMeta.window_min_ev),
+        windowMaxEv: firstFiniteNumber(rawSelectionMeta.window_max_ev),
+        selectionMode: firstNonEmptyString(rawSelectionMeta.selection_mode, 'none') || 'none',
+        topologySignature: firstNonEmptyString(rawSelectionMeta.topology_signature),
+      },
+      distributions: rawDistributions
+        .map((item) => {
+          const raw = item && typeof item === 'object' ? item : {};
+          const distributionId = firstNonEmptyString(raw.distribution_id);
+          if (!distributionId) return null;
+          return {
+            distributionId,
+            distributionLabel: firstNonEmptyString(raw.distribution_label, lookupDistributionName(distributionId, '')) || distributionId,
+            profileId: firstNonEmptyString(raw.profile_id),
+            profileLabel: firstNonEmptyString(raw.profile_label),
+            totalCount: firstFiniteNumber(raw.total_count, 0) || 0,
+            selectedCount: firstFiniteNumber(raw.selected_count, 0) || 0,
+            selectedFraction: firstFiniteNumber(raw.selected_fraction, 0) || 0,
+            effectiveSampleSize: firstFiniteNumber(raw.effective_sample_size, 0) || 0,
+            droppedCount: firstFiniteNumber(raw.dropped_count, 0) || 0,
+          };
+        })
+        .filter(Boolean),
     };
   }
 
@@ -1800,6 +2457,7 @@
   }
 
   function formatMeasurementValue(value, kind) {
+    if (value == null) return 'n/a';
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return 'n/a';
     if (kind === 'bond') return numeric.toFixed(4);
@@ -1835,14 +2493,16 @@
     clearEmptyPlotPlaceholder(dom.plot);
     const plotColors = getPlotColors();
     const requestedBins = Number.parseInt(String(dom.histogramBins?.value || ''), 10);
-    const traces = result.entries.map((entry, index) => {
+    const traces = [];
+    result.entries.forEach((entry, index) => {
       const color = buildTraceColor(index);
-      if (entry.values.length) {
-        const trace = {
+      if (entry.allValues.length) {
+        const allTrace = {
           type: 'histogram',
-          name: entry.name,
-          x: entry.values,
-          opacity: result.entries.length > 1 ? 0.52 : 0.72,
+          name: `${entry.name} all`,
+          x: entry.allValues,
+          legendgroup: entry.id,
+          opacity: result.entries.length > 1 ? 0.32 : 0.46,
           marker: {
             color,
             line: {
@@ -1851,19 +2511,45 @@
             },
           },
           hovertemplate:
-            `${entry.name}` +
+            `${entry.name} all` +
             `<br>value=%{x:.4f}` +
             `<br>count=%{y}` +
             '<extra></extra>',
         };
         if (Number.isFinite(requestedBins) && requestedBins >= 5) {
-          trace.nbinsx = requestedBins;
+          allTrace.nbinsx = requestedBins;
         }
-        return trace;
+        traces.push(allTrace);
       }
-      return {
+      if (entry.selectedValues.length) {
+        const selectedTrace = {
+          type: 'histogram',
+          name: `${entry.name} selected`,
+          x: entry.selectedValues,
+          legendgroup: entry.id,
+          opacity: 0.82,
+          marker: {
+            color,
+            line: {
+              color: readCssVar('--text', '#172033'),
+              width: 1.2,
+            },
+          },
+          hovertemplate:
+            `${entry.name} selected` +
+            `<br>value=%{x:.4f}` +
+            `<br>count=%{y}` +
+            '<extra></extra>',
+        };
+        if (Number.isFinite(requestedBins) && requestedBins >= 5) {
+          selectedTrace.nbinsx = requestedBins;
+        }
+        traces.push(selectedTrace);
+      }
+      if (!entry.allValues.length && entry.histogram) {
+        traces.push({
         type: 'bar',
-        name: entry.name,
+        name: `${entry.name} all`,
         x: entry.histogram.x,
         y: entry.histogram.counts,
         opacity: result.entries.length > 1 ? 0.46 : 0.72,
@@ -1875,14 +2561,18 @@
           },
         },
         hovertemplate:
-          `${entry.name}` +
+          `${entry.name} all` +
           `<br>center=%{x:.4f}` +
           `<br>count=%{y}` +
           '<extra></extra>',
-      };
+        });
+      }
     });
 
     const atomLabel = result.atomIndices.length ? ` [${result.atomIndices.join(', ')}]` : '';
+    const windowLabel = result.selectionMode !== 'none' && Number.isFinite(result.windowMinEv) && Number.isFinite(result.windowMaxEv)
+      ? `window ${Number(result.windowMinEv).toFixed(2)}-${Number(result.windowMaxEv).toFixed(2)} eV`
+      : '';
     const layout = mergePlotlyLayout({
       height: 408,
       margin: { l: 58, r: 20, t: 18, b: 54 },
@@ -1919,7 +2609,7 @@
           xanchor: 'right',
           yanchor: 'bottom',
           showarrow: false,
-          text: `${result.measurementKind}${atomLabel}`,
+          text: [result.measurementKind, atomLabel.trim(), windowLabel].filter(Boolean).join(' '),
           font: { size: 12, color: readCssVar('--muted', '#64748b') },
         },
       ],
@@ -1927,6 +2617,198 @@
 
     Plotly.react(
       dom.plot,
+      traces,
+      layout,
+      {
+        responsive: true,
+        displaylogo: false,
+        toImageButtonOptions: { format: 'png', scale: PLOT_EXPORT_SCALE },
+      }
+    );
+  }
+
+  function buildGeometryWindowStatus(result) {
+    const entryCount = Array.isArray(result?.entries) ? result.entries.length : 0;
+    if (!entryCount) {
+      return result?.selectionMode === 'none'
+        ? 'No geometry comparison result available.'
+        : 'No windowed geometry comparison result available.';
+    }
+    const skipped = Array.isArray(result?.skippedDistributions) ? result.skippedDistributions : [];
+    if (result?.selectionMode === 'none') {
+      let text = `Rendered ${entryCount} distribution${entryCount === 1 ? '' : 's'} using all geometries.`;
+      if (skipped.length) {
+        text += ` Skipped ${skipped.length} bundle${skipped.length === 1 ? '' : 's'} without electronic profiles.`;
+      }
+      return text;
+    }
+    const selectedCount = result.entries.reduce((accumulator, entry) => accumulator + Number(entry.selectedCount || 0), 0);
+    const totalCount = result.entries.reduce((accumulator, entry) => accumulator + Number(entry.allSummary?.count || entry.allValues?.length || 0), 0);
+    let text = `Rendered ${entryCount} distribution${entryCount === 1 ? '' : 's'} with ${selectedCount} selected geometr${selectedCount === 1 ? 'y' : 'ies'}.`;
+    if (totalCount > 0) {
+      text += ` Selected fraction ${(100 * selectedCount / totalCount).toFixed(1)}%.`;
+    }
+    if (Number.isFinite(result.windowMinEv) && Number.isFinite(result.windowMaxEv)) {
+      text += ` Window ${Number(result.windowMinEv).toFixed(2)}-${Number(result.windowMaxEv).toFixed(2)} eV.`;
+    }
+    if (skipped.length) {
+      text += ` Skipped ${skipped.length} bundle${skipped.length === 1 ? '' : 's'} without electronic profiles.`;
+    }
+    return text;
+  }
+
+  function buildUmapStatus(result) {
+    const pointCount = Array.isArray(result?.points) ? result.points.length : 0;
+    if (!pointCount) return 'No SOAP UMAP projection is available.';
+    const skipped = Array.isArray(result?.skippedDistributions) ? result.skippedDistributions : [];
+    if (result?.selectionMeta?.selectionMode === 'none') {
+      let text = `Projected ${pointCount} geometr${pointCount === 1 ? 'y' : 'ies'} into a joint SOAP UMAP map using all geometries.`;
+      if (skipped.length) {
+        text += ` Skipped ${skipped.length} bundle${skipped.length === 1 ? '' : 's'} without electronic profiles.`;
+      }
+      return text;
+    }
+    const selectedCount = result.points.filter((point) => point.hardSelected || point.normalizedSelectionWeight > 0).length;
+    let text = `Projected ${pointCount} geometr${pointCount === 1 ? 'y' : 'ies'} into a joint SOAP UMAP map.`;
+    if (selectedCount > 0) {
+      text += ` Highlighted ${selectedCount} window-selected geometr${selectedCount === 1 ? 'y' : 'ies'}.`;
+    }
+    if (skipped.length) {
+      text += ` Skipped ${skipped.length} bundle${skipped.length === 1 ? '' : 's'} without electronic profiles.`;
+    }
+    return text;
+  }
+
+  function renderUmapPlot(result) {
+    if (!dom.umapPlot) return;
+    if (typeof Plotly === 'undefined') {
+      clearUmapPlot('Plot unavailable because Plotly failed to load.');
+      return;
+    }
+    if (!result || !Array.isArray(result.points) || !result.points.length) {
+      clearUmapPlot('No SOAP UMAP projection data was returned for the active distributions.');
+      return;
+    }
+    clearEmptyPlotPlaceholder(dom.umapPlot);
+
+    const traces = [];
+    const groupedPoints = new Map();
+    for (const point of result.points) {
+      if (!groupedPoints.has(point.distributionId)) {
+        groupedPoints.set(point.distributionId, []);
+      }
+      groupedPoints.get(point.distributionId).push(point);
+    }
+
+    Array.from(groupedPoints.entries()).forEach(([distributionId, points], index) => {
+      const color = buildTraceColor(index);
+      const label = firstNonEmptyString(points[0] && points[0].distributionLabel, distributionId) || distributionId;
+      traces.push({
+        type: 'scattergl',
+        mode: 'markers',
+        name: `${label} all`,
+        legendgroup: distributionId,
+        x: points.map((point) => point.x),
+        y: points.map((point) => point.y),
+        customdata: points.map((point) => [
+          point.profileLabel,
+          point.sampleIndex,
+          point.sampleId,
+        ]),
+        marker: {
+          color,
+          size: 8,
+          opacity: 0.28,
+        },
+        hovertemplate:
+          `${label} all` +
+          '<br>profile=%{customdata[0]}' +
+          '<br>sample=%{customdata[2]}' +
+          '<br>sample index=%{customdata[1]}' +
+          '<br>x=%{x:.4f}' +
+          '<br>y=%{y:.4f}' +
+          '<extra></extra>',
+      });
+
+      const selectedPoints = points.filter((point) => point.hardSelected || point.normalizedSelectionWeight > 0);
+      if (!selectedPoints.length) return;
+      traces.push({
+        type: 'scattergl',
+        mode: 'markers',
+        name: `${label} selected`,
+        legendgroup: distributionId,
+        x: selectedPoints.map((point) => point.x),
+        y: selectedPoints.map((point) => point.y),
+        customdata: selectedPoints.map((point) => [
+          point.profileLabel,
+          point.sampleIndex,
+          point.sampleId,
+          Number(point.normalizedSelectionWeight || 0),
+          Number(point.selectionWeight || 0),
+        ]),
+        marker: {
+          color,
+          opacity: 0.92,
+          size: selectedPoints.map((point) => 10 + 18 * Math.max(Number(point.normalizedSelectionWeight || 0), 0)),
+          line: {
+            color: readCssVar('--text', '#172033'),
+            width: 0.8,
+          },
+        },
+        hovertemplate:
+          `${label} selected` +
+          '<br>profile=%{customdata[0]}' +
+          '<br>sample=%{customdata[2]}' +
+          '<br>sample index=%{customdata[1]}' +
+          '<br>x=%{x:.4f}' +
+          '<br>y=%{y:.4f}' +
+          '<br>normalized weight=%{customdata[3]:.4f}' +
+          '<br>selection weight=%{customdata[4]:.4f}' +
+          '<extra></extra>',
+      });
+    });
+
+    const layout = mergePlotlyLayout({
+      height: 420,
+      margin: { l: 58, r: 20, t: 18, b: 54 },
+      hovermode: 'closest',
+      showlegend: true,
+      legend: {
+        orientation: 'h',
+        x: 0,
+        xanchor: 'left',
+        y: 1.14,
+        yanchor: 'bottom',
+      },
+      xaxis: {
+        title: result.projectionMeta.axisLabels[0] || 'UMAP 1',
+        showline: true,
+        mirror: 'ticks',
+        ticks: 'outside',
+      },
+      yaxis: {
+        title: result.projectionMeta.axisLabels[1] || 'UMAP 2',
+        showline: true,
+        mirror: 'ticks',
+        ticks: 'outside',
+      },
+      annotations: [
+        {
+          xref: 'paper',
+          yref: 'paper',
+          x: 1,
+          y: 1.16,
+          xanchor: 'right',
+          yanchor: 'bottom',
+          showarrow: false,
+          text: result.projectionMeta.featureKind || 'soap_atomwise_pooled',
+          font: { size: 12, color: readCssVar('--muted', '#64748b') },
+        },
+      ],
+    });
+
+    Plotly.react(
+      dom.umapPlot,
       traces,
       layout,
       {
@@ -2080,6 +2962,32 @@
     }
 
     const xUnit = getSpectrumXAxisUnit();
+    const windowBounds = state.selectionEnabled ? readWindowBounds() : null;
+    const shapes = [];
+    if (windowBounds) {
+      let x0 = windowBounds.min;
+      let x1 = windowBounds.max;
+      if (xUnit === 'nm') {
+        x0 = EV_TO_NM / Math.max(windowBounds.max, 1.0e-12);
+        x1 = EV_TO_NM / Math.max(windowBounds.min, 1.0e-12);
+      }
+      const shapeMin = Math.min(x0, x1);
+      const shapeMax = Math.max(x0, x1);
+      if (Number.isFinite(shapeMin) && Number.isFinite(shapeMax) && shapeMax > shapeMin) {
+        shapes.push({
+          type: 'rect',
+          xref: 'x',
+          yref: 'paper',
+          x0: shapeMin,
+          x1: shapeMax,
+          y0: 0,
+          y1: 1,
+          fillcolor: readCssVar('--accent-soft', 'rgba(15, 93, 207, 0.14)'),
+          line: { width: 0 },
+          layer: 'below',
+        });
+      }
+    }
     const layout = mergePlotlyLayout({
       height: 408,
       margin: { l: 68, r: 20, t: 18, b: 54 },
@@ -2106,6 +3014,7 @@
         ticks: 'outside',
         rangemode: 'tozero',
       },
+      shapes,
       annotations: [
         {
           xref: 'paper',
@@ -2147,6 +3056,27 @@
     return wrap;
   }
 
+  function buildSummaryGroup(titleText, summary, measurementKind) {
+    const group = document.createElement('div');
+    group.className = 'summary-group';
+    const title = document.createElement('div');
+    title.className = 'summary-group-title';
+    title.textContent = titleText;
+    const stats = document.createElement('div');
+    stats.className = 'summary-stats';
+    stats.appendChild(summaryStat('count', Number.isFinite(summary.count) ? String(Math.round(summary.count)) : 'n/a'));
+    stats.appendChild(summaryStat('mean', formatMeasurementValue(summary.mean, measurementKind)));
+    stats.appendChild(summaryStat('std', formatMeasurementValue(summary.std, measurementKind)));
+    stats.appendChild(summaryStat('min', formatMeasurementValue(summary.min, measurementKind)));
+    stats.appendChild(summaryStat('p05', formatMeasurementValue(summary.p05, measurementKind)));
+    stats.appendChild(summaryStat('median', formatMeasurementValue(summary.p50, measurementKind)));
+    stats.appendChild(summaryStat('p95', formatMeasurementValue(summary.p95, measurementKind)));
+    stats.appendChild(summaryStat('max', formatMeasurementValue(summary.max, measurementKind)));
+    group.appendChild(title);
+    group.appendChild(stats);
+    return group;
+  }
+
   function renderSummary(result) {
     if (!dom.summaryGrid || !dom.summaryMeta || !dom.summaryCount) return;
     dom.summaryGrid.innerHTML = '';
@@ -2157,8 +3087,14 @@
       return;
     }
     const atomLabel = result.atomIndices.length ? `atoms [${result.atomIndices.join(', ')}]` : 'requested atoms';
-    dom.summaryMeta.textContent =
-      `${result.measurementKind} comparison for ${atomLabel} across ${entryCount} distribution${entryCount === 1 ? '' : 's'}.`;
+    const skipped = Array.isArray(result?.skippedDistributions) ? result.skippedDistributions : [];
+    let metaText = result.selectionMode === 'none'
+      ? `${result.measurementKind} comparison for ${atomLabel} across ${entryCount} distribution${entryCount === 1 ? '' : 's'} with selection disabled.`
+      : `${result.measurementKind} comparison for ${atomLabel} across ${entryCount} distribution${entryCount === 1 ? '' : 's'}.`;
+    if (skipped.length) {
+      metaText += ` Skipped ${skipped.length} active bundle${skipped.length === 1 ? '' : 's'} without electronic profiles.`;
+    }
+    dom.summaryMeta.textContent = metaText;
 
     for (const entry of result.entries) {
       const card = document.createElement('article');
@@ -2179,17 +3115,27 @@
       head.appendChild(subtitle);
       card.appendChild(head);
 
-      const stats = document.createElement('div');
-      stats.className = 'summary-stats';
-      stats.appendChild(summaryStat('count', Number.isFinite(entry.summary.count) ? String(Math.round(entry.summary.count)) : 'n/a'));
-      stats.appendChild(summaryStat('mean', formatMeasurementValue(entry.summary.mean, result.measurementKind)));
-      stats.appendChild(summaryStat('std', formatMeasurementValue(entry.summary.std, result.measurementKind)));
-      stats.appendChild(summaryStat('min', formatMeasurementValue(entry.summary.min, result.measurementKind)));
-      stats.appendChild(summaryStat('p05', formatMeasurementValue(entry.summary.p05, result.measurementKind)));
-      stats.appendChild(summaryStat('median', formatMeasurementValue(entry.summary.p50, result.measurementKind)));
-      stats.appendChild(summaryStat('p95', formatMeasurementValue(entry.summary.p95, result.measurementKind)));
-      stats.appendChild(summaryStat('max', formatMeasurementValue(entry.summary.max, result.measurementKind)));
-      card.appendChild(stats);
+      if (result.selectionMode !== 'none') {
+        const selectionStats = document.createElement('div');
+        selectionStats.className = 'summary-stats';
+        selectionStats.appendChild(
+          summaryStat(
+            'selected',
+            `${Math.round(Number(entry.selectedCount || 0))}/${Math.round(Number(entry.allSummary?.count || 0))}`
+          )
+        );
+        selectionStats.appendChild(summaryStat('fraction', `${(100 * Number(entry.selectedFraction || 0)).toFixed(1)}%`));
+        selectionStats.appendChild(summaryStat('ESS', Number(entry.effectiveSampleSize || 0).toFixed(2)));
+        card.appendChild(selectionStats);
+      }
+
+      const groups = document.createElement('div');
+      groups.className = 'summary-groups';
+      groups.appendChild(buildSummaryGroup('All geometries', entry.allSummary || entry.summary, result.measurementKind));
+      if (result.selectionMode !== 'none') {
+        groups.appendChild(buildSummaryGroup('Selected geometries', entry.selectedSummary || entry.summary, result.measurementKind));
+      }
+      card.appendChild(groups);
 
       dom.summaryGrid.appendChild(card);
     }
@@ -2323,8 +3269,21 @@
       state.activeIds.delete(distributionId);
     }
     renderDistributionList();
+    renderSelectionProfileControls();
+    scheduleOverlayRefresh({ geometry: true, umap: true });
     void refreshSpectrumView();
     syncActionState();
+  }
+
+  function handleSelectionProfileChange(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement)) return;
+    const distributionId = firstNonEmptyString(target.dataset.selectionProfileDistributionId);
+    const profileId = firstNonEmptyString(target.value);
+    if (!distributionId || !profileId) return;
+    state.selectionProfilesByDistribution[distributionId] = profileId;
+    renderSelectionProfileControls();
+    scheduleOverlayRefresh({ geometry: true, umap: true });
   }
 
   function handleSpectrumPairChange(event) {
@@ -2344,6 +3303,19 @@
   }
 
   function bindEvents() {
+    const bindOverlayRefreshControl = (inputEl, options = {}) => {
+      if (!inputEl) return;
+      inputEl.addEventListener('change', () => {
+        if (options.rerenderSpectrum && state.lastSpectrumResult) {
+          renderSpectrumPlot(state.lastSpectrumResult);
+        }
+        scheduleOverlayRefresh({
+          geometry: options.geometry !== false,
+          umap: !!options.umap,
+        });
+      });
+    };
+
     dom.fileInput?.addEventListener('change', (event) => {
       const inputEl = event.currentTarget;
       if (!(inputEl instanceof HTMLInputElement) || !inputEl.files || !inputEl.files.length) return;
@@ -2356,6 +3328,20 @@
     dom.refreshBtn?.addEventListener('click', () => {
       refreshDistributions({ preserveActive: true });
     });
+    dom.selectionEnabled?.addEventListener('change', (event) => {
+      const target = event.currentTarget;
+      if (!(target instanceof HTMLInputElement)) return;
+      state.selectionEnabled = !!target.checked;
+      syncSelectionControlsState();
+      renderSelectionProfileControls();
+      if (state.lastSpectrumResult) {
+        renderSpectrumPlot(state.lastSpectrumResult);
+      }
+      scheduleOverlayRefresh({ geometry: true, umap: true, immediate: true });
+    });
+    dom.workspaceSelectionBtn?.addEventListener('click', () => {
+      setWorkspace(WORKSPACE_SELECTION);
+    });
     dom.workspaceOverlayBtn?.addEventListener('click', () => {
       setWorkspace(WORKSPACE_OVERLAY);
     });
@@ -2367,10 +3353,16 @@
     });
     dom.measurementKind?.addEventListener('change', () => {
       syncMeasurementKindUi();
+      scheduleOverlayRefresh({ geometry: true });
     });
-    dom.compareBtn?.addEventListener('click', () => {
-      compareGeometry();
-    });
+    bindOverlayRefreshControl(dom.atom0, { geometry: true });
+    bindOverlayRefreshControl(dom.atom1, { geometry: true });
+    bindOverlayRefreshControl(dom.atom2, { geometry: true });
+    bindOverlayRefreshControl(dom.atom3, { geometry: true });
+    bindOverlayRefreshControl(dom.histogramBins, { geometry: true });
+    bindOverlayRefreshControl(dom.windowCenterEv, { geometry: true, umap: true, rerenderSpectrum: true });
+    bindOverlayRefreshControl(dom.windowWidthEv, { geometry: true, umap: true, rerenderSpectrum: true });
+    dom.selectionProfilePanel?.addEventListener('change', handleSelectionProfileChange);
     dom.spectrumDeltaEv?.addEventListener('change', () => {
       void refreshSpectrumView();
     });
@@ -2419,6 +3411,9 @@
         if (state.workspace === WORKSPACE_OVERLAY && state.lastCompareResult) {
           renderComparePlot(state.lastCompareResult);
         }
+        if (state.workspace === WORKSPACE_OVERLAY && state.lastUmapResult) {
+          renderUmapPlot(state.lastUmapResult);
+        }
         if (state.workspace === WORKSPACE_SPECTRUM && state.lastSpectrumResult) {
           renderSpectrumPlot(state.lastSpectrumResult);
         }
@@ -2427,14 +3422,26 @@
   }
 
   function init() {
+    state.selectionEnabled = false;
     syncMeasurementKindUi();
-    clearPlot('Load one or more bundles, choose a measurement, and draw the first overlay histogram.');
+    clearPlot('Load one or more bundles, choose a measurement, and the histogram will refresh automatically.');
+    clearUmapPlot('Enable one or more active distributions to project SOAP features into UMAP.');
     clearSpectrumPlot('Enable one or more electronic profiles to display absorption spectra.');
+    renderSelectionProfileControls();
+    syncSelectionControlsState();
     renderSpectrumPairOptions({
       availablePairs: [],
       emptyMessage: 'Enable one or more electronic profiles to discover common transition pairs.',
     });
-    clearSummary('Comparison metadata and per-distribution statistics will appear here after the first plot.');
+    clearSummary('Auto-refreshed comparison metadata and per-distribution statistics will appear here after the first plot.');
+    setCompareStatus(
+      'Geometry comparison refreshes automatically. Selection is currently disabled, so all geometries are included.',
+      false
+    );
+    setUmapStatus(
+      'SOAP UMAP refreshes automatically for the active distributions. Selection is currently disabled.',
+      false
+    );
     setSpectrumPairStatus('Only common valid pairs across the selected spectrum series are listed here.', false);
     setSpectrumStatus(
       'Enable one or more electronic profiles to display spectra.',

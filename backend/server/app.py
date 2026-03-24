@@ -23,6 +23,11 @@ from backend.server.compute import (
     aggregate_scalar_series_by_mode,
     compute_observable_series,
 )
+from backend.server.distribution_analysis import (
+    build_soap_umap_projection,
+    build_windowed_geometry_comparison,
+    build_windowed_soap_umap_projection,
+)
 from backend.server.distribution_bundle import (
     DistributionBundle,
     ElectronicProfile,
@@ -52,12 +57,18 @@ from backend.server.models import (
     BootstrapResponse,
     DistributionCompareGeometryRequest,
     DistributionCompareGeometryResponse,
+    DistributionCompareGeometryWindowRequest,
+    DistributionCompareGeometryWindowResponse,
     DistributionCompareSpectrumRequest,
     DistributionCompareSpectrumResponse,
     DistributionDeleteResponse,
     DistributionElectronicProfileItem,
     DistributionListItem,
     DistributionListResponse,
+    DistributionSelectionRequestItem,
+    DistributionSoapUmapRequest,
+    DistributionSoapUmapWindowRequest,
+    DistributionSoapUmapWindowResponse,
     DistributionSpectrumPairCurve,
     DistributionSpectrumPairOption,
     DistributionSpectrumSeries,
@@ -474,6 +485,10 @@ def create_app(
     normal_modes_sample_cache = SeriesLRUCache(max_entries=SAMPLE_CACHE_MAX_ENTRIES)
     distribution_lock = Lock()
     loaded_distributions: dict[str, DistributionBundle] = {}
+    distribution_analysis_cache = SeriesLRUCache(max_entries=64)
+    distribution_projection_cache = SeriesLRUCache(max_entries=32)
+    soap_feature_cache_lock = Lock()
+    soap_feature_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
     browse_root_resolved = Path(browse_root).resolve() if browse_root is not None else None
 
     runtime_lock = Lock()
@@ -756,6 +771,72 @@ def create_app(
             seen_items.add(key)
             series_items.append(key)
         return series_items
+
+    def _normalize_distribution_selection_items(
+        raw_items: list[DistributionSelectionRequestItem],
+    ) -> list[tuple[str, str]]:
+        items: list[tuple[str, str]] = []
+        seen_distribution_ids: set[str] = set()
+        for raw_item in raw_items:
+            distribution_id = str(raw_item.distribution_id).strip()
+            profile_id = str(raw_item.profile_id).strip()
+            if not distribution_id or not profile_id:
+                continue
+            if distribution_id in seen_distribution_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Each distribution may appear at most once in window selection requests. "
+                        f"Received duplicate distribution_id={distribution_id!r}."
+                    ),
+                )
+            seen_distribution_ids.add(distribution_id)
+            items.append((distribution_id, profile_id))
+        return items
+
+    def _collect_distribution_selection_items(
+        selection_items: list[tuple[str, str]],
+    ) -> list[tuple[str, DistributionBundle, str, ElectronicProfile]]:
+        if not selection_items:
+            return []
+        resolved_items: list[tuple[str, DistributionBundle, str, ElectronicProfile]] = []
+        topology_signature: str | None = None
+        for distribution_id, profile_id in selection_items:
+            bundle, profile = _get_distribution_profile_or_422(distribution_id, profile_id)
+            if topology_signature is None:
+                topology_signature = str(bundle.topology_signature)
+            elif str(bundle.topology_signature) != topology_signature:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Windowed geometry comparison and SOAP projection require identical "
+                        "topology_signature across all selected distributions."
+                    ),
+                )
+            resolved_items.append((distribution_id, bundle, profile_id, profile))
+        return resolved_items
+
+    def _collect_distribution_bundles(
+        distribution_ids: list[str],
+    ) -> list[tuple[str, DistributionBundle]]:
+        if not distribution_ids:
+            return []
+        bundles: list[tuple[str, DistributionBundle]] = []
+        topology_signature: str | None = None
+        for distribution_id in distribution_ids:
+            bundle = _get_distribution_or_404(distribution_id)
+            if topology_signature is None:
+                topology_signature = str(bundle.topology_signature)
+            elif str(bundle.topology_signature) != topology_signature:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Geometry comparison and SOAP projection require identical "
+                        "topology_signature across all active distributions."
+                    ),
+                )
+            bundles.append((distribution_id, bundle))
+        return bundles
 
     def _format_transition_pair(pair: tuple[int, int]) -> str:
         return f"{int(pair[0])}->{int(pair[1])}"
@@ -1306,6 +1387,162 @@ def create_app(
             topology_signature=str(topology_signature or ""),
             series=series_payloads,
         )
+
+    @app.post(
+        f"{api_base}/distributions/compare-geometry-window",
+        response_model=DistributionCompareGeometryWindowResponse,
+    )
+    def compare_distribution_geometry_window(
+        req: DistributionCompareGeometryWindowRequest,
+    ) -> DistributionCompareGeometryWindowResponse:
+        selection_items = _normalize_distribution_selection_items(req.items)
+        if not selection_items:
+            raise HTTPException(status_code=422, detail="items must contain at least one valid distribution/profile pair.")
+
+        cache_key = (
+            "distribution_geometry_window",
+            tuple(selection_items),
+            str(req.measurement_kind),
+            tuple(int(value) for value in req.atom_indices),
+            int(req.bins),
+            round(float(req.window_center_ev), 8),
+            round(float(req.window_width_ev), 8),
+        )
+        cached_value = distribution_analysis_cache.get(cache_key)
+        if cached_value is not None:
+            return DistributionCompareGeometryWindowResponse(**cached_value)
+
+        resolved_items = _collect_distribution_selection_items(selection_items)
+        try:
+            payload = build_windowed_geometry_comparison(
+                resolved_items,
+                measurement_kind=str(req.measurement_kind),
+                atom_indices=[int(value) for value in req.atom_indices],
+                bins=int(req.bins),
+                window_center_ev=float(req.window_center_ev),
+                window_width_ev=float(req.window_width_ev),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to compute windowed geometry comparison: {exc}") from exc
+
+        distribution_analysis_cache.put(cache_key, payload)
+        return DistributionCompareGeometryWindowResponse(**payload)
+
+    @app.post(
+        f"{api_base}/distributions/project-soap-umap",
+        response_model=DistributionSoapUmapWindowResponse,
+    )
+    def project_distribution_soap_umap(
+        req: DistributionSoapUmapRequest,
+    ) -> DistributionSoapUmapWindowResponse:
+        distribution_ids = _normalize_distribution_ids(req.distribution_ids)
+        if not distribution_ids:
+            raise HTTPException(status_code=422, detail="distribution_ids must contain at least one valid item.")
+
+        soap_atom_indices = [int(value) for value in req.soap_atom_indices]
+        cache_key = (
+            "distribution_soap_umap",
+            tuple(distribution_ids),
+            tuple(soap_atom_indices),
+            round(float(req.soap_r_cut), 8),
+            int(req.soap_n_max),
+            int(req.soap_l_max),
+            round(float(req.soap_sigma), 8),
+            int(req.umap_n_neighbors),
+            round(float(req.umap_min_dist), 8),
+            str(req.umap_metric).strip().lower(),
+            int(req.umap_random_state),
+        )
+        cached_value = distribution_projection_cache.get(cache_key)
+        if cached_value is not None:
+            return DistributionSoapUmapWindowResponse(**cached_value)
+
+        bundles = _collect_distribution_bundles(distribution_ids)
+        try:
+            with soap_feature_cache_lock:
+                payload = build_soap_umap_projection(
+                    bundles,
+                    soap_atom_indices=(soap_atom_indices or None),
+                    soap_r_cut=float(req.soap_r_cut),
+                    soap_n_max=int(req.soap_n_max),
+                    soap_l_max=int(req.soap_l_max),
+                    soap_sigma=float(req.soap_sigma),
+                    umap_n_neighbors=int(req.umap_n_neighbors),
+                    umap_min_dist=float(req.umap_min_dist),
+                    umap_metric=str(req.umap_metric),
+                    umap_random_state=int(req.umap_random_state),
+                    feature_cache=soap_feature_cache,
+                )
+        except ModuleNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to compute SOAP UMAP projection: {exc}") from exc
+
+        distribution_projection_cache.put(cache_key, payload)
+        return DistributionSoapUmapWindowResponse(**payload)
+
+    @app.post(
+        f"{api_base}/distributions/project-soap-umap-window",
+        response_model=DistributionSoapUmapWindowResponse,
+    )
+    def project_distribution_soap_umap_window(
+        req: DistributionSoapUmapWindowRequest,
+    ) -> DistributionSoapUmapWindowResponse:
+        selection_items = _normalize_distribution_selection_items(req.items)
+        if not selection_items:
+            raise HTTPException(status_code=422, detail="items must contain at least one valid distribution/profile pair.")
+
+        soap_atom_indices = [int(value) for value in req.soap_atom_indices]
+        cache_key = (
+            "distribution_soap_umap_window",
+            tuple(selection_items),
+            round(float(req.window_center_ev), 8),
+            round(float(req.window_width_ev), 8),
+            tuple(soap_atom_indices),
+            round(float(req.soap_r_cut), 8),
+            int(req.soap_n_max),
+            int(req.soap_l_max),
+            round(float(req.soap_sigma), 8),
+            int(req.umap_n_neighbors),
+            round(float(req.umap_min_dist), 8),
+            str(req.umap_metric).strip().lower(),
+            int(req.umap_random_state),
+        )
+        cached_value = distribution_projection_cache.get(cache_key)
+        if cached_value is not None:
+            return DistributionSoapUmapWindowResponse(**cached_value)
+
+        resolved_items = _collect_distribution_selection_items(selection_items)
+        try:
+            with soap_feature_cache_lock:
+                payload = build_windowed_soap_umap_projection(
+                    resolved_items,
+                    window_center_ev=float(req.window_center_ev),
+                    window_width_ev=float(req.window_width_ev),
+                    soap_atom_indices=(soap_atom_indices or None),
+                    soap_r_cut=float(req.soap_r_cut),
+                    soap_n_max=int(req.soap_n_max),
+                    soap_l_max=int(req.soap_l_max),
+                    soap_sigma=float(req.soap_sigma),
+                    umap_n_neighbors=int(req.umap_n_neighbors),
+                    umap_min_dist=float(req.umap_min_dist),
+                    umap_metric=str(req.umap_metric),
+                    umap_random_state=int(req.umap_random_state),
+                    feature_cache=soap_feature_cache,
+                )
+        except ModuleNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to compute SOAP UMAP projection: {exc}") from exc
+
+        distribution_projection_cache.put(cache_key, payload)
+        return DistributionSoapUmapWindowResponse(**payload)
 
     @app.post(f"{api_base}/distributions/compare-spectrum", response_model=DistributionCompareSpectrumResponse)
     def compare_distribution_spectrum(req: DistributionCompareSpectrumRequest) -> DistributionCompareSpectrumResponse:

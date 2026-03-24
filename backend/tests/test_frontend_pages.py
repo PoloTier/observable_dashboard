@@ -188,6 +188,8 @@ def test_md_page_includes_upload_controls_and_assets() -> None:
     assert "/assets/md/md_page.js" in text
     assert "/assets/vendor/h5wasm.js" in text
     assert '/assets/dashboard/dashboard_appearance.js' in text
+    assert '/assets/dashboard/dashboard_state.js' not in text
+    assert '/assets/dashboard/dashboard_data_loader.js' not in text
 
 
 def test_md_page_injects_local_xyz_config() -> None:
@@ -328,9 +330,11 @@ def test_distribution_compare_page_includes_upload_controls_and_assets() -> None
     assert 'id="dc-active-count"' in text
     assert 'id="dc-distribution-list"' in text
     assert 'id="dc-file-browser-modal"' in text
+    assert 'id="dc-workspace-selection-btn"' in text
     assert 'id="dc-workspace-overlay-btn"' in text
     assert 'id="dc-workspace-summary-btn"' in text
     assert 'id="dc-workspace-spectrum-btn"' in text
+    assert 'id="dc-workspace-selection-panel"' in text
     assert 'id="dc-workspace-overlay-panel"' in text
     assert 'id="dc-workspace-summary-panel"' in text
     assert 'id="dc-workspace-spectrum-panel"' in text
@@ -338,10 +342,16 @@ def test_distribution_compare_page_includes_upload_controls_and_assets() -> None
     assert 'id="dc-measurement-atom-2-group"' in text
     assert 'id="dc-measurement-atom-3-group"' in text
     assert 'id="dc-histogram-bins"' in text
-    assert 'id="dc-compare-btn"' in text
+    assert 'id="dc-selection-enabled"' in text
+    assert 'id="dc-window-center-ev"' in text
+    assert 'id="dc-window-width-ev"' in text
+    assert 'id="dc-selection-profile-panel"' in text
     assert 'id="dc-compare-status"' in text
     assert 'id="dc-plot-active-pill"' in text
     assert 'id="dc-plot"' in text
+    assert 'id="dc-umap-status"' in text
+    assert 'id="dc-umap-active-pill"' in text
+    assert 'id="dc-umap-plot"' in text
     assert 'id="dc-summary-meta"' in text
     assert 'id="dc-summary-grid"' in text
     assert 'id="dc-spectrum-delta-ev"' in text
@@ -389,8 +399,14 @@ def test_distribution_compare_page_script_reads_injected_api_base() -> None:
     assert "state.endpoints.loadByPath" in text
     assert "state.endpoints.browseFiles" in text
     assert "?filename=${encodeURIComponent(file.name)}" in text
-    assert "payload.bins = measurement.histogramBins" in text
-    assert "state.endpoints.compareGeometry" in text
+    assert "WORKSPACE_SELECTION" in text
+    assert "state.selectionEnabled" in text
+    assert "state.endpoints.projectSoapUmap" in text
+    assert "state.endpoints.compareGeometryWindow" in text
+    assert "state.endpoints.projectSoapUmapWindow" in text
+    assert "buildGeometryWindowPayload" in text
+    assert "buildUmapPayload" in text
+    assert "renderUmapPlot" in text
     assert "state.endpoints.compareSpectrum" in text
     assert "buildSpectrumPayload" in text
     assert "renderSpectrumPlot" in text

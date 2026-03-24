@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tarfile
+import types
 
 import numpy as np
 import pytest
@@ -18,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.server.app import create_app
 from backend.server.cache import SeriesLRUCache
+import backend.server.distribution_analysis as distribution_analysis
 from backend.server.dataset_store import DatasetStore, TrajectoryRecord
 from backend.server.distribution_bundle import (
     DISTRIBUTION_BUNDLE_KIND,
@@ -26,10 +28,115 @@ from backend.server.distribution_bundle import (
 )
 from backend.server.models import (
     DistributionCompareGeometryRequest,
+    DistributionCompareGeometryWindowRequest,
     DistributionCompareSpectrumRequest,
+    DistributionSelectionRequestItem,
+    DistributionSoapUmapRequest,
+    DistributionSoapUmapWindowRequest,
     DistributionSpectrumSeriesRequestItem,
     LoadDistributionPathRequest,
 )
+
+
+class _FakeAtoms:
+    def __init__(self, *, numbers: list[int], positions: np.ndarray) -> None:
+        self.numbers = list(numbers)
+        self.positions = np.asarray(positions, dtype=float)
+
+
+class _FakeSOAP:
+    def __init__(
+        self,
+        *,
+        species: list[int],
+        r_cut: float,
+        n_max: int,
+        l_max: int,
+        sigma: float,
+        periodic: bool,
+        average: str,
+        sparse: bool,
+    ) -> None:
+        self.feature_count = int(n_max) + 2
+        assert periodic is False
+        assert average == "off"
+        assert sparse is False
+        assert r_cut > 0.0
+        assert l_max >= 0
+        assert sigma > 0.0
+        assert species
+
+    def create(self, systems: list[_FakeAtoms], *, n_jobs: int, only_physical_cores: bool) -> np.ndarray:
+        assert n_jobs >= 1
+        assert only_physical_cores is False
+        tensor: list[np.ndarray] = []
+        for sample_index, system in enumerate(systems):
+            atom_rows: list[np.ndarray] = []
+            for atom_index, atom_number in enumerate(system.numbers):
+                coord_sum = float(np.sum(system.positions[atom_index]))
+                atom_rows.append(
+                    np.asarray(
+                        [
+                            float(atom_number),
+                            float(sample_index + 1),
+                            float(atom_index + 1),
+                            coord_sum,
+                            coord_sum + float(atom_number),
+                            coord_sum + float(sample_index + atom_index),
+                            coord_sum + 0.25,
+                            coord_sum + 0.75,
+                        ][: self.feature_count],
+                        dtype=float,
+                    )
+                )
+            tensor.append(np.stack(atom_rows, axis=0))
+        return np.stack(tensor, axis=0)
+
+
+class _FakeUMAP:
+    def __init__(
+        self,
+        *,
+        n_components: int,
+        n_neighbors: int,
+        min_dist: float,
+        metric: str,
+        random_state: int,
+    ) -> None:
+        assert n_components == 2
+        assert n_neighbors >= 2
+        assert min_dist >= 0.0
+        assert metric == "euclidean"
+        assert random_state == 42
+
+    def fit_transform(self, data: np.ndarray) -> np.ndarray:
+        matrix = np.asarray(data, dtype=float)
+        return np.column_stack(
+            [
+                matrix[:, 0],
+                matrix[:, 1] if matrix.shape[1] > 1 else np.zeros(matrix.shape[0], dtype=float),
+            ]
+        )
+
+
+def _install_fake_soap_modules(monkeypatch) -> None:
+    ase_module = types.ModuleType("ase")
+    ase_module.Atoms = _FakeAtoms
+
+    dscribe_module = types.ModuleType("dscribe")
+    descriptors_module = types.ModuleType("dscribe.descriptors")
+    descriptors_module.SOAP = _FakeSOAP
+    dscribe_module.descriptors = descriptors_module
+
+    monkeypatch.setitem(sys.modules, "ase", ase_module)
+    monkeypatch.setitem(sys.modules, "dscribe", dscribe_module)
+    monkeypatch.setitem(sys.modules, "dscribe.descriptors", descriptors_module)
+
+
+def _install_fake_umap_module(monkeypatch) -> None:
+    umap_module = types.ModuleType("umap")
+    umap_module.UMAP = _FakeUMAP
+    monkeypatch.setitem(sys.modules, "umap", umap_module)
 
 
 def _build_traj(traj_id: str) -> TrajectoryRecord:
@@ -467,6 +574,237 @@ def test_compare_geometry_api_accepts_bundle_with_profiles() -> None:
     assert compare_payload["measurement_kind"] == "bond"
     assert compare_payload["unit"] == "Angstrom"
     assert compare_payload["series"][0]["sample_count"] == 2
+
+
+def test_compare_geometry_window_api_returns_all_and_selected_series() -> None:
+    app = _make_app()
+    compare_endpoint = _find_endpoint(app, "/api/distributions/compare-geometry-window", "POST")
+
+    dist_a = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Window A",
+            electronic_profiles=[
+                {
+                    "profile_id": "td_a",
+                    "label": "Profile A",
+                    "state_energy_hartree": np.asarray(
+                        [
+                            [-76.1, -75.99, -75.86],
+                            [-76.0, -75.90, -75.72],
+                        ],
+                        dtype=float,
+                    ),
+                    "transition_intensity": np.asarray(
+                        [
+                            [0.25, 0.08],
+                            [0.30, 0.01],
+                        ],
+                        dtype=float,
+                    ),
+                }
+            ],
+        ),
+    )
+    dist_b = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Window B",
+            electronic_profiles=[
+                {
+                    "profile_id": "td_b",
+                    "label": "Profile B",
+                    "state_energy_hartree": np.asarray(
+                        [
+                            [-76.2, -76.09, -75.98],
+                            [-76.0, -75.89, -75.62],
+                        ],
+                        dtype=float,
+                    ),
+                    "transition_intensity": np.asarray(
+                        [
+                            [0.10, 0.0],
+                            [0.35, 0.02],
+                        ],
+                        dtype=float,
+                    ),
+                }
+            ],
+        ),
+    )
+
+    payload = _invoke_endpoint(
+        compare_endpoint,
+        DistributionCompareGeometryWindowRequest(
+            items=[
+                DistributionSelectionRequestItem(
+                    distribution_id=str(dist_a["distribution_id"]),
+                    profile_id="td_a",
+                ),
+                DistributionSelectionRequestItem(
+                    distribution_id=str(dist_b["distribution_id"]),
+                    profile_id="td_b",
+                ),
+            ],
+            measurement_kind="bond",
+            atom_indices=[0, 1],
+            bins=48,
+            window_center_ev=3.0,
+            window_width_ev=0.5,
+        ),
+    ).model_dump()
+
+    assert payload["measurement_kind"] == "bond"
+    assert payload["bins"] == 48
+    assert payload["selection_mode"] == "hard_window_strength"
+    assert payload["window_min_ev"] == pytest.approx(2.75)
+    assert payload["window_max_ev"] == pytest.approx(3.25)
+    assert len(payload["series"]) == 2
+    assert payload["series"][0]["selected_count"] >= 1
+    assert payload["series"][0]["all_summary"]["count"] == 2
+    assert payload["series"][0]["selected_summary"]["count"] >= 1
+    assert payload["series"][1]["selected_fraction"] >= 0.0
+    assert len(payload["series"][1]["all_values"]) == 2
+
+
+def test_project_soap_umap_api_supports_all_geometry_mode_without_profiles(monkeypatch) -> None:
+    _install_fake_soap_modules(monkeypatch)
+    _install_fake_umap_module(monkeypatch)
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/api/distributions/project-soap-umap", "POST")
+
+    dist_a = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Project A",
+            electronic_profiles=[],
+        ),
+    )
+    dist_b = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Project B",
+            electronic_profiles=[],
+        ),
+    )
+
+    payload = _invoke_endpoint(
+        endpoint,
+        DistributionSoapUmapRequest(
+            distribution_ids=[
+                str(dist_a["distribution_id"]),
+                str(dist_b["distribution_id"]),
+            ],
+        ),
+    ).model_dump()
+
+    assert payload["projection_meta"]["method"] == "umap"
+    assert payload["projection_meta"]["feature_kind"] == "soap_atomwise_pooled"
+    assert payload["selection_meta"]["selection_mode"] == "none"
+    assert payload["selection_meta"]["window_center_ev"] is None
+    assert payload["selection_meta"]["window_width_ev"] is None
+    assert len(payload["points"]) == 4
+    assert {item["profile_id"] for item in payload["points"]} == {"all_geometries"}
+    assert {item["distribution_label"] for item in payload["distributions"]} == {"Project A", "Project B"}
+    assert all(item["selected_count"] == 0 for item in payload["distributions"])
+
+
+def test_project_soap_umap_window_api_returns_joint_points(monkeypatch) -> None:
+    _install_fake_soap_modules(monkeypatch)
+    _install_fake_umap_module(monkeypatch)
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/api/distributions/project-soap-umap-window", "POST")
+
+    dist_a = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Project A",
+            electronic_profiles=[{"profile_id": "td_a", "label": "Profile A"}],
+        ),
+    )
+    dist_b = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Project B",
+            electronic_profiles=[{"profile_id": "td_b", "label": "Profile B"}],
+        ),
+    )
+
+    payload = _invoke_endpoint(
+        endpoint,
+        DistributionSoapUmapWindowRequest(
+            items=[
+                DistributionSelectionRequestItem(
+                    distribution_id=str(dist_a["distribution_id"]),
+                    profile_id="td_a",
+                ),
+                DistributionSelectionRequestItem(
+                    distribution_id=str(dist_b["distribution_id"]),
+                    profile_id="td_b",
+                ),
+            ],
+            window_center_ev=3.0,
+            window_width_ev=0.5,
+        ),
+    ).model_dump()
+
+    assert payload["projection_meta"]["method"] == "umap"
+    assert payload["projection_meta"]["feature_kind"] == "soap_atomwise_pooled"
+    assert payload["projection_meta"]["axis_labels"] == ["UMAP 1", "UMAP 2"]
+    assert len(payload["points"]) == 4
+    assert {item["distribution_label"] for item in payload["distributions"]} == {"Project A", "Project B"}
+    assert all("normalized_selection_weight" in item for item in payload["points"])
+
+
+def test_project_soap_umap_window_api_reports_missing_optional_dependency(monkeypatch) -> None:
+    _install_fake_soap_modules(monkeypatch)
+    real_import_module = distribution_analysis.importlib.import_module
+
+    def _raise_for_umap(name: str, package: str | None = None):
+        if name == "umap":
+            raise ModuleNotFoundError("No module named 'umap'")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(distribution_analysis.importlib, "import_module", _raise_for_umap)
+    app = _make_app()
+    endpoint = _find_endpoint(app, "/api/distributions/project-soap-umap-window", "POST")
+
+    dist_a = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Missing UMAP",
+            electronic_profiles=[{"profile_id": "td_a", "label": "Profile A"}],
+        ),
+    )
+    dist_b = _upload_bundle(
+        app,
+        _build_bundle_bytes(
+            label="Missing UMAP B",
+            electronic_profiles=[{"profile_id": "td_b", "label": "Profile B"}],
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _invoke_endpoint(
+            endpoint,
+            DistributionSoapUmapWindowRequest(
+                items=[
+                    DistributionSelectionRequestItem(
+                        distribution_id=str(dist_a["distribution_id"]),
+                        profile_id="td_a",
+                    ),
+                    DistributionSelectionRequestItem(
+                        distribution_id=str(dist_b["distribution_id"]),
+                        profile_id="td_b",
+                    ),
+                ],
+                window_center_ev=3.0,
+                window_width_ev=0.5,
+            ),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "umap-learn" in str(exc_info.value.detail)
 
 
 def test_compare_spectrum_api_supports_same_distribution_different_profiles() -> None:

@@ -768,6 +768,30 @@ def compute_geometry_distribution(
     measurement_kind: str,
     atom_indices: list[int],
 ) -> dict[str, Any]:
+    finite_values, unit = compute_geometry_measurements(
+        bundle,
+        measurement_kind=measurement_kind,
+        atom_indices=atom_indices,
+    )
+    return {
+        "measurement_kind": str(measurement_kind).strip().lower(),
+        "atom_indices": [int(value) for value in atom_indices],
+        "unit": unit,
+        "values": finite_values.astype(float).tolist(),
+        "sample_count": int(finite_values.shape[0]),
+        "min": float(np.min(finite_values)),
+        "max": float(np.max(finite_values)),
+        "mean": float(np.mean(finite_values)),
+        "std": float(np.std(finite_values)),
+    }
+
+
+def compute_geometry_measurements(
+    bundle: DistributionBundle,
+    *,
+    measurement_kind: str,
+    atom_indices: list[int],
+) -> tuple[np.ndarray, str]:
     kind = str(measurement_kind).strip().lower()
     atom_indices_int = [int(value) for value in atom_indices]
     for atom_index in atom_indices_int:
@@ -802,17 +826,7 @@ def compute_geometry_distribution(
     finite_values = np.asarray(values[np.isfinite(values)], dtype=float).reshape(-1)
     if finite_values.size <= 0:
         raise ValueError("Measurement values are empty or non-finite for this distribution.")
-    return {
-        "measurement_kind": kind,
-        "atom_indices": atom_indices_int,
-        "unit": unit,
-        "values": finite_values.astype(float).tolist(),
-        "sample_count": int(finite_values.shape[0]),
-        "min": float(np.min(finite_values)),
-        "max": float(np.max(finite_values)),
-        "mean": float(np.mean(finite_values)),
-        "std": float(np.std(finite_values)),
-    }
+    return finite_values, unit
 
 
 def _compute_profile_excitation_payload(

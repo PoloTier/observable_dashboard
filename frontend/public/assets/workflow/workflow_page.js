@@ -174,7 +174,7 @@
       points: points.map((pair) => pair.join(',')).join(' '),
       fill: 'none',
       stroke: opts.stroke || '#667685',
-      'stroke-width': opts.width || 6,
+      'stroke-width': opts.width || 4,
       'stroke-linecap': 'round',
       'stroke-linejoin': 'round',
       'marker-end': opts.markerEnd || 'url(#wf-arrow)',
@@ -192,24 +192,24 @@
     const defs = svgEl('defs');
     defs.appendChild(svgEl('marker', {
       id: 'wf-arrow',
-      viewBox: '0 0 10 10',
-      refX: '9',
-      refY: '5',
-      markerWidth: '8',
-      markerHeight: '8',
+      viewBox: '0 0 8 8',
+      refX: '7.2',
+      refY: '4',
+      markerWidth: '6',
+      markerHeight: '6',
       orient: 'auto-start-reverse',
     }));
     defs.querySelector('#wf-arrow').appendChild(svgEl('path', {
-      d: 'M 0 0 L 10 5 L 0 10 z',
+      d: 'M 0 0 L 8 4 L 0 8 z',
       fill: '#667685',
     }));
     svg.appendChild(defs);
 
     const stages = [
-      { x: 20, y: 20, w: 1460, h: 280, label: 'Stage 1. Ensemble Generation' },
-      { x: 20, y: 330, w: 1460, h: 220, label: 'Stage 2. Annotation, Comparison, and Selection' },
-      { x: 20, y: 580, w: 1460, h: 180, label: 'Stage 3. Dynamics Production' },
-      { x: 20, y: 790, w: 1460, h: 250, label: 'Stage 4. Interactive Analysis' },
+      { id: 'stage1', x: 20, y: 20, w: 1460, h: 210, label: 'Stage 1. Ensemble Generation', routeY: 62 },
+      { id: 'stage2', x: 20, y: 260, w: 1460, h: 210, label: 'Stage 2. Annotation, Comparison, and Selection', routeY: 312 },
+      { id: 'stage3', x: 20, y: 500, w: 1460, h: 190, label: 'Stage 3. Dynamics Production', routeY: 552 },
+      { id: 'stage4', x: 20, y: 720, w: 1460, h: 230, label: 'Stage 4. Interactive Analysis', routeY: 772 },
     ];
 
     stages.forEach((stage) => {
@@ -220,15 +220,15 @@
         height: stage.h,
         rx: 24,
         ry: 24,
-        fill: 'rgba(255,255,255,0.56)',
-        stroke: 'rgba(15,23,42,0.08)',
-        'stroke-width': 2,
+        fill: 'rgba(15,23,42,0.02)',
+        stroke: 'rgba(15,23,42,0.12)',
+        'stroke-width': 1.6,
       }));
       appendText(svg, stage.x + 18, stage.y + 24, [stage.label], {
         anchor: 'start',
         fontSize: 18,
         fontWeight: 800,
-        fill: '#64748b',
+        fill: '#5b6570',
       });
     });
 
@@ -236,37 +236,36 @@
       {
         id: 'normal_modes',
         kind: 'view',
-        x: 150,
-        y: 92,
-        w: 340,
+        x: 120,
+        y: 104,
+        w: 360,
         h: 96,
         title: ['normal_modes.html'],
-        subtitle: ['sampling and geometry export'],
+        subtitle: ['sampling and export'],
         href: config.pages.normal_modes || '/normal_modes.html',
         fill: '#ffffff',
         stroke: '#4b5563',
       },
       {
         id: 'md',
-        kind: 'source',
-        x: 930,
-        y: 90,
-        w: 380,
-        h: 100,
+        kind: 'view',
+        x: 1020,
+        y: 104,
+        w: 300,
+        h: 96,
         title: ['md.html'],
-        subtitle: ['multi-frame XYZ import', 'local PIMD H5 import'],
+        subtitle: ['MD / PIMD import'],
         href: config.pages.md || '/md.html',
-        fill: '#f7fafc',
+        fill: '#ffffff',
         stroke: '#4b5563',
-        badge: config.features && config.features.pimd_placeholder ? 'PIMD Soon' : '',
       },
       {
         id: 'bundle',
         kind: 'artifact',
-        x: 575,
-        y: 210,
-        w: 350,
-        h: 90,
+        x: 560,
+        y: 106,
+        w: 380,
+        h: 92,
         title: ['Geometry Bundle'],
         subtitle: ['persistent ensemble record'],
         fill: '#edf2f7',
@@ -275,11 +274,11 @@
       {
         id: 'qm',
         kind: 'external',
-        x: 120,
-        y: 390,
-        w: 300,
-        h: 108,
-        title: ['QM Single-Point'],
+        x: 102,
+        y: 342,
+        w: 304,
+        h: 112,
+        title: ['QM single-point', 'calculation'],
         subtitle: ['external scripts'],
         fill: '#ffffff',
         stroke: '#64748b',
@@ -287,11 +286,11 @@
       {
         id: 'dist',
         kind: 'view',
-        x: 530,
-        y: 388,
-        w: 380,
-        h: 112,
-        title: ['distribution_compare.html'],
+        x: 552,
+        y: 340,
+        w: 336,
+        h: 116,
+        title: ['distribution_compare', '.html'],
         subtitle: ['compare and select'],
         href: config.pages.distribution_compare || '/distribution_compare.html',
         fill: '#ffffff',
@@ -300,10 +299,10 @@
       {
         id: 'ic',
         kind: 'artifact',
-        x: 1075,
-        y: 396,
-        w: 280,
-        h: 96,
+        x: 1074,
+        y: 348,
+        w: 292,
+        h: 100,
         title: ['Initial Conditions'],
         subtitle: ['selected geometry-state set'],
         fill: '#edf2f7',
@@ -312,10 +311,10 @@
       {
         id: 'engine',
         kind: 'external',
-        x: 270,
-        y: 622,
-        w: 470,
-        h: 100,
+        x: 186,
+        y: 572,
+        w: 444,
+        h: 104,
         title: ['PSiNad / Newton-X / SHARC-MM'],
         subtitle: ['trajectory propagation'],
         fill: '#ffffff',
@@ -324,11 +323,11 @@
       {
         id: 'dataset',
         kind: 'artifact',
-        x: 920,
-        y: 626,
-        w: 360,
-        h: 92,
-        title: ['Dynamics Dataset'],
+        x: 822,
+        y: 572,
+        w: 420,
+        h: 104,
+        title: ['Assembled dynamics dataset'],
         subtitle: ['analysis-ready trajectories'],
         fill: '#edf2f7',
         stroke: '#475569',
@@ -336,9 +335,9 @@
       {
         id: 'dashboard',
         kind: 'view',
-        x: 110,
-        y: 862,
-        w: 320,
+        x: 104,
+        y: 804,
+        w: 280,
         h: 104,
         title: ['index.html'],
         subtitle: ['2D trajectory panels'],
@@ -349,9 +348,9 @@
       {
         id: 'molecule3d',
         kind: 'view',
-        x: 560,
-        y: 862,
-        w: 320,
+        x: 558,
+        y: 804,
+        w: 300,
         h: 104,
         title: ['molecule3d.html'],
         subtitle: ['3D structure viewer'],
@@ -363,11 +362,11 @@
         id: 'export',
         kind: 'output',
         x: 1080,
-        y: 868,
-        w: 240,
-        h: 92,
-        title: ['Exported'],
-        subtitle: ['observables'],
+        y: 808,
+        w: 232,
+        h: 96,
+        title: ['Exported', 'observables'],
+        subtitle: [],
         fill: '#ffffff',
         stroke: '#4b5563',
       },
@@ -375,21 +374,63 @@
 
     nodes.forEach((node) => createNode(svg, node));
 
-    polyline(svg, [[320, 188], [320, 220], [590, 220]]);
-    polyline(svg, [[1120, 190], [1120, 220], [910, 220]]);
-    polyline(svg, [[750, 300], [750, 388], [420, 388]]);
-    polyline(svg, [[420, 444], [530, 444]]);
-    polyline(svg, [[910, 444], [1075, 444]]);
-    polyline(svg, [[1215, 492], [1215, 560], [740, 560], [740, 622]]);
-    polyline(svg, [[740, 672], [920, 672]]);
-    polyline(svg, [[1100, 718], [1100, 812], [270, 812], [270, 862]]);
-    polyline(svg, [[1100, 718], [1100, 812], [720, 812], [720, 862]]);
-    polyline(svg, [[1100, 718], [1100, 868]]);
-    polyline(svg, [[430, 914], [560, 914]], {
+    const nodeById = Object.fromEntries(nodes.map((node) => [node.id, node]));
+    const stageById = Object.fromEntries(stages.map((stage) => [stage.id, stage]));
+    const topCenter = (nodeId) => {
+      const node = nodeById[nodeId];
+      return [node.x + node.w / 2, node.y];
+    };
+    const bottomCenter = (nodeId) => {
+      const node = nodeById[nodeId];
+      return [node.x + node.w / 2, node.y + node.h];
+    };
+    const leftCenter = (nodeId) => {
+      const node = nodeById[nodeId];
+      return [node.x, node.y + node.h / 2];
+    };
+    const rightCenter = (nodeId) => {
+      const node = nodeById[nodeId];
+      return [node.x + node.w, node.y + node.h / 2];
+    };
+    const verticalThenHorizontal = (fromId, toId, offset = 28) => {
+      const start = bottomCenter(fromId);
+      const end = topCenter(toId);
+      const elbowY = start[1] + offset;
+      return [
+        start,
+        [start[0], elbowY],
+        [end[0], elbowY],
+        end,
+      ];
+    };
+    const routeIntoStage = (fromId, toId, stageId, offset = 28) => {
+      const start = bottomCenter(fromId);
+      const end = topCenter(toId);
+      const targetStage = stageById[stageId];
+      const laneY = Math.max(start[1] + offset, Number(targetStage?.routeY || 0));
+      return [
+        start,
+        [start[0], laneY],
+        [end[0], laneY],
+        end,
+      ];
+    };
+
+    polyline(svg, [rightCenter('normal_modes'), leftCenter('bundle')]);
+    polyline(svg, [leftCenter('md'), rightCenter('bundle')]);
+    polyline(svg, routeIntoStage('bundle', 'qm', 'stage2', 56));
+    polyline(svg, [rightCenter('qm'), leftCenter('dist')]);
+    polyline(svg, [rightCenter('dist'), leftCenter('ic')]);
+    polyline(svg, routeIntoStage('ic', 'engine', 'stage3', 68));
+    polyline(svg, [rightCenter('engine'), leftCenter('dataset')]);
+    polyline(svg, routeIntoStage('dataset', 'dashboard', 'stage4', 78));
+    polyline(svg, routeIntoStage('dataset', 'molecule3d', 'stage4', 78));
+    polyline(svg, routeIntoStage('dataset', 'export', 'stage4', 78));
+    polyline(svg, [rightCenter('dashboard'), leftCenter('molecule3d')], {
       markerEnd: 'url(#wf-arrow)',
       markerStart: 'url(#wf-arrow)',
       dash: '14 10',
-      width: 5,
+      width: 3.5,
     });
   }
 
@@ -403,13 +444,13 @@
         title: 'Normal Modes Sampling',
         file: 'normal_modes.html',
         href: config.pages.normal_modes || '/normal_modes.html',
-        copy: 'Upload a molden file, inspect normal modes, generate sampled geometries, and export geometry bundles.',
+        copy: 'Upload a molden file, inspect modes, generate ensembles, and export the geometry bundle record.',
       },
       {
-        title: 'Local MD Viewer',
+        title: 'MD / PIMD Import',
         file: 'md.html',
         href: config.pages.md || '/md.html',
-        copy: 'Load a multi-frame XYZ file directly in the browser, scrub frames, measure geometry, and export trajectory XYZ.',
+        copy: 'Import MD XYZ or standardized PIMD H5 trajectories, preview structures, and export sampled geometry bundles.',
       },
       {
         title: 'Distribution Comparison',
@@ -427,7 +468,7 @@
         title: '3D API Viewer',
         file: 'molecule3d.html',
         href: config.pages.molecule3d || '/molecule3d.html',
-        copy: 'Open the dataset-backed 3D viewer for trajectory playback, vector overlays, hydrogen bonds, and media export.',
+        copy: 'Open the dataset-backed 3D structure viewer for trajectory playback, vector overlays, hydrogen bonds, and media export.',
       },
     ];
 

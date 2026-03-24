@@ -171,6 +171,62 @@ class DistributionCompareGeometryResponse(BaseModel):
     series: list[DistributionGeometrySeries]
 
 
+class DistributionSelectionRequestItem(BaseModel):
+    distribution_id: str = Field(..., min_length=1)
+    profile_id: str = Field(..., min_length=1)
+
+
+class DistributionValueSummary(BaseModel):
+    count: int = 0
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    std: float | None = None
+    p05: float | None = None
+    p50: float | None = None
+    p95: float | None = None
+
+
+class DistributionWindowGeometrySeries(BaseModel):
+    distribution_id: str
+    profile_id: str
+    label: str
+    profile_label: str
+    source_name: str
+    all_values: list[float] = Field(default_factory=list)
+    selected_values: list[float] = Field(default_factory=list)
+    selected_count: int = 0
+    selected_fraction: float = 0.0
+    effective_sample_size: float = 0.0
+    mean_selection_weight: float = 0.0
+    max_selection_weight: float = 0.0
+    all_summary: DistributionValueSummary
+    selected_summary: DistributionValueSummary
+
+
+class DistributionCompareGeometryWindowRequest(BaseModel):
+    items: list[DistributionSelectionRequestItem] = Field(default_factory=list)
+    measurement_kind: DistributionMeasurementKind
+    atom_indices: list[int] = Field(default_factory=list)
+    bins: int = Field(default=60, ge=5, le=400)
+    window_center_ev: float
+    window_width_ev: float = Field(..., gt=0.0)
+
+
+class DistributionCompareGeometryWindowResponse(BaseModel):
+    measurement_kind: DistributionMeasurementKind
+    atom_indices: list[int]
+    unit: str
+    bins: int
+    topology_signature: str
+    window_center_ev: float
+    window_width_ev: float
+    window_min_ev: float
+    window_max_ev: float
+    selection_mode: str
+    series: list[DistributionWindowGeometrySeries]
+
+
 class DistributionSpectrumPairOption(BaseModel):
     pair: list[int] = Field(default_factory=list)
     label: str
@@ -216,6 +272,92 @@ class DistributionCompareSpectrumResponse(BaseModel):
     available_pairs: list[DistributionSpectrumPairOption] = Field(default_factory=list)
     series: list[DistributionSpectrumSeries]
     skipped: list[DistributionSpectrumSkippedItem] = Field(default_factory=list)
+
+
+class DistributionSoapUmapWindowRequest(BaseModel):
+    items: list[DistributionSelectionRequestItem] = Field(default_factory=list)
+    window_center_ev: float
+    window_width_ev: float = Field(..., gt=0.0)
+    soap_atom_indices: list[int] = Field(default_factory=list)
+    soap_r_cut: float = Field(default=5.0, gt=0.0)
+    soap_n_max: int = Field(default=6, ge=1)
+    soap_l_max: int = Field(default=4, ge=0)
+    soap_sigma: float = Field(default=0.3, gt=0.0)
+    umap_n_neighbors: int = Field(default=50, ge=2)
+    umap_min_dist: float = Field(default=0.1, ge=0.0)
+    umap_metric: str = Field(default="euclidean", min_length=1)
+    umap_random_state: int = Field(default=42, ge=0)
+
+
+class DistributionSoapUmapRequest(BaseModel):
+    distribution_ids: list[str] = Field(default_factory=list)
+    soap_atom_indices: list[int] = Field(default_factory=list)
+    soap_r_cut: float = Field(default=5.0, gt=0.0)
+    soap_n_max: int = Field(default=6, ge=1)
+    soap_l_max: int = Field(default=4, ge=0)
+    soap_sigma: float = Field(default=0.3, gt=0.0)
+    umap_n_neighbors: int = Field(default=50, ge=2)
+    umap_min_dist: float = Field(default=0.1, ge=0.0)
+    umap_metric: str = Field(default="euclidean", min_length=1)
+    umap_random_state: int = Field(default=42, ge=0)
+
+
+class DistributionSoapUmapPoint(BaseModel):
+    distribution_id: str
+    distribution_label: str
+    profile_id: str
+    profile_label: str
+    sample_index: int
+    sample_id: str
+    x: float
+    y: float
+    selection_weight: float = 0.0
+    normalized_selection_weight: float = 0.0
+    hard_selected: bool = False
+
+
+class DistributionSoapUmapProjectionMeta(BaseModel):
+    method: str
+    feature_kind: str
+    axis_labels: list[str] = Field(default_factory=list)
+    feature_dimension: int
+    soap_atom_indices: list[int] = Field(default_factory=list)
+    soap_r_cut: float
+    soap_n_max: int
+    soap_l_max: int
+    soap_sigma: float
+    umap_n_neighbors: int
+    umap_min_dist: float
+    umap_metric: str
+    umap_random_state: int
+
+
+class DistributionSoapUmapSelectionMeta(BaseModel):
+    window_center_ev: float | None = None
+    window_width_ev: float | None = None
+    window_min_ev: float | None = None
+    window_max_ev: float | None = None
+    selection_mode: str
+    topology_signature: str | None = None
+
+
+class DistributionSoapUmapDistributionSummary(BaseModel):
+    distribution_id: str
+    distribution_label: str
+    profile_id: str
+    profile_label: str
+    total_count: int
+    selected_count: int = 0
+    selected_fraction: float = 0.0
+    effective_sample_size: float = 0.0
+    dropped_count: int = 0
+
+
+class DistributionSoapUmapWindowResponse(BaseModel):
+    points: list[DistributionSoapUmapPoint] = Field(default_factory=list)
+    projection_meta: DistributionSoapUmapProjectionMeta
+    selection_meta: DistributionSoapUmapSelectionMeta
+    distributions: list[DistributionSoapUmapDistributionSummary] = Field(default_factory=list)
 
 
 class RawKeyAliasItem(BaseModel):

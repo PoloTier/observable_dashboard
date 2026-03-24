@@ -11,6 +11,8 @@
   const dom = {
     mdTab: document.getElementById('md-mode-tab-md'),
     pimdTab: document.getElementById('md-mode-tab-pimd'),
+    mdPanel: document.getElementById('md-panel-md'),
+    pimdPanel: document.getElementById('md-panel-pimd'),
     mdUploadCard: document.getElementById('md-upload-card'),
     pimdUploadCard: document.getElementById('pimd-upload-card'),
     uploadInput: document.getElementById('md-upload-input'),
@@ -110,8 +112,8 @@
   function setPanelMode(mode) {
     const normalized = mode === 'pimd' ? 'pimd' : 'md';
     localState.panelMode = normalized;
-    if (dom.mdUploadCard) dom.mdUploadCard.hidden = normalized !== 'md';
-    if (dom.pimdUploadCard) dom.pimdUploadCard.hidden = normalized !== 'pimd';
+    if (dom.mdPanel) dom.mdPanel.hidden = normalized !== 'md';
+    if (dom.pimdPanel) dom.pimdPanel.hidden = normalized !== 'pimd';
     if (dom.mdTab) {
       dom.mdTab.classList.toggle('is-active', normalized === 'md');
       dom.mdTab.setAttribute('aria-selected', normalized === 'md' ? 'true' : 'false');
@@ -1076,6 +1078,9 @@
     }
 
     if (isPimd) {
+      const allowAtomIndices = localState.pimdDisplayMode === 'single';
+      let rerenderAfterToggle = false;
+
       shared.setColorSettingsOpen(false);
       shared.setFrameLabelFormatter((frameIndex, frameCount) => {
         const step = localState.pimdData && Array.isArray(localState.pimdData.step)
@@ -1090,8 +1095,11 @@
         shared.setControlsGroupOpen('playback', true);
       }
       if (sharedDom.showAtomIndexCheckbox) {
-        sharedDom.showAtomIndexCheckbox.checked = false;
-        sharedDom.showAtomIndexCheckbox.disabled = true;
+        if (!allowAtomIndices && sharedDom.showAtomIndexCheckbox.checked) {
+          sharedDom.showAtomIndexCheckbox.checked = false;
+          rerenderAfterToggle = true;
+        }
+        sharedDom.showAtomIndexCheckbox.disabled = !allowAtomIndices;
       }
       if (sharedDom.dynamicBondsCheckbox) {
         sharedDom.dynamicBondsCheckbox.checked = false;
@@ -1100,6 +1108,9 @@
       viewer.setDynamicBondsEnabled(false);
       shared.setDownloadButtonsEnabled(false);
       renderPimdPotentialPlot();
+      if (rerenderAfterToggle && shared.state.currentTrajId) {
+        void viewer.renderFrame(shared.state.currentFrame || 0, false);
+      }
       syncSamplingExportUi();
       return;
     }
@@ -1139,6 +1150,29 @@
     dom.pimdBeadSelect.disabled = localState.pimdDisplayMode !== 'single';
   }
 
+  async function applyCurrentMdView({ refitView = true } = {}) {
+    if (!localState.mdData) return false;
+    const record = localState.mdData;
+    const sourceName = String(localState.mdSourceFile?.name || record.traj_id || 'local_xyz');
+
+    viewer.clearAuxiliaryModels();
+    if (typeof measurement.clearMeasurementState === 'function') {
+      measurement.clearMeasurementState();
+    }
+
+    await io.loadTrajectoryRecord(sourceName.replace(/\.[^.]+$/, '') || 'local_xyz', record, {
+      loadingMessage: `Preparing viewer for ${sourceName}...`,
+      loadedMessage: `Loaded local XYZ ${sourceName} (${record.n_frames} frames).`,
+    });
+
+    setSourceInfo(sourceName);
+    setActiveDatasetKind('md');
+    if (!refitView) {
+      await viewer.renderFrame(shared.state.currentFrame || 0, false);
+    }
+    return true;
+  }
+
   async function applyCurrentPimdView({ refitView = true } = {}) {
     if (!localState.pimdData) return false;
     const data = localState.pimdData;
@@ -1166,6 +1200,22 @@
     return true;
   }
 
+  async function switchPanelMode(mode) {
+    const normalized = mode === 'pimd' ? 'pimd' : 'md';
+    setPanelMode(normalized);
+
+    if (normalized === 'md') {
+      if (localState.mdData && localState.activeDatasetKind !== 'md') {
+        await applyCurrentMdView({ refitView: false });
+      }
+      return;
+    }
+
+    if (localState.pimdData && localState.activeDatasetKind !== 'pimd') {
+      await applyCurrentPimdView({ refitView: false });
+    }
+  }
+
   async function importPimdFile(file) {
     if (!(file instanceof File)) return;
     setPanelMode('pimd');
@@ -1178,19 +1228,20 @@
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       shared.setStatus(`Failed to parse ${file.name}: ${detail}`, true);
-      setPimdUploadFileName(file.name);
-      setPimdMetadata(null);
+      if (localState.pimdData) {
+        setPimdUploadFileName(localState.pimdData.fileName);
+        setPimdMetadata(localState.pimdData);
+      } else {
+        setPimdUploadFileName(file.name);
+        setPimdMetadata(null);
+      }
       return;
     }
 
-    localState.mdData = null;
-    localState.mdSourceFile = null;
     localState.pimdData = data;
     localState.pimdSourceFile = file;
     localState.pimdSelectedBead = 0;
     localState.pimdDisplayMode = 'single';
-    setMdMetadata('', null);
-    setMdUploadFileName('No file loaded.');
     if (dom.pimdDisplayModeSelect) dom.pimdDisplayModeSelect.value = 'single';
     populatePimdBeadSelect(data.nBeads, 0);
     setPimdMetadata(data);
@@ -1211,7 +1262,7 @@
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       shared.setStatus(`Failed to read ${file.name}: ${detail}`, true);
-      setMdUploadFileName(file.name);
+      setMdUploadFileName(localState.mdSourceFile?.name || file.name);
       return;
     }
 
@@ -1221,28 +1272,20 @@
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       shared.setStatus(`Failed to parse ${file.name}: ${detail}`, true);
-      setMdMetadata(file.name, null);
+      if (localState.mdData) {
+        setMdMetadata(localState.mdSourceFile?.name || file.name, localState.mdData);
+        setMdUploadFileName(localState.mdSourceFile?.name || file.name);
+      } else {
+        setMdMetadata(file.name, null);
+      }
       return;
     }
 
     localState.mdData = record;
     localState.mdSourceFile = file;
-    localState.pimdData = null;
-    localState.pimdSourceFile = null;
-    viewer.clearAuxiliaryModels();
-    if (typeof measurement.clearMeasurementState === 'function') {
-      measurement.clearMeasurementState();
-    }
-    setPimdMetadata(null);
-    setPimdUploadFileName('No file loaded.');
     setMdMetadata(file.name, record);
-    await io.loadTrajectoryRecord(file.name.replace(/\.[^.]+$/, '') || 'local_xyz', record, {
-      loadingMessage: `Preparing viewer for ${file.name}...`,
-      loadedMessage: `Loaded local XYZ ${file.name} (${record.n_frames} frames).`,
-    });
-    setSourceInfo(file.name);
-    setActiveDatasetKind('md');
     setMdUploadFileName(file.name);
+    await applyCurrentMdView({ refitView: true });
     resetSamplingControlsForActiveDataset();
   }
 
@@ -1272,8 +1315,12 @@
   }
 
   function bindModeTabs() {
-    dom.mdTab?.addEventListener('click', () => setPanelMode('md'));
-    dom.pimdTab?.addEventListener('click', () => setPanelMode('pimd'));
+    dom.mdTab?.addEventListener('click', () => {
+      void switchPanelMode('md');
+    });
+    dom.pimdTab?.addEventListener('click', () => {
+      void switchPanelMode('pimd');
+    });
   }
 
   function bindUploadControls() {

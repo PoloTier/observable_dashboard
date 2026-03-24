@@ -730,8 +730,8 @@
     </section>
 
     <div class="mode-tabs" role="tablist" aria-label="MD and PIMD modes">
-      <button id="md-mode-tab-md" class="mode-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="md-upload-card">MD</button>
-      <button id="md-mode-tab-pimd" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="pimd-upload-card">PIMD</button>
+      <button id="md-mode-tab-md" class="mode-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="md-panel-md">MD</button>
+      <button id="md-mode-tab-pimd" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="md-panel-pimd">PIMD</button>
     </div>
 
     <section id="md-panel-md" class="workspace-panel">
@@ -778,8 +778,10 @@
           </div>
         </div>
       </section>
+    </section>
 
-      <section id="pimd-upload-card" class="card upload-card" hidden>
+    <section id="md-panel-pimd" class="workspace-panel" hidden>
+      <section id="pimd-upload-card" class="card upload-card">
         <div>
           <h2 class="upload-block-title">Load Standard PIMD H5</h2>
           <p class="upload-copy">
@@ -836,11 +838,12 @@
           </div>
 
           <div class="pimd-mode-note">
-            <strong>All Beads mode:</strong> all beads are shown together for playback only. Measurement, atom picking,
-            and XYZ export remain disabled in PIMD mode in this first implementation.
+            <strong>All Beads mode:</strong> all beads are shown together for playback only. Atom indices are available
+            in single-bead mode only; measurement, atom picking, and XYZ export remain disabled in this first implementation.
           </div>
         </div>
       </section>
+    </section>
 
       <div class="card header">
         <div class="header-top">
@@ -1146,8 +1149,6 @@
 
         const modules = [
           '/assets/dashboard/dashboard_appearance.js',
-          '/assets/dashboard/dashboard_state.js',
-          '/assets/dashboard/dashboard_data_loader.js',
           '/assets/mol3d/dashboard_mol3d_constants.js',
           '/assets/mol3d/dashboard_mol3d_utils.js',
           '/assets/mol3d/dashboard_mol3d_store.js',

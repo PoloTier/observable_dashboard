@@ -24,7 +24,8 @@ from backend.server.distribution_bundle import (  # noqa: E402
     DISTRIBUTION_BUNDLE_SCHEMA_VERSION,
     build_topology_signature,
 )
-from backend.server.molden import BOHR_TO_ANG, PERIODIC_SYMBOLS  # noqa: E402
+from scripts.basic.elements import atom_symbol as basic_atom_symbol  # noqa: E402
+from scripts.basic.units import BOHR_TO_ANG  # noqa: E402
 
 
 ELECTRONIC_STRUCTURE_METHOD = "pyscf_tddft"
@@ -259,10 +260,7 @@ def ensure_empty_directory(path: Path) -> None:
 
 
 def atom_symbol(atomic_number: int) -> str:
-    index = int(atomic_number)
-    if 0 < index < len(PERIODIC_SYMBOLS) and PERIODIC_SYMBOLS[index]:
-        return str(PERIODIC_SYMBOLS[index])
-    return "X"
+    return basic_atom_symbol(atomic_number)
 
 
 def geometry_sha1(atom_numbers: np.ndarray, coords_bohr_sample: np.ndarray) -> str:

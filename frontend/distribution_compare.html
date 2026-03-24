@@ -770,6 +770,9 @@
       gap: 12px;
       margin-top: 16px;
     }
+    .form-grid.compact {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
     .field-group {
       display: grid;
       gap: 6px;
@@ -886,6 +889,111 @@
       gap: 14px;
       flex-wrap: wrap;
     }
+    .selection-window-section {
+      margin-top: 18px;
+      display: grid;
+      gap: 12px;
+    }
+    .selection-toggle-row {
+      display: grid;
+      gap: 10px;
+    }
+    .selection-toggle {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      color: var(--text-soft);
+    }
+    .selection-toggle input {
+      margin-top: 3px;
+    }
+    .selection-toggle-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .selection-toggle-title {
+      font-size: 13px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .selection-toggle-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .selection-window-header {
+      display: grid;
+      gap: 6px;
+    }
+    .selection-window-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .selection-window-note {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px dashed var(--border-strong);
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .selection-profile-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .selection-profile-item {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+    }
+    .selection-profile-name {
+      color: var(--text-soft);
+      font-size: 13px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .selection-profile-item select {
+      width: 100%;
+      min-height: 42px;
+      padding: 0 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-strong);
+      color: var(--text-soft);
+      outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+    .selection-profile-item select:focus {
+      border-color: var(--accent-border);
+      box-shadow: 0 0 0 3px rgba(15, 93, 207, 0.14);
+    }
+    .selection-profile-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .plot-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      min-height: 0;
+    }
     .plot-card {
       display: grid;
       gap: 14px;
@@ -941,6 +1049,25 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px 12px;
     }
+    .summary-groups {
+      display: grid;
+      gap: 12px;
+    }
+    .summary-group {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+    }
+    .summary-group-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
     .summary-stat {
       display: grid;
       gap: 2px;
@@ -967,6 +1094,10 @@
       }
       .form-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .form-grid.compact,
+      .plot-grid {
+        grid-template-columns: 1fr;
       }
     }
     @media (max-width: 900px) {
@@ -1004,6 +1135,9 @@
         width: 100%;
       }
       .form-grid {
+        grid-template-columns: 1fr;
+      }
+      .form-grid.compact {
         grid-template-columns: 1fr;
       }
       .distribution-item-top {
@@ -1121,6 +1255,14 @@
         <div class="workspace-toolbar card">
           <div class="workspace-switch" role="tablist" aria-label="Distribution compare workspace">
             <button
+              id="dc-workspace-selection-btn"
+              class="workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="dc-workspace-selection-panel"
+            >Selection</button>
+            <button
               id="dc-workspace-overlay-btn"
               class="workspace-tab is-active"
               type="button"
@@ -1146,15 +1288,78 @@
             >Spectrum</button>
           </div>
           <div id="dc-workspace-hint" class="workspace-hint">
-            Adjust geometry settings and render the active distributions into one overlay histogram.
+            Adjust geometry settings and inspect the auto-refreshed histogram and UMAP for the active distributions.
           </div>
+        </div>
+
+        <div
+          id="dc-workspace-selection-panel"
+          class="workspace-panel"
+          role="tabpanel"
+          aria-labelledby="dc-workspace-selection-btn"
+          hidden
+        >
+          <section class="controls-card card">
+            <div class="section-title">Selection Settings</div>
+            <p class="section-copy">
+              Configure the spectral window and choose the electronic profile that defines selection for each active distribution.
+            </p>
+
+            <div class="selection-window-section">
+              <div class="selection-toggle-row">
+                <label class="selection-toggle" for="dc-selection-enabled">
+                  <input id="dc-selection-enabled" type="checkbox" />
+                  <div class="selection-toggle-copy">
+                    <div class="selection-toggle-title">Enable selection</div>
+                    <div class="selection-toggle-note">
+                      When disabled, Overlay and UMAP use all geometries from the active bundles. When enabled, the window and profile settings below define the selected subset.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <div class="selection-window-header">
+                <div class="selection-window-label">Window Selection</div>
+                <p class="section-copy">
+                  These parameters control which geometries are selected for the structure histogram and SOAP UMAP projection.
+                </p>
+              </div>
+
+              <div class="form-grid compact">
+                <div class="field-group">
+                  <label for="dc-window-center-ev">Window center (eV)</label>
+                  <input id="dc-window-center-ev" type="number" min="0.001" step="0.01" value="3.90" />
+                </div>
+                <div class="field-group">
+                  <label for="dc-window-width-ev">Window width (eV)</label>
+                  <input id="dc-window-width-ev" type="number" min="0.001" step="0.01" value="0.30" />
+                </div>
+              </div>
+
+              <div class="selection-window-note">
+                <code>window width</code> only controls the selection window. It is separate from the Spectrum tab&apos;s Lorentzian <code>delta_ev</code>.
+              </div>
+
+              <div id="dc-selection-profile-panel" class="selection-profile-panel">
+                <div class="spectrum-pair-empty">
+                  Enable one or more cached distributions to configure window-selection profiles.
+                </div>
+              </div>
+            </div>
+
+            <div class="controls-actions">
+              <div class="status-inline">
+                Selection changes refresh the geometry comparison and SOAP UMAP automatically.
+              </div>
+            </div>
+          </section>
         </div>
 
         <div id="dc-workspace-overlay-panel" class="workspace-panel" role="tabpanel" aria-labelledby="dc-workspace-overlay-btn">
           <section class="controls-card card">
             <div class="section-title">Geometry Compare</div>
             <p class="section-copy">
-              Choose a measurement target using 0-based atom indices, then overlay the active distributions in one histogram.
+              Choose a measurement target using 0-based atom indices, then compare each active distribution as all geometries versus the geometries selected by its active electronic profile.
             </p>
 
             <div class="form-grid">
@@ -1189,24 +1394,40 @@
             </div>
 
             <div class="controls-actions">
-              <button id="dc-compare-btn" class="compare-btn" type="button">Compare Geometry</button>
               <div id="dc-compare-status" class="status-inline">
-                Enable one or more cached distributions, then request a bond, angle, or dihedral comparison.
+                Geometry comparison refreshes automatically when measurement or selection settings change.
               </div>
             </div>
           </section>
 
-          <section class="plot-card card">
-            <div class="section-row">
-              <div class="section-title">Overlay Histogram</div>
-              <span id="dc-plot-active-pill" class="count-pill muted">0 active</span>
-            </div>
-            <div id="dc-plot" class="plot-shell">
-              <div class="distribution-empty">
-                Load one or more bundles, choose a measurement, and draw the first overlay histogram.
+          <div class="plot-grid">
+            <section class="plot-card card">
+              <div class="section-row">
+                <div class="section-title">Overlay Histogram</div>
+                <span id="dc-plot-active-pill" class="count-pill muted">0 active</span>
               </div>
-            </div>
-          </section>
+              <div id="dc-plot" class="plot-shell">
+                <div class="distribution-empty">
+                  Load one or more bundles, choose a measurement, and the histogram will refresh automatically.
+                </div>
+              </div>
+            </section>
+
+            <section class="plot-card card">
+              <div class="section-row">
+                <div class="section-title">SOAP UMAP</div>
+                <span id="dc-umap-active-pill" class="count-pill muted">0 profs</span>
+              </div>
+              <div id="dc-umap-status" class="status-inline">
+                SOAP UMAP refreshes automatically for the active distributions and their selected profiles.
+              </div>
+              <div id="dc-umap-plot" class="plot-shell">
+                <div class="distribution-empty">
+                  Enable one or more active distributions with electronic profiles to project SOAP features into UMAP.
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
 
         <div
@@ -1224,10 +1445,10 @@
               </div>
             </div>
             <div id="dc-summary-meta" class="summary-meta">
-              Comparison metadata and per-distribution statistics will appear here after the first plot.
+              Auto-refreshed comparison metadata and per-distribution statistics will appear here after the first plot.
             </div>
             <div id="dc-summary-grid" class="summary-grid">
-              <div class="empty-state">Run a comparison to populate summary statistics for each loaded distribution.</div>
+              <div class="empty-state">Activate one or more distributions and the summary will populate automatically.</div>
             </div>
           </section>
         </div>
