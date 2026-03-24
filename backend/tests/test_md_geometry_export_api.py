@@ -20,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 from backend.server.app import create_app
 from backend.server.cache import SeriesLRUCache
 from backend.server.dataset_store import DatasetStore, TrajectoryRecord
-from backend.server.models import DistributionCompareGeometryRequest
+from backend.server.models import DistributionCompareGeometryRequest, LoadTrajectorySourcePathRequest
 
 
 def _build_traj(traj_id: str) -> TrajectoryRecord:
@@ -192,6 +192,46 @@ def test_export_md_xyz_geometry_bundle_contains_geometry_exchange_payloads() -> 
     assert xyz_lines[0] == "2"
     assert "sample_idx=0" in xyz_lines[1]
     assert "frame_index=1" in xyz_lines[1]
+
+
+def test_load_md_xyz_source_path_reads_relative_path_from_backend(tmp_path: Path) -> None:
+    app = create_app(
+        store=_build_store(),
+        cache=SeriesLRUCache(max_entries=32),
+        browse_root=tmp_path,
+    )
+    endpoint = _find_endpoint(app, "/api/md/load-xyz-path", "POST")
+
+    fixture_path = tmp_path / "sample.xyz"
+    fixture_path.write_text(_xyz_fixture_text(), encoding="utf-8")
+    response = _invoke_endpoint(
+        endpoint,
+        req=LoadTrajectorySourcePathRequest(path="sample.xyz"),
+    )
+
+    assert response.status_code == 200
+    assert response.media_type == "text/plain"
+    assert response.body.decode("utf-8") == _xyz_fixture_text()
+
+
+def test_load_pimd_source_path_reads_absolute_path_from_backend(tmp_path: Path) -> None:
+    app = create_app(
+        store=_build_store(),
+        cache=SeriesLRUCache(max_entries=32),
+        browse_root=tmp_path,
+    )
+    endpoint = _find_endpoint(app, "/api/md/load-pimd-path", "POST")
+
+    fixture_path = tmp_path / "sample_pimd.h5"
+    expected_bytes = _write_standard_pimd_h5(fixture_path)
+    response = _invoke_endpoint(
+        endpoint,
+        req=LoadTrajectorySourcePathRequest(path=str(fixture_path.resolve())),
+    )
+
+    assert response.status_code == 200
+    assert response.media_type == "application/octet-stream"
+    assert response.body == expected_bytes
 
 
 def test_exported_md_xyz_geometry_bundle_loads_into_distribution_compare() -> None:

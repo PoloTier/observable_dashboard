@@ -88,6 +88,7 @@ from backend.server.models import (
     HoppingEventsResponse,
     LoadDatasetRequest,
     LoadDatasetResponse,
+    LoadTrajectorySourcePathRequest,
     LoadDistributionPathRequest,
     MoleculeDeNacResponse,
     MoleculeDeResponse,
@@ -117,6 +118,8 @@ logger = logging.getLogger(__name__)
 MAX_INSPECT_KEYS = 200
 RAW_ALIAS_PREFIX = "raw_alias::"
 LOADABLE_DATASET_SUFFIXES = frozenset({".pkl", ".pickle"})
+MD_SOURCE_SUFFIXES = frozenset({".xyz"})
+PIMD_SOURCE_SUFFIXES = frozenset({".h5", ".hdf5"})
 
 
 def _normalize_indices(indices: list[int]) -> list[int]:
@@ -558,6 +561,27 @@ def create_app(
             resolved.relative_to(browse_root_resolved)
         except ValueError as exc:
             raise HTTPException(status_code=403, detail="Requested path is outside the browse root.") from exc
+        return resolved
+
+    def _resolve_manual_source_path(raw_path: str) -> Path:
+        path_text = str(raw_path or "").strip()
+        if not path_text:
+            raise HTTPException(status_code=422, detail="path must not be empty.")
+
+        candidate = Path(path_text)
+        if not candidate.is_absolute():
+            base_root = browse_root_resolved if browse_root_resolved is not None else Path.cwd().resolve()
+            candidate = base_root / candidate
+
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"Path not found: {path_text}") from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to resolve path: {exc}") from exc
+
+        if not resolved.is_file():
+            raise HTTPException(status_code=422, detail=f"Path is not a file: {path_text}")
         return resolved
 
     def _build_file_browser_response(
@@ -1283,6 +1307,32 @@ def create_app(
                 "Content-Disposition": f'attachment; filename="{file_name}"',
             },
         )
+
+    @app.post(f"{api_base}/md/load-xyz-path")
+    def load_md_xyz_source_path(req: LoadTrajectorySourcePathRequest) -> Response:
+        target_path = _resolve_manual_source_path(req.path)
+        if not _path_matches_suffixes(target_path, MD_SOURCE_SUFFIXES):
+            raise HTTPException(status_code=422, detail="Only .xyz files can be loaded.")
+
+        try:
+            source_bytes = target_path.read_bytes()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read XYZ source: {exc}") from exc
+
+        return Response(content=source_bytes, media_type="text/plain")
+
+    @app.post(f"{api_base}/md/load-pimd-path")
+    def load_pimd_source_path(req: LoadTrajectorySourcePathRequest) -> Response:
+        target_path = _resolve_manual_source_path(req.path)
+        if not _path_matches_suffixes(target_path, PIMD_SOURCE_SUFFIXES):
+            raise HTTPException(status_code=422, detail="Only .h5 and .hdf5 files can be loaded.")
+
+        try:
+            source_bytes = target_path.read_bytes()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read PIMD source: {exc}") from exc
+
+        return Response(content=source_bytes, media_type="application/octet-stream")
 
     @app.post(f"{api_base}/distributions/load", response_model=DistributionListItem)
     async def load_distribution_via_upload(

@@ -16,6 +16,9 @@
     mdUploadCard: document.getElementById('md-upload-card'),
     pimdUploadCard: document.getElementById('pimd-upload-card'),
     uploadInput: document.getElementById('md-upload-input'),
+    mdBackendPathInput: document.getElementById('md-backend-path-input'),
+    mdBackendBrowseBtn: document.getElementById('md-backend-browse-btn'),
+    mdBackendImportBtn: document.getElementById('md-backend-import-btn'),
     dropzone: document.getElementById('md-dropzone'),
     uploadFileName: document.getElementById('md-upload-file-name'),
     metaFile: document.getElementById('md-meta-file'),
@@ -24,6 +27,9 @@
     metaAtoms: document.getElementById('md-meta-atoms'),
     metaElements: document.getElementById('md-meta-elements'),
     pimdInput: document.getElementById('pimd-upload-input'),
+    pimdBackendPathInput: document.getElementById('pimd-backend-path-input'),
+    pimdBackendBrowseBtn: document.getElementById('pimd-backend-browse-btn'),
+    pimdBackendImportBtn: document.getElementById('pimd-backend-import-btn'),
     pimdDropzone: document.getElementById('pimd-dropzone'),
     pimdUploadFileName: document.getElementById('pimd-upload-file-name'),
     pimdMetaFile: document.getElementById('pimd-meta-file'),
@@ -54,6 +60,15 @@
     samplingSummary: document.getElementById('md-sampling-summary'),
     exportGeometryBundleBtn: document.getElementById('md-export-geometry-bundle-btn'),
     exportGeometryBundleStatus: document.getElementById('md-export-geometry-bundle-status'),
+    backendBrowserModal: document.getElementById('md-backend-browser-modal'),
+    backendBrowserTitle: document.getElementById('md-backend-browser-title'),
+    backendBrowserSubtitle: document.getElementById('md-backend-browser-subtitle'),
+    backendBrowserRoot: document.getElementById('md-backend-browser-root'),
+    backendBrowserPath: document.getElementById('md-backend-browser-path'),
+    backendBrowserCloseBtn: document.getElementById('md-backend-browser-close-btn'),
+    backendBrowserUpBtn: document.getElementById('md-backend-browser-up-btn'),
+    backendBrowserStatus: document.getElementById('md-backend-browser-status'),
+    backendBrowserList: document.getElementById('md-backend-browser-list'),
   };
 
   const bootstrap = shared.bootstrap && typeof shared.bootstrap === 'object' ? shared.bootstrap : {};
@@ -68,13 +83,21 @@
     activeDatasetKind: 'md',
     mdData: null,
     mdSourceFile: null,
+    mdSourceLabel: 'Local XYZ',
+    mdSourceOrigin: 'local',
     pimdData: null,
     pimdSourceFile: null,
+    pimdSourceLabel: '',
+    pimdSourceOrigin: 'local',
     pimdDisplayMode: 'single',
     pimdSelectedBead: 0,
     pimdFsPath: '',
     appearanceUnsubscribe: null,
     samplingExportInFlight: false,
+    backendBrowserMode: 'md',
+    backendBrowserBusy: false,
+    backendBrowserCurrentPath: '',
+    backendBrowserParentPath: null,
   };
 
   if (dom.workflowLink && pages.workflow) {
@@ -149,6 +172,78 @@
   function getApiBase() {
     const apiBase = typeof shared.apiBase === 'string' ? shared.apiBase.trim() : '';
     return (apiBase ? apiBase : '/api').replace(/\/$/, '') || '/api';
+  }
+
+  function getBackendInputEl(mode) {
+    return mode === 'pimd' ? dom.pimdBackendPathInput : dom.mdBackendPathInput;
+  }
+
+  function normalizeBrowserRelativePath(rawValue) {
+    return String(rawValue || '').trim().replace(/\\/g, '/');
+  }
+
+  function browserModeTitle(mode) {
+    return mode === 'pimd' ? 'Choose Server PIMD File' : 'Choose Server XYZ File';
+  }
+
+  function browserModeSubtitle(mode) {
+    return mode === 'pimd'
+      ? 'Browse the server root and click a .h5 or .hdf5 file to import it.'
+      : 'Browse the server root and click a .xyz file to import it.';
+  }
+
+  function isBackendPathBrowsable(rawValue) {
+    const text = normalizeBrowserRelativePath(rawValue);
+    return !!text && !pathIsAbsoluteLike(text);
+  }
+
+  function pathIsAbsoluteLike(pathText) {
+    return pathText.startsWith('/') || /^[A-Za-z]:\//.test(pathText);
+  }
+
+  function backendBrowserFileSupported(entryName, mode) {
+    const text = String(entryName || '').trim();
+    return mode === 'pimd' ? /\.(?:h5|hdf5)$/i.test(text) : /\.xyz$/i.test(text);
+  }
+
+  function initialBackendBrowserPath(mode) {
+    const inputValue = normalizeBrowserRelativePath(getBackendInputEl(mode)?.value);
+    if (!isBackendPathBrowsable(inputValue)) {
+      return '';
+    }
+    if (backendBrowserFileSupported(inputValue, mode)) {
+      const parts = inputValue.split('/').filter(Boolean);
+      parts.pop();
+      return parts.join('/');
+    }
+    return inputValue;
+  }
+
+  async function listBrowseRootFiles(path = '') {
+    const normalizedPath = normalizeBrowserRelativePath(path);
+    const url = new URL(`${getApiBase()}/files`, window.location.origin);
+    if (normalizedPath) {
+      url.searchParams.set('path', normalizedPath);
+    }
+
+    const response = await fetch(url.toString(), { method: 'GET' });
+    if (!response.ok) {
+      throw new Error(await readErrorResponseDetail(response));
+    }
+
+    const payload = await response.json();
+    return {
+      rootLabel: String(payload?.root_label || ''),
+      currentPath: String(payload?.current_path || ''),
+      parentPath: payload?.parent_path == null ? null : String(payload.parent_path || ''),
+      entries: Array.isArray(payload?.entries)
+        ? payload.entries.map((entry) => ({
+            name: String(entry?.name || ''),
+            relativePath: String(entry?.relative_path || ''),
+            kind: entry?.kind === 'directory' ? 'directory' : 'file',
+          }))
+        : [],
+    };
   }
 
   function triggerBlobDownload(fileName, blob) {
@@ -251,7 +346,7 @@
   function parseSamplingSelection() {
     const sourceFile = getActiveSamplingSourceFile();
     if (!(sourceFile instanceof File)) {
-      throw new Error('Load a local trajectory before exporting a sampling bundle.');
+      throw new Error('Load a trajectory before exporting a sampling bundle.');
     }
 
     const frameCount = getActiveSamplingFrameCount();
@@ -325,14 +420,14 @@
     };
   }
 
-  function setMdMetadata(fileName, record) {
+  function setMdMetadata(fileName, record, sourceOrigin = 'local') {
     const frameCount = Array.isArray(record?.coords) ? record.coords.length : 0;
     const atomCount = Number.parseInt(String(record?.n_atoms), 10) || 0;
     if (dom.metaFile) dom.metaFile.textContent = fileName || 'none';
     if (dom.metaFileSubvalue) {
       dom.metaFileSubvalue.textContent = frameCount > 0
-        ? `Parsed ${frameCount} frame${frameCount === 1 ? '' : 's'} from a local XYZ trajectory.`
-        : 'Waiting for upload.';
+        ? `Parsed ${frameCount} frame${frameCount === 1 ? '' : 's'} from a ${sourceOrigin === 'backend' ? 'backend path' : 'local'} XYZ trajectory.`
+        : 'Waiting for upload or backend import.';
     }
     if (dom.metaFrames) dom.metaFrames.textContent = String(frameCount);
     if (dom.metaAtoms) dom.metaAtoms.textContent = String(atomCount);
@@ -345,10 +440,10 @@
 
   function setPimdMetadata(data) {
     const hasData = !!data;
-    if (dom.pimdMetaFile) dom.pimdMetaFile.textContent = hasData ? data.fileName : 'none';
+    if (dom.pimdMetaFile) dom.pimdMetaFile.textContent = hasData ? (data.sourceLabel || data.fileName) : 'none';
     if (dom.pimdMetaFileSubvalue) {
       dom.pimdMetaFileSubvalue.textContent = hasData
-        ? `Schema ${data.schemaName || 'observable_dashboard_pimd'} v${data.schemaVersion}, coordinates in ${data.coordUnit}.`
+        ? `Schema ${data.schemaName || 'observable_dashboard_pimd'} v${data.schemaVersion}, coordinates in ${data.coordUnit}, imported from ${data.sourceOrigin === 'backend' ? 'a backend path' : 'a local file'}.`
         : 'Waiting for a standardized PIMD H5 import.';
     }
     if (dom.pimdMetaFrames) dom.pimdMetaFrames.textContent = hasData ? String(data.nFrames) : '0';
@@ -928,7 +1023,7 @@
 
     if (!hasSource || frameCount <= 0) {
       if (dom.exportGeometryBundleBtn) dom.exportGeometryBundleBtn.disabled = true;
-      setSamplingSummary('Load a local trajectory to prepare sampling export.');
+      setSamplingSummary('Load a trajectory to prepare sampling export.');
       return;
     }
 
@@ -992,6 +1087,179 @@
       // ignore body read failures
     }
     return `Request failed with status ${response.status}.`;
+  }
+
+  function normalizeBackendPath(rawValue) {
+    return String(rawValue || '').trim();
+  }
+
+  function inferFileNameFromPath(rawPath, fallback) {
+    const normalizedPath = normalizeBackendPath(rawPath).replace(/[?#].*$/, '');
+    const parts = normalizedPath.split(/[\\/]+/).filter(Boolean);
+    const candidate = parts.length ? parts[parts.length - 1] : '';
+    return candidate || String(fallback || 'source.dat');
+  }
+
+  async function fetchSourceFileFromBackend(rawPath, sourceKind) {
+    const normalizedPath = normalizeBackendPath(rawPath);
+    if (!normalizedPath) {
+      throw new Error('Path is required.');
+    }
+
+    const isPimd = sourceKind === 'pimd';
+    const endpoint = isPimd ? '/md/load-pimd-path' : '/md/load-xyz-path';
+    const fallbackFileName = inferFileNameFromPath(normalizedPath, isPimd ? 'trajectory.h5' : 'trajectory.xyz');
+    const response = await fetch(`${getApiBase()}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: normalizedPath }),
+    });
+    if (!response.ok) {
+      throw new Error(await readErrorResponseDetail(response));
+    }
+
+    const blob = await response.blob();
+    return {
+      file: new File([blob], fallbackFileName, {
+        type: isPimd ? 'application/octet-stream' : 'text/plain',
+      }),
+      sourceLabel: normalizedPath,
+    };
+  }
+
+  function setBackendBrowserStatus(message, isError = false) {
+    if (!dom.backendBrowserStatus) return;
+    dom.backendBrowserStatus.textContent = String(message || '');
+    dom.backendBrowserStatus.classList.toggle('error', !!isError);
+  }
+
+  function syncBackendBrowserUi() {
+    const busy = !!localState.backendBrowserBusy;
+    if (dom.backendBrowserUpBtn) {
+      dom.backendBrowserUpBtn.disabled = busy || localState.backendBrowserParentPath == null;
+    }
+    if (dom.backendBrowserCloseBtn) {
+      dom.backendBrowserCloseBtn.disabled = busy;
+    }
+  }
+
+  async function handleBackendBrowserFileSelection(relativePath) {
+    const mode = localState.backendBrowserMode === 'pimd' ? 'pimd' : 'md';
+    const inputEl = getBackendInputEl(mode);
+    if (inputEl) {
+      inputEl.value = String(relativePath || '');
+    }
+    closeBackendBrowser({ force: true });
+    if (mode === 'pimd') {
+      await importPimdBackendPath();
+      return;
+    }
+    await importXyzBackendPath();
+  }
+
+  function renderBackendBrowserEntries(entries) {
+    if (!dom.backendBrowserList) return;
+    dom.backendBrowserList.innerHTML = '';
+    const mode = localState.backendBrowserMode === 'pimd' ? 'pimd' : 'md';
+    const visibleEntries = Array.isArray(entries)
+      ? entries.filter((entry) => {
+          if (!entry || typeof entry !== 'object') return false;
+          if (entry.kind === 'directory') return true;
+          return backendBrowserFileSupported(entry.name, mode);
+        })
+      : [];
+
+    if (!visibleEntries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'modal-empty';
+      empty.textContent = mode === 'pimd'
+        ? 'No matching .h5 or .hdf5 files are available here.'
+        : 'No matching .xyz files are available here.';
+      dom.backendBrowserList.appendChild(empty);
+      return;
+    }
+
+    for (const entry of visibleEntries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'directory-browser-item';
+
+      const main = document.createElement('div');
+      main.className = 'directory-browser-item-main';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'directory-browser-item-name';
+      nameEl.textContent = entry.name || entry.relativePath || '(entry)';
+      const metaEl = document.createElement('div');
+      metaEl.className = 'directory-browser-item-meta';
+      metaEl.textContent = entry.relativePath ? `/${entry.relativePath}` : '/';
+      main.appendChild(nameEl);
+      main.appendChild(metaEl);
+
+      const actionEl = document.createElement('div');
+      actionEl.className = 'directory-browser-item-meta';
+      actionEl.textContent = entry.kind === 'directory' ? 'Open' : 'Import';
+
+      button.appendChild(main);
+      button.appendChild(actionEl);
+      button.addEventListener('click', () => {
+        if (localState.backendBrowserBusy) return;
+        if (entry.kind === 'directory') {
+          void loadBackendBrowserPath(entry.relativePath);
+          return;
+        }
+        void handleBackendBrowserFileSelection(entry.relativePath);
+      });
+      dom.backendBrowserList.appendChild(button);
+    }
+  }
+
+  async function loadBackendBrowserPath(path, { fallbackToRoot = false } = {}) {
+    if (!dom.backendBrowserRoot || !dom.backendBrowserPath) return;
+    localState.backendBrowserBusy = true;
+    syncBackendBrowserUi();
+    setBackendBrowserStatus('Loading files...', false);
+    try {
+      const payload = await listBrowseRootFiles(path);
+      localState.backendBrowserCurrentPath = payload.currentPath || '';
+      localState.backendBrowserParentPath = payload.parentPath == null ? null : payload.parentPath;
+      dom.backendBrowserRoot.textContent = `Root: ${payload.rootLabel || ''}`;
+      dom.backendBrowserPath.textContent = `Current path: ${payload.currentPath ? `/${payload.currentPath}` : '/'}`;
+      renderBackendBrowserEntries(payload.entries);
+      setBackendBrowserStatus('', false);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (fallbackToRoot && String(path || '').trim()) {
+        localState.backendBrowserBusy = false;
+        syncBackendBrowserUi();
+        await loadBackendBrowserPath('', { fallbackToRoot: false });
+        setBackendBrowserStatus(`Could not open ${path}. Showing the browse root instead.`, true);
+        return;
+      }
+      renderBackendBrowserEntries([]);
+      setBackendBrowserStatus(`Failed to load files: ${detail}`, true);
+    } finally {
+      localState.backendBrowserBusy = false;
+      syncBackendBrowserUi();
+    }
+  }
+
+  function openBackendBrowser(mode) {
+    if (!dom.backendBrowserModal) return;
+    localState.backendBrowserMode = mode === 'pimd' ? 'pimd' : 'md';
+    if (dom.backendBrowserTitle) {
+      dom.backendBrowserTitle.textContent = browserModeTitle(localState.backendBrowserMode);
+    }
+    if (dom.backendBrowserSubtitle) {
+      dom.backendBrowserSubtitle.textContent = browserModeSubtitle(localState.backendBrowserMode);
+    }
+    dom.backendBrowserModal.hidden = false;
+    void loadBackendBrowserPath(initialBackendBrowserPath(localState.backendBrowserMode), { fallbackToRoot: true });
+  }
+
+  function closeBackendBrowser({ force = false } = {}) {
+    if (!dom.backendBrowserModal) return;
+    if (localState.backendBrowserBusy && !force) return;
+    dom.backendBrowserModal.hidden = true;
   }
 
   async function exportGeometryBundle() {
@@ -1154,6 +1422,7 @@
     if (!localState.mdData) return false;
     const record = localState.mdData;
     const sourceName = String(localState.mdSourceFile?.name || record.traj_id || 'local_xyz');
+    const sourceLabel = String(localState.mdSourceLabel || sourceName);
 
     viewer.clearAuxiliaryModels();
     if (typeof measurement.clearMeasurementState === 'function') {
@@ -1161,11 +1430,11 @@
     }
 
     await io.loadTrajectoryRecord(sourceName.replace(/\.[^.]+$/, '') || 'local_xyz', record, {
-      loadingMessage: `Preparing viewer for ${sourceName}...`,
-      loadedMessage: `Loaded local XYZ ${sourceName} (${record.n_frames} frames).`,
+      loadingMessage: `Preparing viewer for ${sourceLabel}...`,
+      loadedMessage: `Loaded XYZ ${sourceLabel} (${record.n_frames} frames).`,
     });
 
-    setSourceInfo(sourceName);
+    setSourceInfo(sourceLabel);
     setActiveDatasetKind('md');
     if (!refitView) {
       await viewer.renderFrame(shared.state.currentFrame || 0, false);
@@ -1178,14 +1447,15 @@
     const data = localState.pimdData;
     const beadIndex = Math.max(0, Math.min(localState.pimdSelectedBead, data.nBeads - 1));
     const record = buildPimdRecord(data, beadIndex);
+    const sourceLabel = String(localState.pimdSourceLabel || data.fileName || record.traj_id || 'pimd');
 
     if (typeof measurement.clearMeasurementState === 'function') {
       measurement.clearMeasurementState();
     }
 
     await io.loadTrajectoryRecord(record.traj_id, record, {
-      loadingMessage: `Preparing PIMD viewer for ${data.fileName}...`,
-      loadedMessage: `Loaded PIMD ${data.fileName} (${data.nFrames} frames, ${data.nBeads} beads).`,
+      loadingMessage: `Preparing PIMD viewer for ${sourceLabel}...`,
+      loadedMessage: `Loaded PIMD ${sourceLabel} (${data.nFrames} frames, ${data.nBeads} beads).`,
     });
 
     viewer.clearAuxiliaryModels();
@@ -1195,7 +1465,7 @@
     }
 
     shared.setDownloadButtonsEnabled(false);
-    setSourceInfo(data.fileName);
+    setSourceInfo(sourceLabel);
     setActiveDatasetKind('pimd');
     return true;
   }
@@ -1216,53 +1486,61 @@
     }
   }
 
-  async function importPimdFile(file) {
+  async function importPimdFile(file, options = {}) {
     if (!(file instanceof File)) return;
+    const sourceOrigin = options.sourceOrigin === 'backend' ? 'backend' : 'local';
+    const sourceLabel = String(options.sourceLabel || file.name || 'pimd.h5');
     setPanelMode('pimd');
-    setPimdUploadFileName(`Reading ${file.name}...`);
-    shared.setStatus(`Reading local PIMD H5 file ${file.name}...`);
+    setPimdUploadFileName(`Reading ${sourceLabel}...`);
+    shared.setStatus(`Reading ${sourceOrigin === 'backend' ? 'backend' : 'local'} PIMD H5 file ${sourceLabel}...`);
 
     let data = null;
     try {
       data = await parsePimdFile(file);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      shared.setStatus(`Failed to parse ${file.name}: ${detail}`, true);
+      shared.setStatus(`Failed to parse ${sourceLabel}: ${detail}`, true);
       if (localState.pimdData) {
-        setPimdUploadFileName(localState.pimdData.fileName);
+        setPimdUploadFileName(localState.pimdSourceLabel || localState.pimdData.fileName);
         setPimdMetadata(localState.pimdData);
       } else {
-        setPimdUploadFileName(file.name);
+        setPimdUploadFileName(sourceLabel);
         setPimdMetadata(null);
       }
       return;
     }
 
+    data.sourceLabel = sourceLabel;
+    data.sourceOrigin = sourceOrigin;
     localState.pimdData = data;
     localState.pimdSourceFile = file;
+    localState.pimdSourceLabel = sourceLabel;
+    localState.pimdSourceOrigin = sourceOrigin;
     localState.pimdSelectedBead = 0;
     localState.pimdDisplayMode = 'single';
     if (dom.pimdDisplayModeSelect) dom.pimdDisplayModeSelect.value = 'single';
     populatePimdBeadSelect(data.nBeads, 0);
     setPimdMetadata(data);
-    setPimdUploadFileName(file.name);
+    setPimdUploadFileName(sourceLabel);
     await applyCurrentPimdView({ refitView: true });
     resetSamplingControlsForActiveDataset();
   }
 
-  async function importXyzFile(file) {
+  async function importXyzFile(file, options = {}) {
     if (!(file instanceof File)) return;
+    const sourceOrigin = options.sourceOrigin === 'backend' ? 'backend' : 'local';
+    const sourceLabel = String(options.sourceLabel || file.name || 'trajectory.xyz');
     setPanelMode('md');
-    setMdUploadFileName(`Reading ${file.name}...`);
-    shared.setStatus(`Reading local XYZ file ${file.name}...`);
+    setMdUploadFileName(`Reading ${sourceLabel}...`);
+    shared.setStatus(`Reading ${sourceOrigin === 'backend' ? 'backend' : 'local'} XYZ file ${sourceLabel}...`);
 
     let text = '';
     try {
       text = await file.text();
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      shared.setStatus(`Failed to read ${file.name}: ${detail}`, true);
-      setMdUploadFileName(localState.mdSourceFile?.name || file.name);
+      shared.setStatus(`Failed to read ${sourceLabel}: ${detail}`, true);
+      setMdUploadFileName(localState.mdSourceLabel || localState.mdSourceFile?.name || sourceLabel);
       return;
     }
 
@@ -1271,22 +1549,72 @@
       record = parseMultiFrameXyz(text, file.name);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      shared.setStatus(`Failed to parse ${file.name}: ${detail}`, true);
+      shared.setStatus(`Failed to parse ${sourceLabel}: ${detail}`, true);
       if (localState.mdData) {
-        setMdMetadata(localState.mdSourceFile?.name || file.name, localState.mdData);
-        setMdUploadFileName(localState.mdSourceFile?.name || file.name);
+        setMdMetadata(localState.mdSourceLabel || localState.mdSourceFile?.name || sourceLabel, localState.mdData, localState.mdSourceOrigin);
+        setMdUploadFileName(localState.mdSourceLabel || localState.mdSourceFile?.name || sourceLabel);
       } else {
-        setMdMetadata(file.name, null);
+        setMdMetadata(sourceLabel, null, sourceOrigin);
       }
       return;
     }
 
     localState.mdData = record;
     localState.mdSourceFile = file;
-    setMdMetadata(file.name, record);
-    setMdUploadFileName(file.name);
+    localState.mdSourceLabel = sourceLabel;
+    localState.mdSourceOrigin = sourceOrigin;
+    setMdMetadata(sourceLabel, record, sourceOrigin);
+    setMdUploadFileName(sourceLabel);
     await applyCurrentMdView({ refitView: true });
     resetSamplingControlsForActiveDataset();
+  }
+
+  async function importXyzBackendPath() {
+    const normalizedPath = normalizeBackendPath(dom.mdBackendPathInput?.value);
+    if (!normalizedPath) {
+      shared.setStatus('Enter an XYZ path before importing from the backend.', true);
+      return;
+    }
+
+    setPanelMode('md');
+    setMdUploadFileName(`Fetching ${normalizedPath}...`);
+    shared.setStatus(`Fetching backend XYZ path ${normalizedPath}...`);
+
+    try {
+      const payload = await fetchSourceFileFromBackend(normalizedPath, 'md');
+      await importXyzFile(payload.file, {
+        sourceLabel: payload.sourceLabel,
+        sourceOrigin: 'backend',
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      shared.setStatus(`Failed to load backend XYZ path ${normalizedPath}: ${detail}`, true);
+      setMdUploadFileName(localState.mdSourceLabel || localState.mdSourceFile?.name || 'No file loaded.');
+    }
+  }
+
+  async function importPimdBackendPath() {
+    const normalizedPath = normalizeBackendPath(dom.pimdBackendPathInput?.value);
+    if (!normalizedPath) {
+      shared.setStatus('Enter a PIMD H5 path before importing from the backend.', true);
+      return;
+    }
+
+    setPanelMode('pimd');
+    setPimdUploadFileName(`Fetching ${normalizedPath}...`);
+    shared.setStatus(`Fetching backend PIMD path ${normalizedPath}...`);
+
+    try {
+      const payload = await fetchSourceFileFromBackend(normalizedPath, 'pimd');
+      await importPimdFile(payload.file, {
+        sourceLabel: payload.sourceLabel,
+        sourceOrigin: 'backend',
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      shared.setStatus(`Failed to load backend PIMD path ${normalizedPath}: ${detail}`, true);
+      setPimdUploadFileName(localState.pimdSourceLabel || localState.pimdSourceFile?.name || 'No file loaded.');
+    }
   }
 
   function bindDropzone(dropzoneEl, inputEl, acceptFile, onFile) {
@@ -1336,6 +1664,30 @@
       if (dom.pimdInput) dom.pimdInput.value = '';
     });
 
+    dom.mdBackendImportBtn?.addEventListener('click', () => {
+      void importXyzBackendPath();
+    });
+    dom.mdBackendBrowseBtn?.addEventListener('click', () => {
+      openBackendBrowser('md');
+    });
+    dom.mdBackendPathInput?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      void importXyzBackendPath();
+    });
+
+    dom.pimdBackendImportBtn?.addEventListener('click', () => {
+      void importPimdBackendPath();
+    });
+    dom.pimdBackendBrowseBtn?.addEventListener('click', () => {
+      openBackendBrowser('pimd');
+    });
+    dom.pimdBackendPathInput?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      void importPimdBackendPath();
+    });
+
     bindDropzone(
       dom.dropzone,
       dom.uploadInput,
@@ -1349,6 +1701,20 @@
       (file) => file instanceof File && /\.(?:h5|hdf5)$/i.test(file.name),
       importPimdFile,
     );
+  }
+
+  function bindBackendBrowserControls() {
+    dom.backendBrowserCloseBtn?.addEventListener('click', () => {
+      closeBackendBrowser();
+    });
+    dom.backendBrowserUpBtn?.addEventListener('click', () => {
+      if (localState.backendBrowserParentPath == null) return;
+      void loadBackendBrowserPath(localState.backendBrowserParentPath);
+    });
+    dom.backendBrowserModal?.addEventListener('click', (event) => {
+      if (event.target !== dom.backendBrowserModal) return;
+      closeBackendBrowser();
+    });
   }
 
   function bindPimdControls() {
@@ -1402,6 +1768,7 @@
   function init() {
     bindModeTabs();
     bindUploadControls();
+    bindBackendBrowserControls();
     bindPimdControls();
     bindSamplingExportControls();
     bindAppearanceUpdates();

@@ -33,6 +33,10 @@ class LoadDatasetResponse(BaseModel):
     dataset_revision: int
 
 
+class LoadTrajectorySourcePathRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+
+
 class NormalModesParseTextRequest(BaseModel):
     filename: str = Field(..., min_length=1)
     content: str = Field(..., min_length=1)
