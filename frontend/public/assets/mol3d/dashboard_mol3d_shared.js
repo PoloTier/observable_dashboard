@@ -29,6 +29,46 @@
     return;
   }
 
+  const INTERNAL_RENDER_SCALE_STORAGE_KEY = 'observable_mol3d_internal_render_scale_v1';
+
+  function clampPersistedInternalRenderScale(raw) {
+    const fallback = Number.isFinite(constants.INTERNAL_RENDER_SCALE_DEFAULT)
+      ? constants.INTERNAL_RENDER_SCALE_DEFAULT
+      : 1;
+    const minScale = Number.isFinite(constants.INTERNAL_RENDER_SCALE_MIN)
+      ? constants.INTERNAL_RENDER_SCALE_MIN
+      : fallback;
+    const maxScale = Number.isFinite(constants.INTERNAL_RENDER_SCALE_MAX)
+      ? constants.INTERNAL_RENDER_SCALE_MAX
+      : fallback;
+    const step = Number.isFinite(constants.INTERNAL_RENDER_SCALE_STEP)
+      ? constants.INTERNAL_RENDER_SCALE_STEP
+      : 0;
+    const parsed = Number.parseFloat(String(raw));
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = Math.max(minScale, Math.min(maxScale, parsed));
+    if (!(step > 0)) return Number(clamped.toFixed(4));
+    const snapped = minScale + Math.round((clamped - minScale) / step) * step;
+    return Number(Math.max(minScale, Math.min(maxScale, snapped)).toFixed(4));
+  }
+
+  function loadPersistedInternalRenderScale() {
+    try {
+      return clampPersistedInternalRenderScale(window.localStorage.getItem(INTERNAL_RENDER_SCALE_STORAGE_KEY));
+    } catch (_) {
+      return clampPersistedInternalRenderScale(null);
+    }
+  }
+
+  function persistInternalRenderScale(rawScale) {
+    try {
+      const scale = clampPersistedInternalRenderScale(rawScale);
+      window.localStorage.setItem(INTERNAL_RENDER_SCALE_STORAGE_KEY, String(scale));
+    } catch (_) {
+      // Ignore persistence failures.
+    }
+  }
+
   function parseScriptJson(id, label, allowTemplateHint = false) {
     const el = document.getElementById(id);
     if (!el) return null;
@@ -100,6 +140,8 @@
     atomSizeLabel: document.getElementById('atom-size-label'),
     bondRadiusSlider: document.getElementById('bond-radius-slider'),
     bondRadiusLabel: document.getElementById('bond-radius-label'),
+    internalRenderScaleSlider: document.getElementById('internal-render-scale-slider'),
+    internalRenderScaleLabel: document.getElementById('internal-render-scale-label'),
     hbondLineWidthSlider: document.getElementById('hbond-line-width-slider'),
     hbondLineWidthLabel: document.getElementById('hbond-line-width-label'),
     atomStyleRangeInput: document.getElementById('atom-style-range-input'),
@@ -169,6 +211,7 @@
     playbackStride: constants.PLAYBACK_STRIDE_DEFAULT,
     atomSizeScale: constants.RENDER_SCALE_DEFAULT,
     bondRadiusScale: constants.RENDER_SCALE_DEFAULT,
+    internalRenderScale: loadPersistedInternalRenderScale(),
     hbondLineScale: 1.8,
     atomRenderRules: [],
     atomRenderRuleNextId: 1,
@@ -278,6 +321,9 @@
     },
     setBondRadiusScale(scale) {
       return { type: 'SET_BOND_RADIUS_SCALE', payload: { scale } };
+    },
+    setInternalRenderScale(scale) {
+      return { type: 'SET_INTERNAL_RENDER_SCALE', payload: { scale } };
     },
     setHbondLineScale(scale) {
       return { type: 'SET_HBOND_LINE_SCALE', payload: { scale } };
@@ -410,6 +456,38 @@
   function syncDynamicBondsUi() {
     if (dom.dynamicBondsCheckbox) {
       dom.dynamicBondsCheckbox.checked = !!state.dynamicBonds;
+    }
+  }
+
+  function clampInternalRenderScale(raw) {
+    const fallback = constants.INTERNAL_RENDER_SCALE_DEFAULT;
+    const minScale = constants.INTERNAL_RENDER_SCALE_MIN;
+    const maxScale = constants.INTERNAL_RENDER_SCALE_MAX;
+    const step = constants.INTERNAL_RENDER_SCALE_STEP;
+    const parsed = parseFiniteNumber(raw);
+    if (parsed === null) return fallback;
+    const clamped = clampNumber(parsed, minScale, maxScale);
+    const normalizedStep = Number.isFinite(step) && step > 0 ? step : 0;
+    if (normalizedStep <= 0) return Number(clamped.toFixed(4));
+    const snapped = minScale + Math.round((clamped - minScale) / normalizedStep) * normalizedStep;
+    return Number(clampNumber(snapped, minScale, maxScale).toFixed(4));
+  }
+
+  function formatInternalRenderScale(scale) {
+    return `${clampInternalRenderScale(scale).toFixed(2)}x`;
+  }
+
+  function syncInternalRenderScaleUi() {
+    const internalRenderScale = clampInternalRenderScale(state.internalRenderScale);
+    if (dom.internalRenderScaleSlider) {
+      dom.internalRenderScaleSlider.min = String(constants.INTERNAL_RENDER_SCALE_MIN);
+      dom.internalRenderScaleSlider.max = String(constants.INTERNAL_RENDER_SCALE_MAX);
+      dom.internalRenderScaleSlider.step = String(constants.INTERNAL_RENDER_SCALE_STEP);
+      dom.internalRenderScaleSlider.value = String(internalRenderScale);
+      dom.internalRenderScaleSlider.disabled = !!state.isGifExporting;
+    }
+    if (dom.internalRenderScaleLabel) {
+      dom.internalRenderScaleLabel.textContent = formatInternalRenderScale(internalRenderScale);
     }
   }
 
@@ -1089,16 +1167,21 @@
   subscribe(syncPlaybackRateUi, ['playbackRate']);
   subscribe(syncPlaybackStrideUi, ['playbackStride']);
   subscribe(syncAtomSizeScaleUi, ['atomSizeScale']);
+  subscribe(syncInternalRenderScaleUi, ['internalRenderScale', 'isGifExporting']);
   subscribe(syncBondRadiusScaleUi, ['bondRadiusScale']);
   subscribe(syncHbondLineScaleUi, ['hbondLineScale']);
   subscribe(syncNacScaleUi, ['nacUserScale']);
   subscribe(syncDeScaleUi, ['deUserScale']);
   subscribe(syncDeNacScaleUi, ['deNacUserScale']);
   subscribe(syncGifExportControlsUi, ['gifExportRangeStart', 'gifExportRangeEnd', 'isGifExporting']);
+  subscribe(() => {
+    persistInternalRenderScale(state.internalRenderScale);
+  }, ['internalRenderScale']);
 
   syncPlaybackRateUi();
   syncPlaybackStrideUi();
   syncAtomSizeScaleUi();
+  syncInternalRenderScaleUi();
   syncDynamicBondsUi();
   syncBondRadiusScaleUi();
   syncHbondLineScaleUi();
@@ -1143,6 +1226,9 @@
     formatAtomSizeScale,
     syncAtomSizeScaleUi,
     syncDynamicBondsUi,
+    clampInternalRenderScale,
+    formatInternalRenderScale,
+    syncInternalRenderScaleUi,
     clampBondRadiusScale,
     formatBondRadiusScale,
     syncBondRadiusScaleUi,

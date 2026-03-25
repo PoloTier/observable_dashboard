@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import sys
 
 import h5py
@@ -115,3 +116,16 @@ def test_convert_pimd_files_writes_standard_schema(tmp_path: Path) -> None:
     assert potential_energy_beads.shape == (4, n_beads)
     assert np.allclose(potential_energy, [2.0, 3.0, 4.0, 5.0])
     assert np.allclose(potential_energy_beads.mean(axis=1), potential_energy)
+
+
+def test_convert_pimd_script_runs_directly_with_help() -> None:
+    script_path = REPO_ROOT / "scripts" / "convert_pimd_h5.py"
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Convert solver-native PIMD traj.h5 + ener.h5 outputs" in result.stdout

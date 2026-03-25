@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -8,8 +9,14 @@ from typing import Iterable
 import h5py
 import numpy as np
 
-from scripts.basic.elements import atomic_number_from_symbol
-from scripts.basic.units import BOHR_TO_ANGSTROM, KB_HARTREE_PER_K
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.basic.elements import atomic_number_from_symbol  # noqa: E402
+from scripts.basic.units import BOHR_TO_ANGSTROM, KB_HARTREE_PER_K  # noqa: E402
 
 
 SCHEMA_NAME = "observable_dashboard_pimd"

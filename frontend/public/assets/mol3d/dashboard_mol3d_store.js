@@ -91,6 +91,27 @@
     return Number(bounded.toFixed(4));
   }
 
+  function clampInternalRenderScale(raw) {
+    const constants = createStoreConstants();
+    const utils = createStoreUtils();
+    const fallback = constants.INTERNAL_RENDER_SCALE_DEFAULT;
+    const minScale = constants.INTERNAL_RENDER_SCALE_MIN;
+    const maxScale = constants.INTERNAL_RENDER_SCALE_MAX;
+    const step = constants.INTERNAL_RENDER_SCALE_STEP;
+    const parsed = utils.parseFiniteNumber ? utils.parseFiniteNumber(raw) : Number(raw);
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = utils.clampNumber
+      ? utils.clampNumber(parsed, minScale, maxScale)
+      : Math.max(minScale, Math.min(maxScale, parsed));
+    const normalizedStep = Number.isFinite(step) && step > 0 ? step : 0;
+    if (normalizedStep <= 0) return Number(clamped.toFixed(4));
+    const snapped = minScale + Math.round((clamped - minScale) / normalizedStep) * normalizedStep;
+    const bounded = utils.clampNumber
+      ? utils.clampNumber(snapped, minScale, maxScale)
+      : Math.max(minScale, Math.min(maxScale, snapped));
+    return Number(bounded.toFixed(4));
+  }
+
   function clampGifExportRange(start, end, nFrames) {
     const frameCount = Math.max(0, Number.parseInt(String(nFrames), 10) || 0);
     if (frameCount <= 0) return { start: 0, end: 0 };
@@ -195,6 +216,8 @@
         setIfChanged(changedKeys, 'bondRadiusScale', clampRenderScale(payload.scale));
       } else if (type === 'SET_HBOND_LINE_SCALE') {
         setIfChanged(changedKeys, 'hbondLineScale', clampRenderScale(payload.scale));
+      } else if (type === 'SET_INTERNAL_RENDER_SCALE') {
+        setIfChanged(changedKeys, 'internalRenderScale', clampInternalRenderScale(payload.scale));
       } else if (type === 'SET_GIF_EXPORTING') {
         setIfChanged(changedKeys, 'isGifExporting', !!payload.exporting);
       } else if (type === 'SET_GIF_EXPORT_RANGE') {

@@ -148,6 +148,14 @@
       void viewer.renderFrame(state.currentFrame);
     });
 
+    bind(dom.internalRenderScaleSlider, 'input', () => {
+      viewer.stopPlayback();
+      shared.dispatch(shared.actions.setInternalRenderScale(dom.internalRenderScaleSlider?.value));
+      viewer.resizeViewer();
+      if (!state.currentTrajId || getFrameCount() <= 0) return;
+      void viewer.renderFrame(state.currentFrame);
+    });
+
     bind(dom.hbondLineWidthSlider, 'input', () => {
       shared.dispatch(shared.actions.setHbondLineScale(dom.hbondLineWidthSlider?.value));
       if (!state.currentTrajId || getFrameCount() <= 0 || !state.showHydrogenBonds) return;
@@ -382,7 +390,7 @@
     }
 
     viewer.enforceViewerBounds();
-    state.viewer = $3Dmol.createViewer(dom.viewerEl, { backgroundColor: currentViewerBackgroundColor() });
+    state.viewer = viewer.createViewerInstance(dom.viewerEl, { backgroundColor: currentViewerBackgroundColor() });
     viewer.resizeViewer();
     if (typeof viewer.applyAppearanceTheme === 'function') {
       viewer.applyAppearanceTheme({ rerender: false });

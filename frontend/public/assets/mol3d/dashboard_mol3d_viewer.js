@@ -42,8 +42,67 @@
   function resizeViewer() {
     if (!state.viewer) return;
     enforceViewerBounds();
-    state.viewer.resize();
+    runWithEffectiveDevicePixelRatio(() => {
+      state.viewer.resize();
+    });
     state.viewer.render();
+  }
+
+  function getNativeDevicePixelRatio() {
+    if (typeof window === 'undefined') return 1;
+    const ratio = Number(window.devicePixelRatio);
+    return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  }
+
+  function getEffectiveDevicePixelRatio() {
+    const nativeRatio = getNativeDevicePixelRatio();
+    const renderScale = typeof shared.clampInternalRenderScale === 'function'
+      ? shared.clampInternalRenderScale(state.internalRenderScale)
+      : 1;
+    const effectiveRatio = nativeRatio * renderScale;
+    return Number.isFinite(effectiveRatio) && effectiveRatio > 0 ? effectiveRatio : nativeRatio;
+  }
+
+  function runWithEffectiveDevicePixelRatio(callback) {
+    if (typeof callback !== 'function') return undefined;
+    if (typeof window === 'undefined') return callback();
+    const targetRatio = getEffectiveDevicePixelRatio();
+    const nativeRatio = getNativeDevicePixelRatio();
+    if (!Number.isFinite(targetRatio) || targetRatio <= 0 || Math.abs(targetRatio - nativeRatio) < 1e-6) {
+      return callback();
+    }
+
+    const hadOwnProperty = Object.prototype.hasOwnProperty.call(window, 'devicePixelRatio');
+    const originalDescriptor = hadOwnProperty
+      ? Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+      : null;
+
+    try {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get() {
+          return targetRatio;
+        },
+      });
+      return callback();
+    } catch (_) {
+      return callback();
+    } finally {
+      try {
+        if (hadOwnProperty && originalDescriptor) {
+          Object.defineProperty(window, 'devicePixelRatio', originalDescriptor);
+        } else {
+          delete window.devicePixelRatio;
+        }
+      } catch (_) {
+        // Best-effort restore of the browser DPR accessor.
+      }
+    }
+  }
+
+  function createViewerInstance(containerEl, options = {}) {
+    if (typeof $3Dmol === 'undefined') return null;
+    return runWithEffectiveDevicePixelRatio(() => $3Dmol.createViewer(containerEl, options));
   }
 
   function applyAppearanceTheme({ rerender = true } = {}) {
@@ -816,6 +875,7 @@
   }
 
   root.viewer = {
+    createViewerInstance,
     enforceViewerBounds,
     resizeViewer,
     linePoint,

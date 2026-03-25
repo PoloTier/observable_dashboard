@@ -84,6 +84,25 @@ Options:
   --keep-zero-frames            Keep zero-coordinate frames
 ```
 
+### Convert Legacy PIMD Outputs
+
+To convert solver-native `traj.h5` + `ener.h5` outputs into the dashboard PIMD H5 schema, prefer running the converter as a module from the repository root:
+
+```bash
+python -m scripts.convert_pimd_h5 \
+  --traj path/to/traj.h5 \
+  --ener path/to/ener.h5 \
+  --xyz path/to/reference.xyz \
+  --output path/to/standard_pimd.h5
+```
+
+Notes:
+
+- Recommended usage is `python -m scripts.convert_pimd_h5 ...` because it uses package-style imports consistently.
+- Direct execution via `python scripts/convert_pimd_h5.py ...` is also supported for convenience.
+- The reference `xyz` file is used only to recover atom types.
+- The output `standard_pimd.h5` can be loaded from the MD/PIMD page at `/md.html`.
+
 ## API Endpoints
 
 The server provides a REST API:

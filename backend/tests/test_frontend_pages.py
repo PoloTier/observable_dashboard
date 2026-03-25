@@ -138,6 +138,7 @@ def test_molecule3d_page_includes_theme_bootstrap_and_control() -> None:
     assert 'id="controls-tab-measure"' in text
     assert 'id="gif-range-controls-group"' in text
     assert 'id="dynamic-bonds"' in text
+    assert 'id="internal-render-scale-slider"' in text
     assert "/assets/dashboard/dashboard_appearance.js" in text
     assert 'src="assets/mol3d/dashboard_mol3d_page.js"' not in text
 
@@ -174,6 +175,7 @@ def test_md_page_includes_upload_controls_and_assets() -> None:
     assert 'id="viewer-controls-title"' in text
     assert 'id="controls-tab-measure"' in text
     assert 'id="controls-tab-export"' in text
+    assert 'id="internal-render-scale-slider"' in text
     assert 'id="md-legacy-export-controls"' in text
     assert 'id="md-sampling-export-panel"' in text
     assert 'id="md-sampling-start-frame"' in text
