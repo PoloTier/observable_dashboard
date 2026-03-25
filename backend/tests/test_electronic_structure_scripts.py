@@ -243,6 +243,9 @@ def test_prepare_pyscf_jobs_creates_default_workspace_and_job_inputs(tmp_path: P
     geometry_xyz = (workspace_dir / "jobs" / "nm-sample-demo_sample_000000" / "geometry.xyz").read_text(
         encoding="utf-8"
     )
+    runner_script = (
+        workspace_dir / "jobs" / "nm-sample-demo_sample_000000" / "run_pyscf_tddft.py"
+    ).read_text(encoding="utf-8")
     run_all = (workspace_dir / "run_all.sh").read_text(encoding="utf-8")
     loaded = load_geometry_bundle(bundle_path)
 
@@ -269,6 +272,7 @@ def test_prepare_pyscf_jobs_creates_default_workspace_and_job_inputs(tmp_path: P
     }
     assert geometry_xyz.startswith("3\n")
     assert "geom_sha1=" in geometry_xyz
+    assert "td.analyze()" in runner_script
     assert "run_pyscf_tddft.py > stdout.log 2>&1" in run_all
 
 

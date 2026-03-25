@@ -255,6 +255,7 @@ It writes:
 
 - `result.json`
 - `stdout.log` when run through `run_all.sh`
+  - includes the standard PySCF TDDFT `td.analyze()` excited-state summary
 
 Each successful `result.json` contains:
 

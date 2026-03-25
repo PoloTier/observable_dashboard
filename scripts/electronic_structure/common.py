@@ -679,6 +679,9 @@ def build_generated_pyscf_job_script() -> str:
                 if not td_converged:
                     raise ValueError("TDDFT did not converge for all requested excited states.")
 
+                # Preserve PySCF's standard TDDFT excited-state summary in stdout.log.
+                td.analyze()
+
                 result_payload = dict(base_payload)
                 result_payload.update(
                     {
