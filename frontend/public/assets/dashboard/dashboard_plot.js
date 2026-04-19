@@ -29,9 +29,7 @@
   let hoverSyncPendingTime = null;
   let renderQueue = Promise.resolve();
 
-  function getAppearanceModule() {
-    return window.ObservableAppearance || null;
-  }
+  const { getAppearanceModule, mergePlotlyLayout, triggerBlobDownload } = window.DashboardPlotUtils;
 
   function getPlotThemeColors() {
     const appearance = getAppearanceModule();
@@ -44,55 +42,6 @@
       neutralFillColor: 'rgba(0,0,0,0.08)',
       accentFillColor: 'rgba(31,119,180,0.18)',
       dangerFillColor: 'rgba(214,39,40,0.18)',
-    };
-  }
-
-  function mergePlotlyLayout(baseLayout) {
-    const appearance = getAppearanceModule();
-    if (!appearance || typeof appearance.getPlotlyLayoutPatch !== 'function') {
-      return baseLayout;
-    }
-
-    const patch = appearance.getPlotlyLayoutPatch();
-    return {
-      ...patch,
-      ...baseLayout,
-      font: {
-        ...(patch.font || {}),
-        ...(baseLayout.font || {}),
-      },
-      title: {
-        ...(patch.title || {}),
-        ...(baseLayout.title || {}),
-        font: {
-          ...((patch.title && patch.title.font) || {}),
-          ...((baseLayout.title && baseLayout.title.font) || {}),
-        },
-      },
-      xaxis: {
-        ...(patch.xaxis || {}),
-        ...(baseLayout.xaxis || {}),
-      },
-      yaxis: {
-        ...(patch.yaxis || {}),
-        ...(baseLayout.yaxis || {}),
-      },
-      legend: {
-        ...(patch.legend || {}),
-        ...(baseLayout.legend || {}),
-        font: {
-          ...((patch.legend && patch.legend.font) || {}),
-          ...((baseLayout.legend && baseLayout.legend.font) || {}),
-        },
-      },
-      hoverlabel: {
-        ...(patch.hoverlabel || {}),
-        ...(baseLayout.hoverlabel || {}),
-        font: {
-          ...((patch.hoverlabel && patch.hoverlabel.font) || {}),
-          ...((baseLayout.hoverlabel && baseLayout.hoverlabel.font) || {}),
-        },
-      },
     };
   }
 
@@ -453,17 +402,7 @@
     return getBuiltinSeriesRecord(trajId, observable, indices);
   }
 
-  function triggerBlobDownload(fileName, blob) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.style.display = 'none';
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
-  }
+
 
   function triggerTextDownload(fileName, textContent) {
     const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });

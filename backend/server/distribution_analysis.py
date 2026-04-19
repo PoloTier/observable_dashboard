@@ -11,7 +11,7 @@ from backend.server.distribution_bundle import (
     HARTREE_TO_EV,
     compute_geometry_measurements,
 )
-from backend.server.molden import BOHR_TO_ANG
+from backend.server.constants import BOHR_TO_ANG
 
 
 SelectionItem = tuple[str, DistributionBundle, str, ElectronicProfile]

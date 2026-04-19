@@ -5,7 +5,10 @@ import math
 
 import numpy as np
 
+from backend.config import required_index_count
+
 from .dataset_store import TrajectoryRecord
+from .geometry import compute_angle, compute_bond, compute_dihedral
 
 TIME_BUCKET_DECIMALS = 8
 BOOTSTRAP_RESAMPLES = 1000
@@ -28,48 +31,9 @@ def _as_matrix_list(arr: np.ndarray) -> list[list[float]]:
     return arr.astype(float).tolist()
 
 
-def _compute_bond(coords: np.ndarray, i: int, j: int) -> np.ndarray:
-    vec = coords[:, i, :] - coords[:, j, :]
-    return np.linalg.norm(vec, axis=1)
-
-
-def _compute_angle(coords: np.ndarray, i: int, j: int, k: int) -> np.ndarray:
-    v1 = coords[:, i, :] - coords[:, j, :]
-    v2 = coords[:, k, :] - coords[:, j, :]
-
-    n1 = np.linalg.norm(v1, axis=1)
-    n2 = np.linalg.norm(v2, axis=1)
-    n1[n1 == 0] = 1.0
-    n2[n2 == 0] = 1.0
-
-    cosang = np.sum(v1 * v2, axis=1) / (n1 * n2)
-    cosang = np.clip(cosang, -1.0, 1.0)
-    return np.degrees(np.arccos(cosang))
-
-
-def _compute_dihedral(coords: np.ndarray, i: int, j: int, k: int, l: int) -> np.ndarray:
-    p1 = coords[:, i, :]
-    p2 = coords[:, j, :]
-    p3 = coords[:, k, :]
-    p4 = coords[:, l, :]
-
-    b1 = p2 - p1
-    b2 = p3 - p2
-    b3 = p4 - p3
-
-    n1 = np.cross(b1, b2)
-    n2 = np.cross(b2, b3)
-
-    b2_norm = np.linalg.norm(b2, axis=1, keepdims=True)
-    b2_norm[b2_norm == 0] = 1.0
-    b2u = b2 / b2_norm
-
-    m1 = np.cross(n1, b2u)
-    x = np.sum(n1 * n2, axis=1)
-    y = np.sum(m1 * n2, axis=1)
-
-    angles_deg = np.degrees(np.arctan2(y, x))
-    # Keep continuous with previous frontend behavior.
+def _compute_dihedral_unwrapped(coords: np.ndarray, i: int, j: int, k: int, l: int) -> np.ndarray:
+    """Dihedral angle along a trajectory, unwrapped for continuity."""
+    angles_deg = compute_dihedral(coords, i, j, k, l)
     return np.degrees(np.unwrap(np.radians(angles_deg)))
 
 
@@ -93,67 +57,59 @@ def bucket_scalar_series_by_time(
     *,
     decimals: int = TIME_BUCKET_DECIMALS,
 ) -> list[dict[str, object]]:
-    time_buckets: dict[str, dict[str, object]] = {}
+    # Collect all (time, value) pairs across trajectories in one pass.
+    all_time_chunks: list[np.ndarray] = []
+    all_value_chunks: list[np.ndarray] = []
     for series in series_list:
         time = np.asarray(series.get("time", []), dtype=float).reshape(-1)
         values = np.asarray(series.get("value", []), dtype=float).reshape(-1)
         point_count = int(min(time.shape[0], values.shape[0]))
         if point_count <= 0:
             continue
-        for idx in range(point_count):
-            t = float(time[idx])
-            y = float(values[idx])
-            if not np.isfinite(t) or not np.isfinite(y):
-                continue
-            time_key = f"{t:.{int(decimals)}f}"
-            bucket = time_buckets.get(time_key)
-            if bucket is None:
-                bucket = {
-                    "time": float(time_key),
-                    "time_key": time_key,
-                    "values": [],
-                }
-                time_buckets[time_key] = bucket
-            bucket_values = bucket["values"]
-            if isinstance(bucket_values, list):
-                bucket_values.append(y)
+        all_time_chunks.append(time[:point_count])
+        all_value_chunks.append(values[:point_count])
 
-    ordered = sorted(time_buckets.values(), key=lambda item: float(item["time"]))
+    if not all_time_chunks:
+        return []
+
+    all_time = np.concatenate(all_time_chunks)
+    all_values = np.concatenate(all_value_chunks)
+
+    # Drop non-finite entries.
+    finite_mask = np.isfinite(all_time) & np.isfinite(all_values)
+    all_time = all_time[finite_mask]
+    all_values = all_values[finite_mask]
+    if all_time.size == 0:
+        return []
+
+    # Round time to create bucket keys, then group by unique rounded time.
+    rounded_time = np.round(all_time, decimals=int(decimals))
+    sort_order = np.argsort(rounded_time, kind="stable")
+    rounded_sorted = rounded_time[sort_order]
+    values_sorted = all_values[sort_order]
+
+    # Find boundaries where the rounded time changes.
+    change_mask = np.empty(rounded_sorted.shape[0], dtype=bool)
+    change_mask[0] = True
+    change_mask[1:] = rounded_sorted[1:] != rounded_sorted[:-1]
+    split_indices = np.nonzero(change_mask)[0]
+
+    unique_times = rounded_sorted[split_indices]
+    value_groups = np.split(values_sorted, split_indices[1:])
+
     out: list[dict[str, object]] = []
-    for item in ordered:
-        values = np.asarray(item.get("values", []), dtype=float).reshape(-1)
-        if values.size <= 0:
+    for t, vals in zip(unique_times, value_groups):
+        if vals.size <= 0:
             continue
         out.append(
             {
-                "time": float(item["time"]),
-                "time_key": str(item["time_key"]),
-                "values": values,
+                "time": float(t),
+                "time_key": f"{float(t):.{int(decimals)}f}",
+                "values": vals,
             }
         )
     return out
 
-
-def _coerce_float_vector(row: object, *, n_components: int) -> np.ndarray | None:
-    if isinstance(row, np.ndarray):
-        values = row.reshape(-1).tolist()
-    elif isinstance(row, (list, tuple)):
-        values = list(row)
-    else:
-        return None
-    if len(values) < int(n_components):
-        return None
-
-    vector = np.empty(int(n_components), dtype=float)
-    for idx in range(int(n_components)):
-        try:
-            item = float(values[idx])
-        except (TypeError, ValueError):
-            return None
-        if not np.isfinite(item):
-            return None
-        vector[idx] = item
-    return vector
 
 
 def bucket_matrix_series_by_time(
@@ -162,60 +118,76 @@ def bucket_matrix_series_by_time(
     n_components: int,
     decimals: int = TIME_BUCKET_DECIMALS,
 ) -> list[dict[str, object]]:
-    if int(n_components) <= 0:
+    n_comp = int(n_components)
+    if n_comp <= 0:
         return []
 
-    time_buckets: dict[str, dict[str, object]] = {}
+    # Collect all (time, vector) pairs across trajectories.
+    all_time_chunks: list[np.ndarray] = []
+    all_vector_chunks: list[np.ndarray] = []
     for series in series_list:
         time = np.asarray(series.get("time", []), dtype=float).reshape(-1)
         values_raw = series.get("values", [])
         if isinstance(values_raw, np.ndarray):
-            rows = values_raw.tolist()
+            matrix = np.asarray(values_raw, dtype=float)
         elif isinstance(values_raw, list):
-            rows = values_raw
+            matrix = np.asarray(values_raw, dtype=float)
         else:
-            rows = []
-        point_count = int(min(time.shape[0], len(rows)))
+            continue
+
+        if matrix.ndim == 1:
+            matrix = matrix.reshape(-1, 1)
+        if matrix.ndim != 2 or matrix.shape[1] < n_comp:
+            continue
+
+        matrix = matrix[:, :n_comp]
+        point_count = int(min(time.shape[0], matrix.shape[0]))
         if point_count <= 0:
             continue
 
-        for idx in range(point_count):
-            t = float(time[idx])
-            if not np.isfinite(t):
-                continue
-            vector = _coerce_float_vector(rows[idx], n_components=int(n_components))
-            if vector is None:
-                continue
+        t_slice = time[:point_count]
+        m_slice = matrix[:point_count]
 
-            time_key = f"{t:.{int(decimals)}f}"
-            bucket = time_buckets.get(time_key)
-            if bucket is None:
-                bucket = {
-                    "time": float(time_key),
-                    "time_key": time_key,
-                    "vectors": [],
-                }
-                time_buckets[time_key] = bucket
-            bucket_vectors = bucket["vectors"]
-            if isinstance(bucket_vectors, list):
-                bucket_vectors.append(vector)
+        # Filter: time must be finite, all components must be finite.
+        finite_mask = np.isfinite(t_slice) & np.all(np.isfinite(m_slice), axis=1)
+        if not np.any(finite_mask):
+            continue
+        all_time_chunks.append(t_slice[finite_mask])
+        all_vector_chunks.append(m_slice[finite_mask])
 
-    ordered = sorted(time_buckets.values(), key=lambda item: float(item["time"]))
+    if not all_time_chunks:
+        return []
+
+    all_time = np.concatenate(all_time_chunks)
+    all_vectors = np.concatenate(all_vector_chunks, axis=0)
+
+    if all_time.size == 0:
+        return []
+
+    # Round time to create bucket keys, then group by unique rounded time.
+    rounded_time = np.round(all_time, decimals=int(decimals))
+    sort_order = np.argsort(rounded_time, kind="stable")
+    rounded_sorted = rounded_time[sort_order]
+    vectors_sorted = all_vectors[sort_order]
+
+    # Find boundaries where the rounded time changes.
+    change_mask = np.empty(rounded_sorted.shape[0], dtype=bool)
+    change_mask[0] = True
+    change_mask[1:] = rounded_sorted[1:] != rounded_sorted[:-1]
+    split_indices = np.nonzero(change_mask)[0]
+
+    unique_times = rounded_sorted[split_indices]
+    vector_groups = np.split(vectors_sorted, split_indices[1:], axis=0)
+
     out: list[dict[str, object]] = []
-    for item in ordered:
-        vectors_raw = item.get("vectors", [])
-        if not isinstance(vectors_raw, list) or not vectors_raw:
-            continue
-        vectors = np.asarray(vectors_raw, dtype=float)
-        if vectors.ndim != 2:
-            continue
-        if vectors.shape[0] <= 0 or vectors.shape[1] != int(n_components):
+    for t, vecs in zip(unique_times, vector_groups):
+        if vecs.shape[0] <= 0 or vecs.shape[1] != n_comp:
             continue
         out.append(
             {
-                "time": float(item["time"]),
-                "time_key": str(item["time_key"]),
-                "vectors": vectors,
+                "time": float(t),
+                "time_key": f"{float(t):.{int(decimals)}f}",
+                "vectors": vecs,
             }
         )
     return out
@@ -419,13 +391,45 @@ def aggregate_scalar_series_by_mode(
     raise ValueError(f"Unsupported ensemble stat mode: {stat_mode}")
 
 
+# Observables whose indices refer to atoms (validated against n_atoms).
+_ATOM_INDEX_OBSERVABLES = frozenset({"bond", "angle", "dihedral"})
+
+
+def _validate_atom_indices(
+    indices: list[int],
+    observable: str,
+    n_atoms: int,
+) -> None:
+    """Validate that indices has the correct length and all values are in [0, n_atoms).
+
+    Only applies to observables whose indices are atom indices (bond, angle,
+    dihedral).  Observables like de_nac use state indices and have their own
+    validation inside compute_observable_series.
+    """
+    needed = required_index_count(observable)
+    if needed > 0 and len(indices) < needed:
+        raise ValueError(
+            f"{observable} requires {needed} indices, got {len(indices)}"
+        )
+    if observable not in _ATOM_INDEX_OBSERVABLES:
+        return
+    for idx_pos, idx_val in enumerate(indices[:needed]):
+        if idx_val < 0 or idx_val >= n_atoms:
+            raise ValueError(
+                f"{observable} index[{idx_pos}] out of range: "
+                f"expected 0 <= index < {n_atoms}, got {idx_val}"
+            )
+
+
 def compute_observable_series(
     traj: TrajectoryRecord,
     observable: str,
     indices: list[int],
 ) -> dict[str, object]:
+    _validate_atom_indices(indices, observable, traj.n_atoms)
+
     if observable == "bond":
-        values = _compute_bond(traj.coords, indices[0], indices[1])
+        values = compute_bond(traj.coords, indices[0], indices[1])
         return {
             "series_kind": "scalar",
             "time": _as_float_list(traj.time),
@@ -434,7 +438,7 @@ def compute_observable_series(
         }
 
     if observable == "angle":
-        values = _compute_angle(traj.coords, indices[0], indices[1], indices[2])
+        values = compute_angle(traj.coords, indices[0], indices[1], indices[2])
         return {
             "series_kind": "scalar",
             "time": _as_float_list(traj.time),
@@ -443,7 +447,7 @@ def compute_observable_series(
         }
 
     if observable == "dihedral":
-        values = _compute_dihedral(traj.coords, indices[0], indices[1], indices[2], indices[3])
+        values = _compute_dihedral_unwrapped(traj.coords, indices[0], indices[1], indices[2], indices[3])
         return {
             "series_kind": "scalar",
             "time": _as_float_list(traj.time),

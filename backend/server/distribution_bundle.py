@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import secrets
 import tarfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
 
-from backend.server.molden import BOHR_TO_ANG
+from backend.server.constants import BOHR_TO_ANG
+from backend.server.export_utils import build_topology_signature, utc_now_iso
+from backend.server.geometry import compute_angle, compute_bond, compute_dihedral
 
 
 DISTRIBUTION_BUNDLE_KIND = "normal_modes_sampling"
@@ -153,16 +153,6 @@ class DistributionBundle:
     def n_transition(self) -> int | None:
         profile = self.default_electronic_profile
         return None if profile is None else int(profile.n_transition)
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def build_topology_signature(atom_numbers: np.ndarray) -> str:
-    values = np.asarray(atom_numbers, dtype=int).reshape(-1)
-    digest = hashlib.sha1(",".join(str(int(value)) for value in values.tolist()).encode("utf-8")).hexdigest()  # noqa: S324
-    return f"atoms-{values.shape[0]}-{digest[:16]}"
 
 
 def make_distribution_id() -> str:
@@ -731,37 +721,6 @@ def load_distribution_bundle_from_directory(bundle_dir: Path) -> DistributionBun
     )
 
 
-def _compute_bond_distribution(coords_ang: np.ndarray, i: int, j: int) -> np.ndarray:
-    return np.linalg.norm(coords_ang[:, i, :] - coords_ang[:, j, :], axis=1)
-
-
-def _compute_angle_distribution(coords_ang: np.ndarray, i: int, j: int, k: int) -> np.ndarray:
-    v1 = coords_ang[:, i, :] - coords_ang[:, j, :]
-    v2 = coords_ang[:, k, :] - coords_ang[:, j, :]
-    norm1 = np.linalg.norm(v1, axis=1)
-    norm2 = np.linalg.norm(v2, axis=1)
-    norm1[norm1 == 0] = 1.0
-    norm2[norm2 == 0] = 1.0
-    cosang = np.sum(v1 * v2, axis=1) / (norm1 * norm2)
-    return np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
-
-
-def _compute_dihedral_distribution(coords_ang: np.ndarray, i: int, j: int, k: int, l: int) -> np.ndarray:
-    p0 = coords_ang[:, i, :]
-    p1 = coords_ang[:, j, :]
-    p2 = coords_ang[:, k, :]
-    p3 = coords_ang[:, l, :]
-    b0 = p1 - p0
-    b1 = p2 - p1
-    b2 = p3 - p2
-    b1_norm = np.linalg.norm(b1, axis=1, keepdims=True)
-    b1_norm[b1_norm == 0] = 1.0
-    b1_unit = b1 / b1_norm
-    v = b0 - np.sum(b0 * b1_unit, axis=1, keepdims=True) * b1_unit
-    w = b2 - np.sum(b2 * b1_unit, axis=1, keepdims=True) * b1_unit
-    return np.degrees(np.arctan2(np.sum(np.cross(b1_unit, v) * w, axis=1), np.sum(v * w, axis=1)))
-
-
 def compute_geometry_distribution(
     bundle: DistributionBundle,
     *,
@@ -802,17 +761,17 @@ def compute_geometry_measurements(
     if kind == "bond":
         if len(atom_indices_int) != 2:
             raise ValueError("Bond measurement requires exactly 2 atom indices.")
-        values = _compute_bond_distribution(coords_ang, atom_indices_int[0], atom_indices_int[1])
+        values = compute_bond(coords_ang, atom_indices_int[0], atom_indices_int[1])
         unit = "Angstrom"
     elif kind == "angle":
         if len(atom_indices_int) != 3:
             raise ValueError("Angle measurement requires exactly 3 atom indices.")
-        values = _compute_angle_distribution(coords_ang, atom_indices_int[0], atom_indices_int[1], atom_indices_int[2])
+        values = compute_angle(coords_ang, atom_indices_int[0], atom_indices_int[1], atom_indices_int[2])
         unit = "deg"
     elif kind == "dihedral":
         if len(atom_indices_int) != 4:
             raise ValueError("Dihedral measurement requires exactly 4 atom indices.")
-        values = _compute_dihedral_distribution(
+        values = compute_dihedral(
             coords_ang,
             atom_indices_int[0],
             atom_indices_int[1],

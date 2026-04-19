@@ -49,6 +49,7 @@ async function initDashboard() {
   // Load dashboard modules in order
   const modules = [
     '/assets/dashboard/dashboard_appearance.js',
+    '/assets/shared/plot_utils.js',
     '/assets/dashboard/dashboard_state.js',
     '/assets/dashboard/dashboard_data_loader.js',
     '/assets/math/dashboard_math3d.js',

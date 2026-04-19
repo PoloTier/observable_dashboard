@@ -13,24 +13,29 @@ from typing import Any
 import h5py
 import numpy as np
 
-from backend.server.distribution_bundle import build_topology_signature
-from backend.server.molden import BOHR_TO_ANG, PERIODIC_SYMBOLS
+from backend.server.constants import (
+    BOHR_TO_ANG,
+    PERIODIC_SYMBOLS,
+    SYMBOL_TO_ATOMIC_NUMBER,
+    atom_symbol,
+    atomic_mass_amu,
+)
+from backend.server.export_utils import (
+    build_topology_signature,
+    json_text,
+    npy_bytes,
+    sanitize_filename_part,
+    tar_gz_bytes_from_entries,
+    utc_now_iso,
+)
 from backend.server.normal_modes_sampling import (
     NORMAL_MODES_GEOMETRY_EXPORT_SCHEMA_VERSION,
-    atomic_mass_amu,
-    utc_now_iso,
 )
 
 
 TRAJECTORY_GEOMETRY_BUNDLE_KIND = "trajectory_sampling"
 TRAJECTORY_GEOMETRY_METHOD_STRIDED = "trajectory_strided_sampling"
 PIMD_SCHEMA_NAME = "observable_dashboard_pimd"
-
-_SYMBOL_TO_ATOMIC_NUMBER = {
-    str(symbol).upper(): int(atomic_number)
-    for atomic_number, symbol in enumerate(PERIODIC_SYMBOLS)
-    if atomic_number > 0 and str(symbol).strip()
-}
 
 
 @dataclass(slots=True)
@@ -55,35 +60,6 @@ class TrajectorySamplingSource:
         return int(self.coords_bohr.shape[2])
 
 
-def _json_text(payload: Any) -> str:
-    return f"{json.dumps(payload, indent=2, sort_keys=True)}\n"
-
-
-def _npy_bytes(array: np.ndarray) -> bytes:
-    buffer = io.BytesIO()
-    np.save(buffer, np.asarray(array), allow_pickle=False)
-    return buffer.getvalue()
-
-
-def _tar_gz_bytes_from_entries(entries: list[tuple[str, bytes]]) -> bytes:
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        modified_at = 0
-        for relative_path, content_bytes in entries:
-            info = tarfile.TarInfo(name=str(relative_path))
-            info.size = int(len(content_bytes))
-            info.mtime = modified_at
-            archive.addfile(info, io.BytesIO(content_bytes))
-    return buffer.getvalue()
-
-
-def _sanitize_filename_part(text: object) -> str:
-    raw = str(text or "").strip()
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw)
-    sanitized = sanitized.strip("._-")
-    return sanitized or "trajectory"
-
-
 def _geometry_channel_entries() -> list[dict[str, str | None]]:
     return [
         {"name": "atom_numbers", "unit": None, "group": "sampling"},
@@ -92,11 +68,6 @@ def _geometry_channel_entries() -> list[dict[str, str | None]]:
     ]
 
 
-def _atom_symbol(atomic_number: int) -> str:
-    index = int(atomic_number)
-    if 0 < index < len(PERIODIC_SYMBOLS) and PERIODIC_SYMBOLS[index]:
-        return str(PERIODIC_SYMBOLS[index])
-    return "X"
 
 
 def _xyz_text_from_samples(
@@ -118,7 +89,7 @@ def _xyz_text_from_samples(
         for atom_index in range(n_atoms):
             x, y, z = coords_ang[sample_index, atom_index]
             lines.append(
-                f"{_atom_symbol(int(atom_numbers[atom_index]))} {float(x):.10f} {float(y):.10f} {float(z):.10f}"
+                f"{atom_symbol(int(atom_numbers[atom_index]))} {float(x):.10f} {float(y):.10f} {float(z):.10f}"
             )
     return "\n".join(lines) + "\n"
 
@@ -132,7 +103,7 @@ def _normalize_xyz_atomic_token(token: str) -> int:
         if atomic_number > 0:
             return atomic_number
     normalized = raw[0].upper() + raw[1:].lower()
-    atomic_number = _SYMBOL_TO_ATOMIC_NUMBER.get(normalized.upper())
+    atomic_number = SYMBOL_TO_ATOMIC_NUMBER.get(normalized.upper())
     if atomic_number is None:
         raise ValueError(f"Unsupported atom token in XYZ: {raw!r}")
     return int(atomic_number)
@@ -426,15 +397,15 @@ def build_trajectory_geometry_export_bundle(
         sample_comments=sample_comments,
     )
     entries: list[tuple[str, bytes]] = [
-        ("manifest.json", _json_text(manifest).encode("utf-8")),
-        ("meta/sample_ids.json", _json_text(sample_ids).encode("utf-8")),
-        ("meta/sample_metadata.json", _json_text(sample_metadata).encode("utf-8")),
-        ("sampling/atom_numbers.npy", _npy_bytes(atom_numbers.astype(np.int32))),
-        ("sampling/atom_masses_amu.npy", _npy_bytes(atom_masses_amu)),
-        ("sampling/coords_bohr.npy", _npy_bytes(coords_samples.astype(float))),
+        ("manifest.json", json_text(manifest).encode("utf-8")),
+        ("meta/sample_ids.json", json_text(sample_ids).encode("utf-8")),
+        ("meta/sample_metadata.json", json_text(sample_metadata).encode("utf-8")),
+        ("sampling/atom_numbers.npy", npy_bytes(atom_numbers.astype(np.int32))),
+        ("sampling/atom_masses_amu.npy", npy_bytes(atom_masses_amu)),
+        ("sampling/coords_bohr.npy", npy_bytes(coords_samples.astype(float))),
         ("sampling/all_structures.xyz", xyz_text.encode("utf-8")),
     ]
 
-    source_base = _sanitize_filename_part(Path(str(source.source_name)).stem)
-    file_name = f"trajectory_geometry_{source_base}_{_sanitize_filename_part(batch_id)}.tar.gz"
-    return file_name, _tar_gz_bytes_from_entries(entries)
+    source_base = sanitize_filename_part(Path(str(source.source_name)).stem)
+    file_name = f"trajectory_geometry_{source_base}_{sanitize_filename_part(batch_id)}.tar.gz"
+    return file_name, tar_gz_bytes_from_entries(entries)

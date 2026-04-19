@@ -246,17 +246,7 @@
     };
   }
 
-  function triggerBlobDownload(fileName, blob) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = String(fileName || 'trajectory_geometry_bundle.tar.gz');
-    anchor.style.display = 'none';
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
-  }
+  const { triggerBlobDownload } = window.DashboardPlotUtils;
 
   function getDownloadFilename(response, fallback) {
     const header = String(response?.headers?.get('Content-Disposition') || '');

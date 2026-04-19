@@ -12,9 +12,7 @@
       : (Array.isArray(state.currentCoords) ? state.currentCoords.length : 0);
   }
 
-  function getAppearanceModule() {
-    return window.ObservableAppearance || null;
-  }
+  const { getAppearanceModule, mergePlotlyLayout } = window.DashboardPlotUtils;
 
   function getPlotColors() {
     const appearance = getAppearanceModule();
@@ -23,55 +21,6 @@
     }
     return {
       cursorLineColor: '#d62728',
-    };
-  }
-
-  function mergePlotlyLayout(baseLayout) {
-    const appearance = getAppearanceModule();
-    if (!appearance || typeof appearance.getPlotlyLayoutPatch !== 'function') {
-      return baseLayout;
-    }
-
-    const patch = appearance.getPlotlyLayoutPatch();
-    return {
-      ...patch,
-      ...baseLayout,
-      font: {
-        ...(patch.font || {}),
-        ...(baseLayout.font || {}),
-      },
-      title: {
-        ...(patch.title || {}),
-        ...(baseLayout.title || {}),
-        font: {
-          ...((patch.title && patch.title.font) || {}),
-          ...((baseLayout.title && baseLayout.title.font) || {}),
-        },
-      },
-      xaxis: {
-        ...(patch.xaxis || {}),
-        ...(baseLayout.xaxis || {}),
-      },
-      yaxis: {
-        ...(patch.yaxis || {}),
-        ...(baseLayout.yaxis || {}),
-      },
-      legend: {
-        ...(patch.legend || {}),
-        ...(baseLayout.legend || {}),
-        font: {
-          ...((patch.legend && patch.legend.font) || {}),
-          ...((baseLayout.legend && baseLayout.legend.font) || {}),
-        },
-      },
-      hoverlabel: {
-        ...(patch.hoverlabel || {}),
-        ...(baseLayout.hoverlabel || {}),
-        font: {
-          ...((patch.hoverlabel && patch.hoverlabel.font) || {}),
-          ...((baseLayout.hoverlabel && baseLayout.hoverlabel.font) || {}),
-        },
-      },
     };
   }
 

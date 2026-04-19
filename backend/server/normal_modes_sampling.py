@@ -6,20 +6,29 @@ import math
 import re
 import secrets
 import tarfile
-import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 
-from backend.server.molden import BOHR_TO_ANG, PERIODIC_SYMBOLS
-
-AMU_TO_AU = 1822.888486209
-ATOMIC_TIME_SECONDS = 2.4188843265857e-17
-LIGHT_SPEED_CM_PER_S = 2.99792458e10
-CM1_TO_ANGULAR_FREQUENCY_AU = 2.0 * math.pi * LIGHT_SPEED_CM_PER_S * ATOMIC_TIME_SECONDS
-BOLTZMANN_AU_PER_K = 3.166811563e-6
+from backend.server.constants import (
+    AMU_TO_AU,
+    BOHR_TO_ANG,
+    BOLTZMANN_AU_PER_K,
+    CM1_TO_ANGULAR_FREQUENCY_AU,
+    atom_symbol,
+    atomic_mass_amu,
+)
+from backend.server.export_utils import (
+    build_topology_signature,
+    json_text,
+    npy_bytes,
+    sanitize_filename_part,
+    tar_gz_bytes_from_entries,
+    utc_now_iso,
+)
+from backend.server.geometry import compute_angle, compute_bond, compute_dihedral
 SAMPLE_CACHE_MAX_ENTRIES = 4
 SAMPLE_CACHE_MAX_BYTES = 96 * 1024 * 1024
 MAX_PREVIEW_COUNT = 256
@@ -32,129 +41,6 @@ SAMPLER_WIGNER_FINITE_T = "wigner_finite_t"
 SAMPLER_WIGNER_ZERO_T = "wigner_zero_t"
 SAMPLER_CLASSICAL_FINITE_T = "classical_finite_t"
 SAMPLER_FROZEN = "frozen"
-
-# Average atomic weights (amu) aligned with atomic number.
-ATOMIC_MASSES_AMU = (
-    0.0,
-    1.008,
-    4.002602,
-    6.94,
-    9.0121831,
-    10.81,
-    12.011,
-    14.007,
-    15.999,
-    18.998403163,
-    20.1797,
-    22.98976928,
-    24.305,
-    26.9815385,
-    28.085,
-    30.973761998,
-    32.06,
-    35.45,
-    39.948,
-    39.0983,
-    40.078,
-    44.955908,
-    47.867,
-    50.9415,
-    51.9961,
-    54.938044,
-    55.845,
-    58.933194,
-    58.6934,
-    63.546,
-    65.38,
-    69.723,
-    72.63,
-    74.921595,
-    78.971,
-    79.904,
-    83.798,
-    85.4678,
-    87.62,
-    88.90584,
-    91.224,
-    92.90637,
-    95.95,
-    97.0,
-    101.07,
-    102.9055,
-    106.42,
-    107.8682,
-    112.414,
-    114.818,
-    118.71,
-    121.76,
-    127.6,
-    126.90447,
-    131.293,
-    132.90545196,
-    137.327,
-    138.90547,
-    140.116,
-    140.90766,
-    144.242,
-    145.0,
-    150.36,
-    151.964,
-    157.25,
-    158.92535,
-    162.5,
-    164.93033,
-    167.259,
-    168.93422,
-    173.045,
-    174.9668,
-    178.49,
-    180.94788,
-    183.84,
-    186.207,
-    190.23,
-    192.217,
-    195.084,
-    196.966569,
-    200.592,
-    204.38,
-    207.2,
-    208.9804,
-    209.0,
-    210.0,
-    222.0,
-    223.0,
-    226.0,
-    227.0,
-    232.0377,
-    231.03588,
-    238.02891,
-    237.0,
-    244.0,
-    243.0,
-    247.0,
-    247.0,
-    251.0,
-    252.0,
-    257.0,
-    258.0,
-    259.0,
-    266.0,
-    267.0,
-    268.0,
-    269.0,
-    270.0,
-    269.0,
-    278.0,
-    281.0,
-    282.0,
-    285.0,
-    286.0,
-    289.0,
-    290.0,
-    293.0,
-    294.0,
-    294.0,
-)
 
 
 @dataclass(slots=True)
@@ -170,16 +56,6 @@ class SamplingPreparation:
     modal_matrix_au: np.ndarray
     masses_au_per_atom: np.ndarray
     masses_au_components: np.ndarray
-
-
-def atomic_mass_amu(atomic_number: int) -> float:
-    index = int(atomic_number)
-    if index <= 0 or index >= len(ATOMIC_MASSES_AMU):
-        raise ValueError(f"Unsupported atomic number for mass lookup: {atomic_number}")
-    mass = float(ATOMIC_MASSES_AMU[index])
-    if not math.isfinite(mass) or mass <= 0:
-        raise ValueError(f"Invalid atomic mass for atomic number {atomic_number}: {mass}")
-    return mass
 
 
 def _normalize_preview_count(sample_count: int, requested_preview_count: int) -> int:
@@ -670,35 +546,14 @@ def compute_measurement_values_from_batch(
     )
     selected_coords_ang = np.asarray(selected_coords_bohr * float(BOHR_TO_ANG), dtype=float)
 
+    # selected_coords_ang has shape (N, len(atom_indices), 3) with atoms
+    # re-indexed as 0, 1, 2, ... in the order of atom_indices_int.
     if measurement_kind_text == "bond":
-        vectors = selected_coords_ang[:, 0, :] - selected_coords_ang[:, 1, :]
-        values = np.linalg.norm(vectors, axis=1)
+        values = compute_bond(selected_coords_ang, 0, 1)
     elif measurement_kind_text == "angle":
-        v1 = selected_coords_ang[:, 0, :] - selected_coords_ang[:, 1, :]
-        v2 = selected_coords_ang[:, 2, :] - selected_coords_ang[:, 1, :]
-        norm1 = np.linalg.norm(v1, axis=1)
-        norm2 = np.linalg.norm(v2, axis=1)
-        norm1[norm1 == 0] = 1.0
-        norm2[norm2 == 0] = 1.0
-        cosang = np.sum(v1 * v2, axis=1) / (norm1 * norm2)
-        cosang = np.clip(cosang, -1.0, 1.0)
-        values = np.degrees(np.arccos(cosang))
+        values = compute_angle(selected_coords_ang, 0, 1, 2)
     else:
-        p0 = selected_coords_ang[:, 0, :]
-        p1 = selected_coords_ang[:, 1, :]
-        p2 = selected_coords_ang[:, 2, :]
-        p3 = selected_coords_ang[:, 3, :]
-        b0 = p1 - p0
-        b1 = p2 - p1
-        b2 = p3 - p2
-        b1_norm = np.linalg.norm(b1, axis=1, keepdims=True)
-        b1_norm[b1_norm == 0] = 1.0
-        b1_unit = b1 / b1_norm
-        v = b0 - np.sum(b0 * b1_unit, axis=1, keepdims=True) * b1_unit
-        w = b2 - np.sum(b2 * b1_unit, axis=1, keepdims=True) * b1_unit
-        x = np.sum(v * w, axis=1)
-        y = np.sum(np.cross(b1_unit, v) * w, axis=1)
-        values = np.degrees(np.arctan2(y, x))
+        values = compute_dihedral(selected_coords_ang, 0, 1, 2, 3)
 
     values = np.asarray(values, dtype=float).reshape(-1)
     finite_values = values[np.isfinite(values)]
@@ -716,38 +571,6 @@ def compute_measurement_values_from_batch(
         "mean": float(np.mean(finite_values)),
         "std": float(np.std(finite_values)),
     }
-
-
-def utc_now_iso() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="milliseconds")
-        .replace("+00:00", "Z")
-    )
-
-
-def _sanitize_filename_part(text: object) -> str:
-    raw = str(text or "").strip()
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw)
-    sanitized = sanitized.strip("._-")
-    return sanitized or "normal_modes"
-
-
-def _json_text(payload: Any) -> str:
-    return f"{json.dumps(payload, indent=2, sort_keys=True)}\n"
-
-
-def _npy_bytes(array: np.ndarray) -> bytes:
-    buffer = io.BytesIO()
-    np.save(buffer, np.asarray(array))
-    return buffer.getvalue()
-
-
-def _atom_symbol(atomic_number: int) -> str:
-    index = int(atomic_number)
-    if 0 < index < len(PERIODIC_SYMBOLS) and PERIODIC_SYMBOLS[index]:
-        return str(PERIODIC_SYMBOLS[index])
-    return "X"
 
 
 def _xyz_trajectory_text(
@@ -781,7 +604,7 @@ def _xyz_trajectory_text(
         for atom_index, atomic_number in enumerate(atom_numbers):
             x, y, z = frame[atom_index]
             lines.append(
-                f"{_atom_symbol(int(atomic_number))} "
+                f"{atom_symbol(int(atomic_number))} "
                 f"{float(x):.8f} {float(y):.8f} {float(z):.8f}"
             )
     return "\n".join(lines) + "\n"
@@ -805,7 +628,7 @@ def _xyz_frame_text(
     for atom_index, atomic_number in enumerate(atom_numbers):
         x, y, z = frame[atom_index]
         lines.append(
-            f"{_atom_symbol(int(atomic_number))} "
+            f"{atom_symbol(int(atomic_number))} "
             f"{float(x):.8f} {float(y):.8f} {float(z):.8f}"
         )
     return "\n".join(lines) + "\n"
@@ -813,13 +636,6 @@ def _xyz_frame_text(
 
 def _sample_id(batch_id: str, sample_index: int) -> str:
     return f"{str(batch_id)}_sample_{int(sample_index):06d}"
-
-
-def _topology_signature(atom_numbers: list[int] | np.ndarray) -> str:
-    values = np.asarray(atom_numbers, dtype=int).reshape(-1)
-    joined = ",".join(str(int(value)) for value in values.tolist())
-    digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()  # noqa: S324
-    return f"atoms-{values.shape[0]}-{digest[:16]}"
 
 
 def _geometry_channel_entries(*, include_velocities: bool) -> list[dict[str, Any]]:
@@ -831,18 +647,6 @@ def _geometry_channel_entries(*, include_velocities: bool) -> list[dict[str, Any
     if include_velocities:
         entries.append({"name": "velocities_bohr_per_au_time", "unit": "bohr/au_time", "group": "sampling"})
     return entries
-
-
-def _tar_gz_bytes_from_entries(entries: list[tuple[str, bytes]]) -> bytes:
-    tar_buffer = io.BytesIO()
-    modified_at = datetime.now(timezone.utc)
-    with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
-        for archive_path, content_bytes in entries:
-            info = tarfile.TarInfo(name=archive_path)
-            info.size = len(content_bytes)
-            info.mtime = modified_at.timestamp()
-            tar.addfile(info, io.BytesIO(content_bytes))
-    return tar_buffer.getvalue()
 
 
 def reconstruct_cartesian_hessian_au(batch_payload: dict[str, Any]) -> np.ndarray:
@@ -1125,25 +929,25 @@ def build_normal_modes_export_bundle(
     tar_buffer = io.BytesIO()
     with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
         entries: list[tuple[str, bytes]] = [
-            ("manifest.json", _json_text(manifest).encode("utf-8")),
+            ("manifest.json", json_text(manifest).encode("utf-8")),
             ("README.txt", readme_text.encode("utf-8")),
             ("log/sampling.log", log_text.encode("utf-8")),
             ("input/original.molden", source_content.encode("utf-8")),
-            ("input/request.json", _json_text(request_snapshot).encode("utf-8")),
-            ("sampling/result_summary.json", _json_text(result_summary).encode("utf-8")),
-            ("sampling/coords_all_ang.npy", _npy_bytes(coords_all_ang)),
+            ("input/request.json", json_text(request_snapshot).encode("utf-8")),
+            ("sampling/result_summary.json", json_text(result_summary).encode("utf-8")),
+            ("sampling/coords_all_ang.npy", npy_bytes(coords_all_ang)),
             ("sampling/all_structures.xyz", all_structures_xyz.encode("utf-8")),
-            ("sampling/equilibrium_coords_ang.npy", _npy_bytes(equilibrium_coords_ang)),
-            ("sampling/q_samples_au.npy", _npy_bytes(q_samples)),
-            ("sampling/p_samples_au.npy", _npy_bytes(p_samples)),
-            ("sampling/preview_indices.json", _json_text(preview_indices).encode("utf-8")),
-            ("modes/mode_sampling_plan.json", _json_text(mode_sampling_plan).encode("utf-8")),
-            ("modes/modal_matrix_au.npy", _npy_bytes(modal_matrix_au)),
-            ("modes/frequencies_cm1.npy", _npy_bytes(frequencies_cm1)),
-            ("modes/masses_au_per_atom.npy", _npy_bytes(masses_au_per_atom)),
-            ("modes/masses_au_components.npy", _npy_bytes(masses_au_components)),
-            ("modes/reconstructed_hessian_cartesian_au.npy", _npy_bytes(reconstructed_hessian_cartesian_au)),
-            ("modes/reconstruction_metadata.json", _json_text(reconstruction_metadata).encode("utf-8")),
+            ("sampling/equilibrium_coords_ang.npy", npy_bytes(equilibrium_coords_ang)),
+            ("sampling/q_samples_au.npy", npy_bytes(q_samples)),
+            ("sampling/p_samples_au.npy", npy_bytes(p_samples)),
+            ("sampling/preview_indices.json", json_text(preview_indices).encode("utf-8")),
+            ("modes/mode_sampling_plan.json", json_text(mode_sampling_plan).encode("utf-8")),
+            ("modes/modal_matrix_au.npy", npy_bytes(modal_matrix_au)),
+            ("modes/frequencies_cm1.npy", npy_bytes(frequencies_cm1)),
+            ("modes/masses_au_per_atom.npy", npy_bytes(masses_au_per_atom)),
+            ("modes/masses_au_components.npy", npy_bytes(masses_au_components)),
+            ("modes/reconstructed_hessian_cartesian_au.npy", npy_bytes(reconstructed_hessian_cartesian_au)),
+            ("modes/reconstruction_metadata.json", json_text(reconstruction_metadata).encode("utf-8")),
         ]
         modified_at = datetime.now(timezone.utc)
         for archive_path, content_bytes in entries:
@@ -1152,8 +956,8 @@ def build_normal_modes_export_bundle(
             info.mtime = modified_at.timestamp()
             tar.addfile(info, io.BytesIO(content_bytes))
 
-    source_base = _sanitize_filename_part(source_name.rsplit(".", 1)[0])
-    file_name = f"normal_modes_sampling_{source_base}_{_sanitize_filename_part(batch_id)}.tar.gz"
+    source_base = sanitize_filename_part(source_name.rsplit(".", 1)[0])
+    file_name = f"normal_modes_sampling_{source_base}_{sanitize_filename_part(batch_id)}.tar.gz"
     return file_name, tar_buffer.getvalue()
 
 
@@ -1183,7 +987,7 @@ def build_normal_modes_geometry_export_entries(
 
     sample_ids = [_sample_id(batch_id, sample_index) for sample_index in range(sample_count)]
     created_at_utc = utc_now_iso()
-    topology_signature = _topology_signature(atom_numbers)
+    topology_signature = build_topology_signature(atom_numbers)
     all_structures_xyz = _xyz_trajectory_text(
         coords_ang,
         atom_numbers,
@@ -1194,7 +998,7 @@ def build_normal_modes_geometry_export_entries(
     if label_source:
         label = f"{label_source} normal modes samples"
     else:
-        label = f"normal_modes_samples_{_sanitize_filename_part(batch_id)}"
+        label = f"normal_modes_samples_{sanitize_filename_part(batch_id)}"
 
     manifest = {
         "kind": NORMAL_MODES_GEOMETRY_BUNDLE_KIND,
@@ -1218,18 +1022,18 @@ def build_normal_modes_geometry_export_entries(
     }
 
     entries: list[tuple[str, bytes]] = [
-        ("manifest.json", _json_text(manifest).encode("utf-8")),
-        ("meta/sample_ids.json", _json_text(sample_ids).encode("utf-8")),
-        ("sampling/atom_numbers.npy", _npy_bytes(np.asarray(atom_numbers, dtype=int))),
-        ("sampling/atom_masses_amu.npy", _npy_bytes(atom_masses_amu)),
-        ("sampling/coords_bohr.npy", _npy_bytes(coords_bohr)),
+        ("manifest.json", json_text(manifest).encode("utf-8")),
+        ("meta/sample_ids.json", json_text(sample_ids).encode("utf-8")),
+        ("sampling/atom_numbers.npy", npy_bytes(np.asarray(atom_numbers, dtype=int))),
+        ("sampling/atom_masses_amu.npy", npy_bytes(atom_masses_amu)),
+        ("sampling/coords_bohr.npy", npy_bytes(coords_bohr)),
         ("sampling/all_structures.xyz", all_structures_xyz.encode("utf-8")),
     ]
     if velocities_bohr_per_au_time.size > 0:
-        entries.append(("sampling/velocities_bohr_per_au_time.npy", _npy_bytes(velocities_bohr_per_au_time)))
+        entries.append(("sampling/velocities_bohr_per_au_time.npy", npy_bytes(velocities_bohr_per_au_time)))
 
-    source_base = _sanitize_filename_part(source_name.rsplit(".", 1)[0])
-    file_name = f"normal_modes_geometry_{source_base}_{_sanitize_filename_part(batch_id)}.tar.gz"
+    source_base = sanitize_filename_part(source_name.rsplit(".", 1)[0])
+    file_name = f"normal_modes_geometry_{source_base}_{sanitize_filename_part(batch_id)}.tar.gz"
     return file_name, entries
 
 
@@ -1242,4 +1046,4 @@ def build_normal_modes_geometry_export_bundle(
         batch_id=batch_id,
         batch_payload=batch_payload,
     )
-    return file_name, _tar_gz_bytes_from_entries(entries)
+    return file_name, tar_gz_bytes_from_entries(entries)
