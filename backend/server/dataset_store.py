@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import logging
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,65 @@ import numpy as np
 
 from backend.config import load_config
 from backend.dataset import flatten_time_array, prepare_dataset, reshape_coords
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Restricted unpickler -- only allows safe built-in and numpy types.
+# This prevents arbitrary code execution via crafted pickle files.
+# ---------------------------------------------------------------------------
+
+_SAFE_BUILTINS = frozenset({
+    "range",
+    "complex",
+    "set",
+    "frozenset",
+    "slice",
+})
+
+
+class RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that refuses to instantiate arbitrary classes.
+
+    Only allows:
+    - Python built-in scalar / container types (dict, list, tuple, int, float,
+      str, bytes, bool, None, complex, set, frozenset, range, slice)
+    - numpy array reconstruction helpers (numpy.core.multiarray._reconstruct,
+      numpy.ndarray, numpy.dtype, numpy.core.multiarray.scalar)
+    - collections.OrderedDict (used by some older pickle streams)
+    """
+
+    def find_class(self, module: str, name: str) -> Any:
+        # numpy reconstruction helpers
+        if module in (
+            "numpy",
+            "numpy.core.multiarray",
+            "numpy.core._multiarray_umath",
+            "numpy._core.multiarray",
+            "numpy._core._multiarray_umath",
+        ):
+            if name in ("_reconstruct", "scalar", "dtype", "ndarray"):
+                return getattr(__import__(module, fromlist=[name]), name)
+
+        # collections.OrderedDict
+        if module == "collections" and name == "OrderedDict":
+            import collections
+            return collections.OrderedDict
+
+        # builtins
+        if module == "builtins" and name in _SAFE_BUILTINS:
+            import builtins
+            return getattr(builtins, name)
+
+        raise pickle.UnpicklingError(
+            f"Refused to unpickle disallowed class: {module}.{name}"
+        )
+
+
+def restricted_pickle_load(f: io.BufferedIOBase) -> Any:
+    """Load a pickle file using the restricted unpickler."""
+    return RestrictedUnpickler(f).load()
 
 
 @dataclass(slots=True)
@@ -1616,7 +1677,7 @@ def load_dataset_store(options: DatasetLoadOptions) -> DatasetStore:
     defaults = _load_defaults(config_path)
 
     with open(input_path, "rb") as f:
-        master_dataset = pickle.load(f)
+        master_dataset = restricted_pickle_load(f)
 
     prepared = prepare_dataset(
         master_dataset=master_dataset,
